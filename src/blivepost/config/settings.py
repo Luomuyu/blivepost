@@ -53,6 +53,7 @@ class MessageSettings:
     web_token: str = ""
     # 数据保留策略：0=永久保留不删除（设计决策，见PROJECT.md）；>0为保留天数（预留）
     data_retention_days: int = 0
+    db_size_warn_mb: int = 500
     ignore_cmds: List[str] = field(default_factory=list)
 
 
@@ -186,6 +187,7 @@ class Settings:
                 web_port=int(setting_data.get("web_port", 8080)),
                 web_token=str(setting_data.get("web_token", "")),
                 data_retention_days=int(setting_data.get("data_retention_days", 0)),
+                db_size_warn_mb=int(setting_data.get("db_size_warn_mb", 500)),
                 ignore_cmds=setting_data.get("ignore_cmds", []),
             ),
             redis=RedisConfig(
@@ -252,6 +254,7 @@ Setting: # 消息推送设置
   web_port: 8080 # Web面板端口
   web_token: "" # Web面板访问令牌 (留空不鉴权; 设置后需 ?token= 或 X-Web-Token 头)
   data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)
+  db_size_warn_mb: 500 # 数据库体积预警阈值MB (超过时私聊提醒管理员, 0=不提醒)
   ignore_cmds: [] # 忽略的未知命令列表 (不打印日志)
 
 Redis: # Redis配置 (可选)
