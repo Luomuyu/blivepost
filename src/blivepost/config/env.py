@@ -15,7 +15,7 @@
 
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict
 
 
 ENV_MAP: Dict[str, str] = {
@@ -88,7 +88,7 @@ def _coerce(dotted: str, raw: str):
     return raw
 
 
-def apply_env_overrides(settings, environ: Optional[Dict[str, str]] = None) -> int:
+def apply_env_overrides(settings, environ: Any = os.environ) -> int:
     """
     将环境变量覆盖到Settings（仅覆盖有值且非空的键）
 
@@ -99,10 +99,10 @@ def apply_env_overrides(settings, environ: Optional[Dict[str, str]] = None) -> i
     Returns:
         int: 实际覆盖的键数量
     """
-    environ = os.environ if environ is None else environ
+    env: Any = environ
     applied = 0
     for env_key, dotted in ENV_MAP.items():
-        raw = environ.get(env_key)
+        raw = env.get(env_key)
         if raw is None or raw == "":
             continue
         try:

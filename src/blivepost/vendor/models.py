@@ -43,10 +43,9 @@ class RoomChange:
     """房间信息更改"""
     title: str = ''
     """标题"""
-    area_id: int = ''
+    area_id: int = ''  # type: ignore[assignment]  # B站空数据容错
     """子分区ID"""
-    parent_area_id: int = ''
-    """主分区ID"""
+    parent_area_id: int = ''  # type: ignore[assignment]  # 主分区ID
     area_name: str = ''
     """子分区"""
     parent_area_name: str = ''

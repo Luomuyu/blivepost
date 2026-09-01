@@ -53,7 +53,7 @@ class AdminCommandHandler:
         self,
         cookie_pool: CookiePool,
         admin_openids: List[str],
-        bot_client: "QQBotClient" = None,
+        bot_client: Optional["QQBotClient"] = None,
         db_service: Optional["DatabaseService"] = None,
         monitor_manager=None,
     ):
@@ -141,6 +141,7 @@ class AdminCommandHandler:
         if self.bot_client is None:
             await message.reply(content="机器人未就绪，请稍后重试")
             return
+        bot = self.bot_client
 
         await message.reply(
             content="正在生成B站登录二维码，请使用B站APP扫码（180秒内有效）..."
@@ -163,25 +164,30 @@ class AdminCommandHandler:
 
     async def _run_login(self, service: BiliLoginService, openid: str) -> None:
         """执行登录并回复结果"""
+        bot = self.bot_client
         try:
             result = await service.login()
         except Exception as e:
             logger.error(f"扫码登录流程异常: {e}")
-            await self.bot_client.send_c2c_message(openid, f"登录流程异常：{e}")
+            if bot:
+                await bot.send_c2c_message(openid, f"登录流程异常：{e}")
             return
 
         await self._finish_login(result, openid)
 
     async def _finish_login(self, result: LoginResult, openid: str) -> None:
         """登录结果处理：写入账号池并回复管理员"""
+        bot = self.bot_client
+        if bot is None:
+            return
         if result.timeout:
-            await self.bot_client.send_c2c_message(
+            await bot.send_c2c_message(
                 openid, "二维码已超时失效，请重新发送 /登录"
             )
             return
 
         if not result.ok:
-            await self.bot_client.send_c2c_message(
+            await bot.send_c2c_message(
                 openid, f"登录失败：{result.error or '未知错误'}，请重新发送 /登录 重试"
             )
             return
@@ -195,7 +201,7 @@ class AdminCommandHandler:
             ac_time_value=result.ac_time_value,
             sessdata_expires_at=result.sessdata_expires_at,
         )
-        await self.bot_client.send_c2c_message(
+        await bot.send_c2c_message(
             openid,
             f"登录成功：{result.nickname}（UID:{result.uid}）\n"
             f"Cookie已写入账号池（共{len(result.cookies)}项）"

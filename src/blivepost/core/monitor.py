@@ -4,7 +4,7 @@
 """
 
 import http.cookies
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 import aiohttp
 
@@ -46,7 +46,7 @@ class LiveMonitor:
 
         # 初始化服务
         self.push_service = PushService(self.settings)
-        self.bilibili_api = BilibiliAPI(sessdata)
+        self.bilibili_api: Any = BilibiliAPI(sessdata)
 
         # 设置API的fp_cookie
         fp_cookie = self.fingerprint.get_cookie()
@@ -68,7 +68,7 @@ class LiveMonitor:
         self.handler = None
 
         # 客户端和session
-        self._client = None
+        self._client: Any = None
         self._session: Optional[aiohttp.ClientSession] = None
         self._running = False
 

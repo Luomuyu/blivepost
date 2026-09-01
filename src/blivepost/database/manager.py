@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from ..config.settings import DatabaseConfig
 from ..utils.logger import get_logger
+from .migrations import run_migrations
 from .models import Base, set_db_type
 
 
@@ -101,9 +102,12 @@ class DatabaseManager:
             expire_on_commit=False,
         )
         
-        # 创建所有表
+        # 创建缺失表（新表）
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+
+        # 增量Schema迁移（旧库补列/变更，跳过已应用版本）
+        await run_migrations(self._engine)
         
         logger.info("数据库初始化完成")
     

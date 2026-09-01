@@ -6,6 +6,7 @@
 """
 
 from .manager import DatabaseManager
+from .migrations import run_migrations
 from .models import (
     Base,
     EventType,
@@ -27,6 +28,7 @@ from .service import DatabaseService
 
 __all__ = [
     "DatabaseManager",
+    "run_migrations",
     "DatabaseService",
     "Base",
     "EventType",

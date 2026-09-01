@@ -29,7 +29,7 @@ class CacheBackend:
     def get(self, key: str) -> Optional[str]:
         raise NotImplementedError
     
-    def set(self, key: str, value: str, ex: int = None) -> None:
+    def set(self, key: str, value: str, ex: Optional[int] = None) -> None:
         raise NotImplementedError
 
 
@@ -47,7 +47,7 @@ class MemoryCache(CacheBackend):
             return None
         return self._cache.get(key)
     
-    def set(self, key: str, value: str, ex: int = None) -> None:
+    def set(self, key: str, value: str, ex: Optional[int] = None) -> None:
         self._cache[key] = value
         if ex:
             self._expire[key] = time.time() + ex
@@ -60,6 +60,7 @@ class RedisCache(CacheBackend):
     _connect_failed = False
 
     def __init__(self, config: RedisConfig):
+        self._redis = None
         try:
             import redis
             if RedisCache._connect_failed:
@@ -91,11 +92,12 @@ class RedisCache(CacheBackend):
         if not self._redis:
             return None
         try:
-            return self._redis.get(key)
+            result = self._redis.get(key)
+            return str(result) if result is not None else None
         except Exception:
             return None
     
-    def set(self, key: str, value: str, ex: int = None) -> None:
+    def set(self, key: str, value: str, ex: Optional[int] = None) -> None:
         if not self._redis:
             return
         try:
@@ -231,9 +233,9 @@ class FingerprintService:
             try:
                 sid_url = "https://api.bilibili.com/x/player/wbi/v2?aid=114980603102689"
                 response = requests.get(url=sid_url, headers=HEADERS, timeout=10)
-                sid = response.headers.get("Set-Cookie", "").split("sid=")
-                if len(sid) > 1:
-                    sid = sid[1].split(";")[0]
+                parts = response.headers.get("Set-Cookie", "").split("sid=")
+                if len(parts) > 1:
+                    sid = parts[1].split(";")[0]
                 else:
                     sid = ""
                 

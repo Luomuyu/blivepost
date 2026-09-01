@@ -4,7 +4,7 @@ blivedm补丁 - 添加自定义消息处理
 """
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from .importer import import_blivedm
 from . import models as vendor_models
@@ -209,7 +209,7 @@ CMD_CALLBACK_DICT_DEL = {
 }
 
 
-def apply_patch(ignore_cmds: list = None) -> None:
+def apply_patch(ignore_cmds: Optional[list] = None) -> None:
     """
     应用blivedm补丁
     

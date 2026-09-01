@@ -1,0 +1,79 @@
+# -*- coding: utf-8 -*-
+"""Schema迁移器测试：旧库升级 + 新库幂等跳过"""
+
+import asyncio
+import os
+import sqlite3
+import tempfile
+
+from blivepost.config.settings import Settings
+from blivepost.database import DatabaseManager, DatabaseService
+from blivepost.database.migrations import MIGRATIONS
+
+
+def test_migration_registry_valid():
+    """迁移注册表版本递增、DDL为ADD COLUMN形式"""
+    versions = [v for v, *_ in MIGRATIONS]
+    assert versions == sorted(versions)
+    assert len(set(versions)) == len(versions)
+    for _, _, table, ddls in MIGRATIONS:
+        for ddl in ddls:
+            assert "ADD COLUMN" in ddl and table in ddl
+
+
+def test_migration_upgrades_legacy_db():
+    """旧库（缺use_count列）经迁移后补齐"""
+    tmp = tempfile.mkdtemp()
+    db_path = os.path.join(tmp, "legacy.db")
+
+    # 模拟v1旧库：无use_count列
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE cookie_account (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "uid INTEGER UNIQUE, nickname TEXT DEFAULT '', cookie_string TEXT, "
+        "sessdata TEXT, bili_jct TEXT, ac_time_value TEXT, status TEXT DEFAULT 'active')"
+    )
+    conn.execute("INSERT INTO cookie_account (uid, nickname, cookie_string) VALUES (1, 'A', 'S=x')")
+    conn.commit()
+    conn.close()
+
+    settings = Settings()
+    settings.database.sqlite_path = db_path
+
+    async def run():
+        db = DatabaseManager(settings.database)
+        await db.initialize()
+        return db
+
+    db = asyncio.run(run())
+    try:
+        # use_count列已补齐，数据保留
+        conn = sqlite3.connect(db_path)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(cookie_account)")}
+        rows = list(conn.execute("SELECT uid, use_count FROM cookie_account"))
+        conn.close()
+        assert "use_count" in cols
+        assert rows == [(1, 0)]
+    finally:
+        asyncio.run(db.close())
+
+
+def test_migration_skips_fresh_db():
+    """新库（create_all已含全列）迁移自动跳过不报错"""
+    tmp = tempfile.mkdtemp()
+    settings = Settings()
+    settings.database.sqlite_path = os.path.join(tmp, "fresh.db")
+
+    async def run():
+        db = DatabaseManager(settings.database)
+        await db.initialize()
+        svc = DatabaseService(db)
+        await svc.save_cookie_account(uid=9, nickname="N", cookie_string="c")
+        return db, svc
+
+    db, svc = asyncio.run(run())
+    try:
+        accounts = asyncio.run(svc.get_cookie_accounts())
+        assert len(accounts) == 1
+    finally:
+        asyncio.run(db.close())

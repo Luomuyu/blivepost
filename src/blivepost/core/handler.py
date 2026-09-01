@@ -7,7 +7,6 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..config.settings import Settings, MessageSettings
-from ..database import DatabaseService
 from ..database.models import local_now
 from ..models.live import LiveStats, TempData
 from ..services.push import PushService
@@ -46,7 +45,7 @@ class BaseEventHandler:
         stats: LiveStats,
         temp_data: TempData,
         room_id: str,
-        db_service: Optional[DatabaseService] = None
+        db_service: Optional[Any] = None
     ):
         """
         初始化事件处理器
@@ -536,7 +535,7 @@ def create_handler_with_base(
     stats: LiveStats,
     temp_data: TempData,
     room_id: str,
-    db_service: Optional[DatabaseService] = None
+    db_service: Optional[Any] = None
 ) -> Any:
     """
     创建带有blivedm.BaseHandler的事件处理器
@@ -558,7 +557,7 @@ def create_handler_with_base(
     """
     blivedm = import_blivedm()
 
-    class _Handler(BaseEventHandler, blivedm.BaseHandler):
+    class _Handler(BaseEventHandler, blivedm.BaseHandler):  # type: ignore[name-defined]
         def __init__(self):
             BaseEventHandler.__init__(
                 self,

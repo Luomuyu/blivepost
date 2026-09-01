@@ -5,7 +5,7 @@
 
 import re
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from ..config.settings import Settings
 from ..models.live import LiveRoomInfo, LiveStats
@@ -51,9 +51,11 @@ class PushService:
         self.qqbot_config = settings.qqbot
         self.templates = settings.templates
         # QQBotClient实例，由外部（main/LiveMonitor）设置
-        self.bot_client = None
+        self.bot_client: Any = None
         # BindingStore实例，由外部（main）设置；提供后按绑定关系路由推送
-        self.binding_store = None
+        self.binding_store: Any = None
+        # BilibiliAPI实例（子进程侧设置，开播/下播推送前查询房间信息）
+        self.bilibili_api: Any = None
 
     @staticmethod
     def _render(template: str, fields: dict) -> Optional[str]:

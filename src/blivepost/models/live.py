@@ -217,7 +217,7 @@ class DynamicInfo:
     publish_time: int
     platform: str = "bili"  # bili / weibo
     url: str = ""
-    images: list = None
+    images: Optional[list] = None
     
     def __post_init__(self):
         """确保数据类型正确"""

@@ -103,7 +103,7 @@ def get_sessdata_from_redis(settings) -> Optional[str]:
         )
         sessdata = r.get("SESSDATA")
         if sessdata:
-            return sessdata
+            return str(sessdata)
     except redis.exceptions.ConnectionError:
         pass
     except Exception:
@@ -161,7 +161,7 @@ async def main_async(
 
         # 确定最终使用的sessdata
         # 优先级：命令行参数 > Redis > 配置文件
-        final_sessdata = sessdata
+        final_sessdata: Optional[str] = sessdata
 
         if final_sessdata is None:
             redis_sessdata = get_sessdata_from_redis(settings)
@@ -331,11 +331,13 @@ async def main_async(
 
         # 停止每日结算、Cookie维护与直播状态watcher
         try:
-            await daily_report.stop()
+            if daily_report is not None:
+                await daily_report.stop()
         except Exception:
             pass
         try:
-            await live_watcher.stop()
+            if live_watcher is not None:
+                await live_watcher.stop()
         except Exception:
             pass
         try:

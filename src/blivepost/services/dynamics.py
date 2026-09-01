@@ -14,7 +14,7 @@ import multiprocessing
 import os
 import random
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -315,9 +315,9 @@ class DynamicManager:
         self.state_path = state_path
 
         self._ctx = multiprocessing.get_context("spawn")
-        self._ups: Dict[int, multiprocessing.context.BaseContext] = {}
-        self._stop_events: Dict[int, object] = {}
-        self._processes: Dict[int, object] = {}
+        self._ups: Dict[int, Any] = {}
+        self._stop_events: Dict[int, Any] = {}
+        self._processes: Dict[int, Any] = {}
         self._watchers: Dict[int, asyncio.Task] = {}
         self._lock = asyncio.Lock()
 

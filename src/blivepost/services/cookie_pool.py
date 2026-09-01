@@ -11,7 +11,7 @@ B站账号Cookie池
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from ..database.models import CookieAccountRecord, local_now
 from ..utils.logger import get_logger
@@ -77,7 +77,7 @@ class CookiePool:
         self._db = db_service
         self.warn_threshold = warn_threshold
         # {uid: CookieAccount}（含expired，便于查询）
-        self._accounts = {}
+        self._accounts: Dict[int, CookieAccount] = {}
         # 预警去重：记录上次提醒时的可用账号数（-1表示未提醒过）
         self._last_warned_level: int = -1
 

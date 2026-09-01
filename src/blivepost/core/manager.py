@@ -19,7 +19,7 @@ import queue
 from datetime import datetime
 
 import aiohttp
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from ..config.settings import Settings
 from ..models.live import LiveRoomInfo, LiveStats, TempData
@@ -56,6 +56,7 @@ class QueueDbBridge:
 
     def __init__(self, queue):
         self._queue = queue
+        # 与DatabaseService同名save_*接口（鸭子类型）
 
     def __getattr__(self, name: str):
         if not name.startswith("save_"):
@@ -502,7 +503,7 @@ class RoomProcess:
         queue,
         ctx,
         log_dir: Optional[str] = None,
-        on_exit: Optional[Callable[[int], None]] = None,
+        on_exit: Optional[Callable[[int], Any]] = None,
         cookie_uid: int = 0,
         cookie_string: str = ""
     ):
@@ -529,7 +530,7 @@ class RoomProcess:
 
         self._cookie_string = cookie_string
         self._stop_event = ctx.Event()
-        self._process = None
+        self._process: Any = None
         self._watcher: Optional[asyncio.Task] = None
         self._stopped = False
 
