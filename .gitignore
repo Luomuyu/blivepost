@@ -18,3 +18,4 @@ dynamic_*.txt
 *.log
 .DS_Store
 _*.py
+build/
