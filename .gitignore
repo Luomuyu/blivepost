@@ -1,0 +1,20 @@
+__pycache__
+.idea
+.venv
+.vscode
+dist
+oldsrc
+.gitignore
+.git
+.env
+*.egg-info
+# 运行时产物
+data/
+logs/
+exports/
+_vendor/
+unknowncmd.txt
+dynamic_*.txt
+*.log
+.DS_Store
+_*.py
