@@ -1,6 +1,8 @@
 # BLivePost 项目信息
 
-> 最后更新：2026-09-01（第十四批：Schema迁移器、mypy清零、数据永久保留策略）
+> 最后更新：2026-09-01（第十五批：官方API对齐、数据量监控）
+
+> Git：`04559d8` 基线 → `8625fe3` → `e1cc18b` → `66ebdb4` 工程化 → `ff57e37` → `04f7c9a` 迁移器+mypy清零 → `673eef8` 官方API对齐+数据量监控 → `51fb0a1` 字段补齐
 
 > Git：`04559d8` 基线 → `8625fe3` → `e1cc18b` → `66ebdb4` 工程化 → `ff57e37` → `04f7c9a` 迁移器+mypy清零
 
@@ -44,6 +46,8 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - **.env与环境变量**（config/env.py）：`.env`文件（KEY=VALUE，#注释，引号可选，不覆盖真实环境变量）+ 环境变量覆盖Settings，前缀`BLIVEPOST_`：
   `BLIVEPOST_QQBOT_APP_ID`/`_APP_SECRET`、`BLIVEPOST_ADMIN_OPENIDS`/`_MAIN_OPENIDS`（逗号分隔）、`BLIVEPOST_SESSDATA`、`BLIVEPOST_WEB_TOKEN`/`_WEB_PORT`、`BLIVEPOST_DB_TYPE/HOST/PORT/USER/PASSWORD/NAME/SQLITE_PATH`、`BLIVEPOST_REDIS_HOST/PORT/PASSWORD`
 - **wheel**：`blivepost-1.1.0-py3-none-any.whl`已重新构建（含全部新功能）
+- **官方API对齐**（QQ开放平台v2文档核对）：群/单聊消息（`msg_type` 0文本/2markdown/7富媒体，`media.file_info`来自files上传，`msg_id`被动5分钟有效，`msg_seq`同ID下须递增）；富媒体上传（`file_type`/`url`/`srv_send_msg`，本地图片multipart `file_data`直传为平台兼容路径，文档标准路径为分片上传——需真机验证，失败时日志提示）
+- **频控依据**：认证60/qpm、未认证30/qpm、单关系20/qpm、每群每天1000条——结算推送等高频功能设计均以此为约束
 
 ## 消息推送范围与开关
 
@@ -58,6 +62,13 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 房间信息变更 | `Setting.room_change` | N |
 | 动态监控（订阅+轮询+推送+开播提醒） | `Setting.dynamic_monitor` | N |
 | 每日/每周/每月结算 | `Setting.daily_report`/`weekly_report`/`monthly_report` | N |
+
+## 数据量监控（永久保留策略的配套）
+
+- 设计决策：**所有入库数据永久保留，永不自动删除**（`Setting.data_retention_days=0`，代码不含自动删除逻辑）
+- **Web面板**：首页展示数据库体积（MB），随 `/api/status` 一并输出JSON
+- **超阈值提醒**：`Setting.db_size_warn_mb`（默认500MB，0=不提醒）；CookieMaintainer每轮维护时检查SQLite文件体积，超阈值经**单聊私聊提醒主管理员**，恢复到阈值下方前不重复提醒——只提醒不删除，符合永久保留决策
+- 体积持续增长的治理路径：`/导出`归档 → 手动清理 → 迁移MySQL/PostgreSQL
 
 ## Cookie账号池
 
@@ -76,7 +87,8 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ## Web状态面板
 
 - `Setting.web_panel`（默认N）；`web_host`（127.0.0.1）/`web_port`（8080）/`web_token`（鉴权，留空不鉴权）
-- 路由：`/`（HTML：账号健康/房间汇总/SVG趋势图/动态/下播）、`/api/status`、`/api/history?days=N`
+- 路由：`/`（HTML：数据库体积/账号健康/房间汇总/SVG趋势图/动态/下播）、`/api/status`（含db_size_mb）、`/api/history?days=N`
+- 账号池表含**剩余有效期天数**与**使用次数**
 - 未配置token时请勿暴露公网
 
 ## 数据存储与查询
@@ -91,7 +103,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - 配置管理（YAML自动生成 + .env/环境变量覆盖密钥）；SESSDATA仅进程内存保存
 - WBI签名单一实现；Redis连接1秒快速降级（进程级记忆）
 - 按天轮转日志（保留30天）
-- 单元测试146个 + flake8零告警（src+tests）+ mypy零错误（36文件，阻塞检查）
+- 单元测试146个 + flake8零告警（src+tests）+ mypy零错误（37文件，阻塞检查）
 - Schema迁移器（database/migrations.py，版本表+增量DDL）
 - 版本1.1.0；wheel已重新构建
 
@@ -114,6 +126,10 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
   - ~~SQLite无迁移机制~~ → 轻量Schema迁移器（`schema_version`版本表+增量ADD COLUMN，跨sqlite/mysql/pg，列存在自动跳过；`DatabaseManager.initialize`集成，旧库升级/新库幂等均有测试）
   - ~~mypy约146个历史告警（CI非阻塞）~~ → 配置放宽动态鸭子类型项+修复真实类型错误，**36文件0错误**；CI的type-check移除continue-on-error升为阻塞检查
   - ~~数据保留策略~~ → 设计决策确认：**所有入库数据永久保留，永不自动删除**（`Setting.data_retention_days`默认0=永久；用户可自行导出后手动清理，代码不提供自动删除逻辑）
+
+### 2026-09 第十五批（本次）
+- ~~消息/富媒体实现未经官方文档核对~~ → 按v2文档逐项核对并完善：`msg_seq`递增机制（修复登录流程同seq冲突）、群聊本地图片multipart直传（`send_group_image`，与单聊对称）、富媒体上传路径说明与日志提示
+- ~~数据量监控缺失~~ → Web面板展示数据库体积；`db_size_warn_mb`超阈值私聊提醒主管理员（跨水位去重、只提醒不删除）
 
 ## 代码存在的问题（当前仍存在）
 
@@ -160,3 +176,4 @@ export BLIVEPOST_ADMIN_OPENIDS="openid1,openid2"
 - Cookie提醒只走私聊（敏感通知优先`Admin.main_openids`）
 - UP主开播期间动态轮询自动暂停，下播自动恢复
 - 多实例部署：各实例独立工作目录即可完全隔离
+- 数据库体积超`db_size_warn_mb`（默认500MB）时私聊提醒管理员；治理靠导出归档，代码不自动删除
