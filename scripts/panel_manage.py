@@ -99,7 +99,7 @@ def main():
             if not pid:
                 print(f"[{sc}] 未创建")
                 continue
-            resp = requests.get(f"{API_BASE}/connect/panel/{pid}",
+            resp = requests.get(f"{API_BASE}/v2/panels/{pid}",
                                 headers=headers, timeout=15)
             print(f"[{sc}] panel_id={pid}")
             print(json.dumps(resp.json(), ensure_ascii=False, indent=2))
@@ -121,7 +121,7 @@ def main():
                 "version": int(info.get("version", 1)) + 1,
             }
         }
-        resp = requests.put(f"{API_BASE}/connect/panel/{pid}",
+        resp = requests.put(f"{API_BASE}/v2/panels/{pid}",
                             json=body, headers=headers, timeout=15)
         print(f"修改{scope}面板响应: {resp.status_code} {resp.text}")
         return
@@ -137,7 +137,7 @@ def main():
             if not pid:
                 print(f"[{sc}] 未创建，跳过删除")
                 continue
-            resp = requests.delete(f"{API_BASE}/connect/panel/{pid}",
+            resp = requests.delete(f"{API_BASE}/v2/panels/{pid}",
                                    headers=headers, timeout=15)
             print(f"删除{sc}面板响应: {resp.status_code} {resp.text}")
             if resp.status_code in (200, 204):

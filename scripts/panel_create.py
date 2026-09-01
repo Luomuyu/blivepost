@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import requests  # noqa: E402
 
 TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
-PANEL_URL = "https://api.sgroup.qq.com/connect/panel/create"
+PANEL_URL = "https://api.sgroup.qq.com/v2/panels"
 IDS_FILE = Path(__file__).resolve().parent / "panel_ids.json"
 
 # ---------------------------------------------------------------- 面板定义
