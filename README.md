@@ -18,6 +18,7 @@ B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化P
 - 📱 **动态监控** - 群指令订阅B站UP主动态（`/绑定动态 UP主UID`），独立子进程轮询，新动态推送到订阅群
 - 🔐 **WBI签名** - 支持B站WBI签名，保障API调用安全
 - 👥 **Cookie账号池** - 多账号cookie池轮转供监控使用，支持扫码登录、临近过期自动刷新、失效自动轮换
+- 🤝 **联系人管理** - 自动跟踪好友与群（加/删、入群/退群、消息接收开关8个事件），退群自动解绑监控，发送前过滤未开启接收的目标
 - 💾 **Redis缓存** - 可选Redis缓存支持，提升性能
 - 🔧 **Vendor管理** - 自动化blivedm库依赖管理
 
@@ -57,29 +58,36 @@ pip install blivepost
 # 版本: 1.0.0
 
 Admin: # 管理员设置
-  openids: [] # 管理员用户openId列表（私聊命令、群控制指令、普通通知）
-  main_openids: [] # 主管理员openId列表（Cookie失效等敏感通知接收者，留空则发全部管理员）
+  openids: [] # 管理员用户openId列表 (私聊命令、普通通知接收者)
+  main_openids: [] # 主管理员openId列表 (Cookie失效等敏感通知接收者, 留空则发全部管理员)
 
 QQBot: # QQ官方机器人设置 (基于botpy)
   app_id: "" # 机器人AppID
   app_secret: "" # 机器人AppSecret
   # 推送目标群通过群指令建立绑定（@机器人发送 /绑定 房间号），无需在此配置
 
-Dynamic: # 动态监控设置
-  bili: "N" # B站动态监控 (Y/N)
-  wb: "N" # 微博动态监控 (Y/N)
-  wb_uid: "0" # 微博用户ID
+# 动态监控通过群指令订阅（@机器人 /绑定动态 UP主UID），无需配置
 
 Live: # 直播间设置
   live_id: "" # 直播间房间号
 
 Setting: # 消息推送设置
-  dm: "N" # 弹幕推送 (不建议开启)
-  gift: "N" # 礼物推送
-  ship: "N" # 上舰推送
-  sc: "N" # 醒目留言推送
-  redpocket: "N" # 红包推送
-  anchor: "N" # 天选推送
+  # 弹幕/礼物/舰长/SC/红包 仅记录日志并存入数据库，不推送消息
+  anchor: "N" # 天选时刻推送
+  guard_achievement: "Y" # 大航海成就推送
+  system_event: "Y" # 系统事件推送 (切断/警告/禁言/房管)
+  room_change: "N" # 房间信息变更推送
+  dynamic_monitor: "N" # 动态监控总开关 (关闭时/绑定动态 不可用)
+  daily_report: "N" # 每日结算推送 (每天00:05, 仅推有数据的房间, 消耗主动消息配额)
+  weekly_report: "N" # 每周结算推送 (每周一00:05推送上周汇总)
+  monthly_report: "N" # 每月结算推送 (每月1日00:05推送上月汇总)
+  web_panel: "N" # Web状态面板 (只读, 默认仅本机访问)
+  web_host: "127.0.0.1" # Web面板监听地址
+  web_port: 8080 # Web面板端口
+  web_token: "" # Web面板访问令牌 (留空不鉴权; 设置后需 ?token= 或 X-Web-Token 头)
+  data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)
+  db_size_warn_mb: 500 # 数据库体积预警阈值MB (超过时私聊提醒管理员, 0=不提醒)
+  ignore_cmds: [] # 忽略的未知命令列表 (不打印日志)
 
 Redis: # Redis配置 (可选)
   host: "localhost"
@@ -100,6 +108,12 @@ Database: # 数据库配置
 
 Auth: # 认证配置
   sessdata: "" # 默认的B站登录凭证 (可被Redis覆盖)
+
+Template: # 推送文案模板 (可选, 留空使用内置模板; str.format占位符, 可用字段见README)
+  # 开播模板占位符: {name} {title} {room_id} {online} {time} {cover} {url}
+  live_start: ""
+  # 下播模板额外占位符: {like_count} {duration} {danmaku_count} {gold_count} {ship_count} {sc_count}
+  live_end: ""
 ```
 
 ### 2. 运行程序

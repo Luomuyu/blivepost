@@ -161,7 +161,7 @@ class ContactEventHandler:
         # 清理该群全部房间绑定并停止监控
         rooms = self._rooms_bound_to(group_openid)
         for rid in rooms:
-            await self.binding_store.unbind_all_for_group(group_openid, rid)
+            await self.binding_store.unbind(group_openid, rid)
             if self.monitor_manager is not None:
                 await self.monitor_manager.remove(rid)
 
@@ -170,6 +170,10 @@ class ContactEventHandler:
 
     async def on_group_receive(self, group_openid: str, receive: int) -> None:
         await self.contact_store.set_group_receive_async(group_openid, receive)
+
+    async def set_friend_receive_async(self, openid: str, receive: int) -> None:
+        """设置好友单聊消息接收开关（无记录则创建）"""
+        await self.contact_store.set_friend_receive_async(openid, receive)
 
     async def on_friend_add(self, openid: str) -> None:
         await self.contact_store.save_friend(openid, del_flag=0, receive=1)
