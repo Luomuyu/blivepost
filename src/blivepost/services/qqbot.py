@@ -90,6 +90,29 @@ class QQBotClient:
         """客户端是否正在运行"""
         return self._task is not None and not self._task.done()
 
+    def token_state(self) -> dict:
+        """
+        访问凭证状态诊断（对齐官方access-token文档）
+
+        botpy在每次API请求前自动刷新token（有效期7200秒，
+        请求级惰性刷新）；此方法暴露当前凭证的剩余有效期。
+
+        Returns:
+            dict: {"client_started", "token_ready", "token_expires_in"}
+        """
+        import time as _time
+        state = {"client_started": self.started,
+                 "token_ready": False,
+                 "token_expires_in": 0}
+        api = getattr(self._client, "api", None) if self._client else None
+        http = getattr(api, "_http", None) if api is not None else None
+        token = getattr(http, "_token", None) if http is not None else None
+        if token is not None and getattr(token, "access_token", None):
+            state["token_ready"] = True
+            state["token_expires_in"] = max(
+                int(token.expires_in - _time.time()), 0)
+        return state
+
     def start(
         self,
         command_handler: Optional["CommandHandler"] = None,

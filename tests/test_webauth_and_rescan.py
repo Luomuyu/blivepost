@@ -92,8 +92,9 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
     panel.db_service = D()
 
     async def fake_collect():
-        return {"now": "t", "db_size_mb": 0, "accounts": [], "rooms": [],
-                "dynamics": [], "recent": []}
+        return {"now": "t", "bot": {"client_started": True, "token_ready": True,
+                "token_expires_in": 3600}, "db_size_mb": 0, "accounts": [],
+                "rooms": [], "dynamics": [], "recent": []}
     panel._collect = fake_collect
 
     import blivepost.services.webpanel as wp

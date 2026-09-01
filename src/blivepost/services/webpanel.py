@@ -38,7 +38,8 @@ th{{background:#f0f4f8}}
 .ok{{color:#2e8b57}} .bad{{color:#c0392b}} small{{color:#888}}
 </style></head><body>
 <h1>BLivePost 状态面板 <small>刷新时间 {now}</small></h1>
-<p>数据库体积：<b>{db_size_mb} MB</b> <small>（永久保留策略，数据不自动删除）</small></p>
+<p>机器人凭证：<b>{bot_state}</b>（token剩余 {token_expires_in} 秒）
+　数据库体积：<b>{db_size_mb} MB</b> <small>（永久保留策略，数据不自动删除）</small></p>
 <h2>账号池（可用 {active}/{total}）</h2>
 <table><tr><th>UID</th><th>昵称</th><th>状态</th><th>剩余有效期</th><th>使用次数</th><th>最近使用</th><th>关联房间</th></tr>
 {accounts}</table>
@@ -71,6 +72,7 @@ class WebPanel:
         host: str = "127.0.0.1",
         port: int = 8080,
         token: str = "",
+        bot_client=None,
     ):
         self.cookie_pool = cookie_pool
         self.monitor_manager = monitor_manager
@@ -80,6 +82,7 @@ class WebPanel:
         self.host = host
         self.port = port
         self.token = token
+        self.bot_client = bot_client
         self._runner: Optional[web.AppRunner] = None
 
     async def start(self) -> None:
@@ -111,6 +114,10 @@ class WebPanel:
     async def _collect(self) -> dict:
         """收集面板数据"""
         now = datetime.now()
+
+        # 机器人凭证状态（access_token，botpy请求级自动刷新）
+        token_state = self.bot_client.token_state() if self.bot_client else {
+            "client_started": False, "token_ready": False, "token_expires_in": 0}
 
         # 数据库体积（永久保留策略下的增长监控）
         db_size_mb = 0.0
@@ -156,6 +163,7 @@ class WebPanel:
         recent = await self.db_service.get_recent_live_status(limit=10)
         return {
             "now": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "bot": token_state,
             "db_size_mb": db_size_mb,
             "accounts": accounts,
             "rooms": rooms,
@@ -204,8 +212,12 @@ class WebPanel:
             for a in data["accounts"])
         history = await self.db_service.get_daily_history(days=30)
         trend_svg = _render_trend_svg(history)
+        bot = data["bot"]
         html = _PAGE.format(
             now=data["now"],
+            bot_ready=bot["token_ready"],
+            bot_state=("在线" if bot["client_started"] else "离线"),
+            token_expires_in=bot["token_expires_in"],
             db_size_mb=data["db_size_mb"],
             active=sum(1 for a in data["accounts"] if a["status"] == "active"),
             total=len(data["accounts"]), accounts=accounts or "<tr><td colspan=7>空</td></tr>",
