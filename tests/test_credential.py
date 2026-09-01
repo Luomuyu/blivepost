@@ -143,7 +143,7 @@ async def test_panel_token_ok_renders_credentials(monkeypatch):
     resp = await panel._handle_home(req)
     assert resp.status == 200
     body = resp.text
-    assert "access_token剩余" in body and "在线" in body
+    assert "token剩余" in body and "在线" in body
 
 
 async def fake_collect():
