@@ -71,6 +71,26 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+async def _listen_terminal(stop_event: asyncio.Event) -> None:
+    """
+    监听终端输入：输入stop（或quit/exit）后置位停止事件，安全关闭程序
+    """
+    import sys as _sys
+
+    logger = get_logger("terminal")
+    logger.info("终端命令监听已启动：输入 stop 安全关闭程序")
+    while True:
+        line = await asyncio.to_thread(_sys.stdin.readline)
+        if not line:  # EOF（如后台运行无stdin）
+            await asyncio.sleep(5)
+            continue
+        cmd = line.strip().lower()
+        if cmd in ("stop", "quit", "exit"):
+            logger.info(f"收到终端命令 {cmd}，正在安全关闭...")
+            stop_event.set()
+            break
+
+
 def _merge_unique(*lists) -> list:
     """合并多个openid名单并去重（保持顺序）"""
     seen, result = set(), []
@@ -308,8 +328,10 @@ async def main_async(
             logger.info(f"启动配置房间 {settings.live.room_id} 的监控")
             await monitor_manager.ensure(int(settings.live.room_id))
 
-        # 常驻等待（机器人连接在后台任务中运行）
-        await asyncio.Event().wait()
+        # 常驻等待：终端输入stop或Ctrl+C安全关闭
+        stop_event = asyncio.Event()
+        asyncio.create_task(_listen_terminal(stop_event), name="terminal-listener")
+        await stop_event.wait()
 
     except FileNotFoundError as e:
         logger.error(f"配置文件错误: {e}")

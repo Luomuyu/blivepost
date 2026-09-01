@@ -128,6 +128,11 @@ class AdminCommandHandler:
                 int(export_match.group(1)), day, fmt=fmt))
             return
 
+        if re.search(r"[/／]\s*体积\s*$", content):
+            await message.reply(content="正在统计，请稍候...")
+            await message.reply(content=await self._db_size_report())
+            return
+
         if re.search(r"[/／]\s*账号\s*$", content):
             await message.reply(content=self._pool_status())
             return
@@ -337,3 +342,28 @@ class AdminCommandHandler:
             f"导出完成：直播间{room_id} {date_text} 共{total}条记录\n"
             f"文件：{path}"
         )
+
+    async def _db_size_report(self) -> str:
+        """数据库体积与各表行数报告（数据治理）"""
+        import os as _os
+
+        svc = self.db_service
+        path = None
+        if svc is not None:
+            db_manager = getattr(svc, "db_manager", None)
+            path = getattr(db_manager, "db_path", None)
+        if not path or not _os.path.exists(path):
+            return "体积统计不可用（非SQLite数据库或文件不存在）"
+
+        size_mb = _os.path.getsize(path) / (1024 * 1024)
+        assert svc is not None
+        rows = await svc.get_table_counts()
+        total = sum(n for _, n in rows)
+        lines = [f"数据库体积：{size_mb}MB，总记录：{total}条", "各表行数（降序）："]
+        for name, count in rows:
+            if count:
+                lines.append(f"· {name}：{count}条")
+        empty = [name for name, count in rows if not count]
+        if empty:
+            lines.append("· 空表：" + "、".join(empty))
+        return "\n".join(lines)

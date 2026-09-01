@@ -3,6 +3,7 @@
 数据库存储服务
 """
 
+import os
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
@@ -1120,3 +1121,37 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"更新群接收开关失败: {e}")
+
+    async def get_table_counts(self) -> List[Tuple[str, int]]:
+        """
+        统计各数据表行数（数据治理用）
+
+        Returns:
+            list[(表名, 行数)]，按行数降序
+        """
+        tables = [
+            ("弹幕", DanmakuRecord), ("礼物", GiftRecord),
+            ("SC", SuperChatRecord), ("舰长", GuardRecord),
+            ("天选", AnchorRecord), ("红包", RedPocketRecord),
+            ("大航海成就", GuardAchievementRecord), ("系统事件", SystemEventRecord),
+            ("房间变更", RoomChangeRecord), ("开播下播", LiveStatusRecord),
+            ("群绑定", GroupBindingRecord), ("Cookie账号", CookieAccountRecord),
+            ("动态订阅", DynamicBindingRecord),
+        ]
+        result: List[Tuple[str, int]] = []
+        try:
+            async with self.db_manager.get_session() as session:
+                for name, model in tables:
+                    res = await session.execute(select(func.count()).select_from(model))
+                    result.append((name, int(res.scalar() or 0)))
+        except Exception as e:
+            logger.error(f"统计表行数失败: {e}")
+        return sorted(result, key=lambda x: x[1], reverse=True)
+
+    @staticmethod
+    def get_db_file_size_mb(db_manager: "DatabaseManager") -> Optional[float]:
+        """获取SQLite数据库文件体积MB（非sqlite返回None）"""
+        path = getattr(db_manager, "db_path", None)
+        if path and os.path.exists(path):
+            return round(os.path.getsize(path) / (1024 * 1024), 2)
+        return None

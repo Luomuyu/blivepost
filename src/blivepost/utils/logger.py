@@ -104,6 +104,8 @@ class Logger:
         """
         self._logger = logging.getLogger(name)
         self._logger.setLevel(level)
+        # 关闭向root传播：避免botpy等第三方配置的root handler造成重复输出
+        self._logger.propagate = False
 
         # 清除现有处理器
         self._logger.handlers.clear()

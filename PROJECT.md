@@ -86,6 +86,16 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - **发送前检查**：PushService发送（文本与富媒体）前经ContactStore过滤未开启消息接收的群，未开启直接跳过；未知群默认放行
 - **机器人详情**：Web面板展示用户名、头像、分享按钮（share_url），经`GET /users/@me`获取并缓存
 
+## 终端命令与指令面板
+
+- **终端stop命令**：程序运行时在终端输入 `stop`（或`quit`/`exit`）即触发安全关闭——停止全部子进程监控/消费者/结算/维护循环/面板后退出，与Ctrl+C等效
+- **日志去重**：项目logger关闭向root传播（propagate=False），修复与botpy日志配置叠加导致的重复输出
+- **指令面板脚本**（scripts/，需凭证：环境变量或config.yaml的QQBot段）：
+  - `scripts/panel_create.py`：**仅需运行一次**——创建两个指令面板（c2c单聊面板：/登录 /账号 /移除账号 /恢复账号 /导出 /我；group群聊面板：/帮助 /绑定 /监控 /取消监控 /解绑 /状态 /我的绑定 /收入 /SC榜 /汇总），创建后把返回的panel_id与PanelItem定义写入 `scripts/panel_ids.json`
+  - `scripts/panel_manage.py`：读取panel_ids.json，支持 `query`（查询详情）/ `modify c2c|group`（按脚本内定义修改面板）/ `delete c2c|group|all`（删除）；修改面板指令时改脚本内PANEL_ITEMS定义后运行modify
+  - API对齐：`POST /v2/panels`创建、`PUT/DELETE/GET /connect/panel/{panel_id}`管理；PanelItem为`type=command/link`（command点击后填入输入框）；凭证经getAppAccessToken获取、`Authorization: QQBot <token>`携带
+- **数据治理**（建议2）：管理员私聊 `/体积`——数据库文件体积 + 13张表行数明细（按行数降序、空表单列）；配合永久保留策略（只统计不删除）
+
 ## 数据量监控（永久保留策略的配套）
 
 - 设计决策：**所有入库数据永久保留，永不自动删除**（`Setting.data_retention_days=0`，代码不含自动删除逻辑）
@@ -156,6 +166,12 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 
 各批次的过程细节见REVIEW.md与git历史。
 
+### 2026-09-02 第十八批（本次）
+- ~~运行日志重复输出~~（项目logger与botpy的root handler叠加）→ logger设置propagate=False
+- ~~无优雅关闭的终端入口~~ → 新增终端监听：输入stop置位停止事件安全关闭（与Ctrl+C等效）
+- ~~数据治理工具缺失（建议2）~~ → `/体积`私聊命令：库文件体积+13张表行数明细（降序+空表单列）
+- **指令面板脚本**：panel_create.py（c2c+group两面板一次创建，panel_id存panel_ids.json）+ panel_manage.py（query/modify/delete）；PanelItem为type=command/link结构
+
 ## 代码存在的问题（当前仍存在）
 
 1. **真机联调未做**：botpy连接、扫码登录、动态轮询、Web面板、结算推送、联系人8事件（加好友/退群/接收开关的实际payload与时序），均未在真实凭证环境验证。
@@ -173,7 +189,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ## 建议添加的新功能（按优先级）
 
 1. **按群推送粒度**：各类推送对所有监控中的群内容一致；可在绑定关系上增加push_types字段细分。
-2. **数据治理工具**：`/统计体积`按表占用明细、归档导出向导、跨房间体积排名（提醒与导出已实现，治理工具按需补充）。
+2. **指令面板真机验证**：panel_create/manage脚本按官方v2_panels文档实现，需真机验证端点响应与PanelItem渲染效果。
 
 ## 运行要点
 

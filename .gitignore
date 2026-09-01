@@ -19,3 +19,6 @@ dynamic_*.txt
 .DS_Store
 _*.py
 build/
+
+# 测试环境
+WheelTest/
