@@ -1,24 +1,32 @@
+# Python
 __pycache__
-.idea
-.venv
-.vscode
-dist
-oldsrc
-.gitignore
-.git
-.env
+*.pyc
 *.egg-info
+build/
+dist/
+.venv
+
+# IDE/编辑器
+.idea
+.vscode
+.DS_Store
+
+# 敏感与本地配置（含app_secret，严禁提交）
+.env
+config.yaml
+
 # 运行时产物
 data/
 logs/
 exports/
 _vendor/
+WheelTest/
 unknowncmd.txt
 dynamic_*.txt
 *.log
-.DS_Store
-_*.py
-build/
 
-# 测试环境
-WheelTest/
+# 临时脚本（审查/装配用的下划线前缀脚本）
+_*.py
+
+# 旧代码归档
+oldsrc
