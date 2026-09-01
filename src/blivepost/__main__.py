@@ -277,7 +277,9 @@ async def main_async(
             cookie_pool,
             bot_client=qqbot,
             admin_openids=settings.admin.openids,
-            main_admin_openids=settings.admin.main_openids
+            main_admin_openids=settings.admin.main_openids,
+            db_service=db_service,
+            db_size_warn_mb=settings.message.db_size_warn_mb
         )
         maintainer.start()
 

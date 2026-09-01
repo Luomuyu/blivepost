@@ -31,6 +31,7 @@ class DatabaseManager:
             config: 数据库配置
         """
         self.config = config
+        self.db_path: Optional[str] = None
         self._engine: Optional[AsyncEngine] = None
         self._session_factory: Optional[async_sessionmaker[AsyncSession]] = None
     
@@ -47,6 +48,7 @@ class DatabaseManager:
             # 确保SQLite数据库目录存在
             db_path = Path(self.config.sqlite_path)
             db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.db_path = str(db_path)
             return f"sqlite+aiosqlite:///{db_path}"
         
         elif db_type == "mysql":

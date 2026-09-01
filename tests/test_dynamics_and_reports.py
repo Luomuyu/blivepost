@@ -269,7 +269,7 @@ async def test_export_json(tmp_path, monkeypatch):
     result = [r for r in msg.replies if "导出完成" in r]
     assert len(result) == 1 and ".json" in result[0]
     import json
-    path = tmp_path / "exports" / "room_100_20260901.json"
+    path = tmp_path / "exports" / "room_100_20260902.json"
     assert path.exists()
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["danmaku"][0][3] == "hi"

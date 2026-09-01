@@ -202,7 +202,7 @@ async def test_export_command(tmp_path, monkeypatch):
     assert any("正在导出" in r for r in msg.replies)
     result = [r for r in msg.replies if "导出完成" in r]
     assert len(result) == 1 and "1条记录" in result[0]
-    path = tmp_path / "exports" / "room_23058_20260901.csv"
+    path = tmp_path / "exports" / "room_23058_20260902.csv"
     assert path.exists()
     content = path.read_text(encoding="utf-8-sig")
     assert "小花" in content and "super_chat (0条)" in content

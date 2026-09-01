@@ -34,11 +34,12 @@ class FakeBot:
         self.c2c_texts = []
         self.images = []
 
-    async def send_c2c_message(self, openid, content, msg_id=None):
+    async def send_c2c_message(self, openid, content, msg_id=None, msg_seq=1):
         self.c2c_texts.append((openid, content))
         return True
 
-    async def send_c2c_image(self, openid, image_bytes, msg_id=None, filename="image.png"):
+    async def send_c2c_image(self, openid, image_bytes, msg_id=None,
+                             filename="image.png", msg_seq=1):
         self.images.append((openid, len(image_bytes)))
         return True
 

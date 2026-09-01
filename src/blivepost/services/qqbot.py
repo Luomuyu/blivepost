@@ -302,7 +302,9 @@ class QQBotClient:
             asyncio.run_coroutine_threadsafe(coro, self._loop)
         return True
 
-    async def send_c2c_message(self, openid: str, content: str, msg_id: Optional[str] = None) -> bool:
+    async def send_c2c_message(self, openid: str, content: str,
+                               msg_id: Optional[str] = None,
+                               msg_seq: int = 1) -> bool:
         """
         向单个用户发送私聊文本消息
 
@@ -310,6 +312,7 @@ class QQBotClient:
             openid: 用户openid
             content: 文本内容
             msg_id: 回复的消息ID（被动回复，不受主动消息配额限制）
+            msg_seq: 回复序号（同一msg_id下需递增，重复组合会被平台拒绝）
 
         Returns:
             bool: 是否发送成功
@@ -324,6 +327,7 @@ class QQBotClient:
                 msg_type=0,
                 content=content,
                 msg_id=msg_id,
+                msg_seq=msg_seq,
             )
             return True
         except Exception as e:
@@ -336,15 +340,21 @@ class QQBotClient:
         image_bytes: bytes,
         msg_id: Optional[str] = None,
         filename: str = "image.png",
+        msg_seq: int = 1,
     ) -> bool:
         """
         向单个用户发送私聊图片消息（本地图片经multipart直传）
+
+        说明：官方文档的富媒体上传以URL/分片两种方式为主，multipart
+        本地直传（file_data字段）为平台支持的兼容路径，用于本地生成的
+        图片（如登录二维码）；上传返回file_info后再以msg_type=7发送。
 
         Args:
             openid: 用户openid
             image_bytes: 图片二进制数据（png/jpg）
             msg_id: 回复的消息ID（被动回复）
             filename: 文件名
+            msg_seq: 回复序号
 
         Returns:
             bool: 是否发送成功
@@ -354,12 +364,13 @@ class QQBotClient:
             return False
 
         try:
-            # 官方v2 files接口支持multipart本地上传（file_data字段）
+            # 官方v2 files接口：multipart本地上传（file_data字段）
             form = aiohttp.FormData()
             form.add_field("file_type", "1")
             form.add_field("srv_send_msg", "false")
             if msg_id:
                 form.add_field("msg_id", msg_id)
+                form.add_field("msg_seq", str(msg_seq))
             form.add_field(
                 "file_data",
                 image_bytes,
@@ -375,10 +386,66 @@ class QQBotClient:
                 content="",
                 media=media,
                 msg_id=msg_id,
+                msg_seq=msg_seq,
             )
             return True
         except Exception as e:
             logger.error(f"发送私聊图片失败: user={openid}, error={e}")
+            return False
+
+    async def send_group_image(
+        self,
+        group_openid: str,
+        image_bytes: bytes,
+        msg_id: Optional[str] = None,
+        msg_seq: int = 1,
+        filename: str = "image.png",
+    ) -> bool:
+        """
+        向单个群发送本地图片（multipart直传，与单聊files接口对称）
+
+        Args:
+            group_openid: 群openid
+            image_bytes: 图片二进制数据
+            msg_id: 回复的消息ID
+            msg_seq: 回复序号
+            filename: 文件名
+
+        Returns:
+            bool: 是否发送成功
+        """
+        if not self.started or self._client is None:
+            logger.warning("botpy客户端未运行，群图片发送失败")
+            return False
+
+        try:
+            form = aiohttp.FormData()
+            form.add_field("file_type", "1")
+            form.add_field("srv_send_msg", "false")
+            if msg_id:
+                form.add_field("msg_id", msg_id)
+                form.add_field("msg_seq", str(msg_seq))
+            form.add_field(
+                "file_data",
+                image_bytes,
+                filename=filename,
+                content_type="image/png" if filename.endswith(".png") else "image/jpeg",
+            )
+            route = Route("POST", "/v2/groups/{group_openid}/files",
+                          group_openid=group_openid)
+            media = await self._client.api._http.request(route, data=form)
+
+            await self._client.api.post_group_message(
+                group_openid=group_openid,
+                msg_type=7,
+                content="",
+                media=media,
+                msg_id=msg_id,
+                msg_seq=msg_seq,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"发送群图片失败: group={group_openid}, error={e}")
             return False
 
     async def notify_admins(self, admins: Iterable[str], content: str) -> int:

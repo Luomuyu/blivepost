@@ -848,7 +848,9 @@ class CookieMaintainer:
         bot_client=None,
         admin_openids: Optional[list] = None,
         main_admin_openids: Optional[list] = None,
-        interval: int = 6 * 3600
+        interval: int = 6 * 3600,
+        db_service=None,
+        db_size_warn_mb: int = 500
     ):
         """
         初始化维护循环
@@ -859,6 +861,8 @@ class CookieMaintainer:
             admin_openids: 管理员openid列表
             main_admin_openids: 主管理员列表（敏感通知，未配置时发全部管理员）
             interval: 检查间隔（秒）
+            db_service: 数据库服务（体积监控用）
+            db_size_warn_mb: 数据库体积预警阈值（MB）
         """
         self.pool = cookie_pool
         self.bot_client = bot_client
@@ -866,6 +870,10 @@ class CookieMaintainer:
         self.main_admin_openids = [str(o) for o in (main_admin_openids or [])]
         self.interval = interval
         self._last_rescan_date: str = ""
+        # 数据量监控（永久保留策略下的增长提醒）
+        self.db_service = db_service
+        self.db_size_warn_mb = db_size_warn_mb
+        self._db_warned = False
         self._task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
@@ -944,6 +952,32 @@ class CookieMaintainer:
 
         # 失效账号自动重扫：nav复核通过则自动回池（如临时风控恢复场景，每日一次）
         await self._rescan_expired()
+
+        # 数据库体积检查（永久保留策略下的增长监控，提醒而非删除）
+        if self.db_size_warn_mb > 0:
+            await self._check_db_size(self.db_size_warn_mb)
+
+        # 数据库体积检查（永久保留策略下的增长监控，提醒而非删除）
+        await self._check_db_size()
+
+    async def _check_db_size(self, warn_mb: int = 500) -> None:
+        """数据库体积超阈值时私聊提醒管理员（只提醒不删除，符合永久保留决策）"""
+        db_service = self.db_service
+        path = getattr(db_service, "db_path", None) if db_service else None
+        if not path or not os.path.exists(path):
+            return
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        if size_mb < warn_mb:
+            self._db_warned = False
+            return
+        if getattr(self, "_db_warned", False):
+            return  # 已提醒过且未恢复，不重复
+        self._db_warned = True
+        msg1 = (
+            "⚠️ 数据库体积已达 " + str(round(size_mb, 1)) + "MB（阈值" + str(warn_mb) + "MB）。"
+        )
+        msg2 = "数据按策略永久保留，不会自动删除；建议导出后归档，或考虑迁移到MySQL/PostgreSQL。"
+        await self._notify_admins(msg1 + msg2)
 
     async def _rescan_expired(self) -> int:
         """

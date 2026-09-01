@@ -151,18 +151,30 @@ class AdminCommandHandler:
         msg_id = message.id
         bot = self.bot_client
 
+        # 同一msg_id下msg_seq必须递增（重复组合会被平台拒绝）
+        seq_counter = {"n": 1}
+
+        def next_seq() -> int:
+            seq_counter["n"] += 1
+            return seq_counter["n"]
+
         async def on_qrcode(png: bytes) -> None:
             """二维码图片回调：私聊发给管理员"""
-            sent = await bot.send_c2c_image(openid, png, msg_id=msg_id, filename="bili_qrcode.png")
+            sent = await bot.send_c2c_image(
+                openid, png, msg_id=msg_id, filename="bili_qrcode.png", msg_seq=next_seq()
+            )
             if not sent:
                 await bot.send_c2c_message(
                     openid, "二维码图片发送失败，请检查机器人图片发送权限", msg_id=msg_id
                 )
 
         service = BiliLoginService(on_qrcode=on_qrcode, timeout=180)
-        self._login_task = asyncio.create_task(self._run_login(service, openid))
+        self._login_task = asyncio.create_task(
+            self._run_login(service, openid, next_seq=next_seq), name="bili-login"
+        )
 
-    async def _run_login(self, service: BiliLoginService, openid: str) -> None:
+    async def _run_login(self, service: BiliLoginService, openid: str,
+                         next_seq=None) -> None:
         """执行登录并回复结果"""
         bot = self.bot_client
         try:
@@ -170,25 +182,29 @@ class AdminCommandHandler:
         except Exception as e:
             logger.error(f"扫码登录流程异常: {e}")
             if bot:
-                await bot.send_c2c_message(openid, f"登录流程异常：{e}")
+                seq = next_seq() if next_seq else 1
+                await bot.send_c2c_message(openid, f"登录流程异常：{e}", msg_seq=seq)
             return
 
-        await self._finish_login(result, openid)
+        await self._finish_login(result, openid, next_seq=next_seq)
 
-    async def _finish_login(self, result: LoginResult, openid: str) -> None:
+    async def _finish_login(self, result: LoginResult, openid: str,
+                            next_seq=None) -> None:
         """登录结果处理：写入账号池并回复管理员"""
         bot = self.bot_client
         if bot is None:
             return
+        seq = next_seq() if next_seq else 1
         if result.timeout:
             await bot.send_c2c_message(
-                openid, "二维码已超时失效，请重新发送 /登录"
+                openid, "二维码已超时失效，请重新发送 /登录", msg_seq=seq
             )
             return
 
         if not result.ok:
             await bot.send_c2c_message(
-                openid, f"登录失败：{result.error or '未知错误'}，请重新发送 /登录 重试"
+                openid, f"登录失败：{result.error or '未知错误'}，请重新发送 /登录 重试",
+                msg_seq=seq,
             )
             return
 

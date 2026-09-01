@@ -10,6 +10,8 @@ Web状态面板（只读，aiohttp实现）
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
+import os
+
 from aiohttp import web
 
 from ..utils.logger import get_logger
@@ -36,6 +38,7 @@ th{{background:#f0f4f8}}
 .ok{{color:#2e8b57}} .bad{{color:#c0392b}} small{{color:#888}}
 </style></head><body>
 <h1>BLivePost 状态面板 <small>刷新时间 {now}</small></h1>
+<p>数据库体积：<b>{db_size_mb} MB</b> <small>（永久保留策略，数据不自动删除）</small></p>
 <h2>账号池（可用 {active}/{total}）</h2>
 <table><tr><th>UID</th><th>昵称</th><th>状态</th><th>剩余有效期</th><th>使用次数</th><th>最近使用</th><th>关联房间</th></tr>
 {accounts}</table>
@@ -108,6 +111,13 @@ class WebPanel:
     async def _collect(self) -> dict:
         """收集面板数据"""
         now = datetime.now()
+
+        # 数据库体积（永久保留策略下的增长监控）
+        db_size_mb = 0.0
+        db_path = getattr(self.db_service, "db_path", None) or getattr(
+            getattr(self.db_service, "db_manager", None), "db_path", None)
+        if db_path and os.path.exists(db_path):
+            db_size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 2)
         accounts = []
         for a in self.cookie_pool.accounts:
             rooms = self.monitor_manager.get_account_rooms(a.uid) if self.monitor_manager else []
@@ -146,6 +156,7 @@ class WebPanel:
         recent = await self.db_service.get_recent_live_status(limit=10)
         return {
             "now": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "db_size_mb": db_size_mb,
             "accounts": accounts,
             "rooms": rooms,
             "dynamics": dynamics,
@@ -195,6 +206,7 @@ class WebPanel:
         trend_svg = _render_trend_svg(history)
         html = _PAGE.format(
             now=data["now"],
+            db_size_mb=data["db_size_mb"],
             active=sum(1 for a in data["accounts"] if a["status"] == "active"),
             total=len(data["accounts"]), accounts=accounts or "<tr><td colspan=7>空</td></tr>",
             hist_days=30, trend_svg=trend_svg,
