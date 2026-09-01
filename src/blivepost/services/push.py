@@ -48,7 +48,6 @@ class PushService:
             settings: 应用配置
         """
         self.settings = settings
-        self.qqbot_config = settings.qqbot
         self.templates = settings.templates
         # QQBotClient实例，由外部（main/LiveMonitor）设置
         self.bot_client: Any = None

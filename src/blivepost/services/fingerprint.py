@@ -328,24 +328,3 @@ class FingerprintService:
         if wts is None:
             wts = str(int(time.time()))
         return wbi_sign(params, self.get_w_key(), wts)
-    
-    def build_signed_url(self, base_url: str, params: dict) -> str:
-        """
-        构建带签名的URL
-        
-        Args:
-            base_url: 基础URL
-            params: 参数字典
-            
-        Returns:
-            str: 带签名的完整URL
-        """
-        wts = str(int(time.time()))
-        sorted_params = sorted(params.items())
-        param_str = "&".join(f"{k}={v}" for k, v in sorted_params)
-        
-        w_rid = self.sign_wbi(param_str, wts)
-        if not w_rid:
-            return base_url
-        
-        return f"{base_url}?{param_str}&wts={wts}&w_rid={w_rid}"

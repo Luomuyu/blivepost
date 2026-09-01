@@ -459,6 +459,8 @@ class QQBotClient:
         Returns:
             int: 成功发送的管理员数量
         """
+        if isinstance(admins, str):
+            admins = [admins]  # 防御：误传单个openid字符串
         sent = 0
         for openid in admins:
             if await self.send_c2c_message(openid, content):

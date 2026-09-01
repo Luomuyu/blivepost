@@ -2,6 +2,7 @@
 
 > 第一轮审查：2026-09-01 ｜ src/ 23个模块、tests/ 12个文件 ｜ 结论：**通过（附修复与建议）**
 > 第二轮审查：2026-09-02 ｜ 含第十五批（官方API对齐/数据量监控）后的全量复检 ｜ 结论：**通过**
+> 第三轮审查：2026-09-02 ｜ 全量代码审查 + wheel构建验证 ｜ 结论：**通过（附2项修复）**
 
 ## 一、审查方法
 
@@ -133,3 +134,44 @@
 | 静态检查 | pyflakes/flake8/mypy 三项零告警 |
 | 本轮修复 | 严重2项（提醒链路断裂、分级丢失） |
 | 保留项 | send_group_image（预留）、LiveMonitor（库API） |
+
+
+---
+
+# 第三轮审查（2026-09-02）
+
+> 背景：第十六批（工程化+审查修复）合入后、wheel构建前的全量代码审查。
+> 结论：**发现并修复3项问题（含1个安全隐患）**，随后构建wheel并验证内容完整性。
+
+## 一、静态与逻辑检查
+
+| 检查 | 结果 |
+|------|------|
+| pyflakes / flake8 / mypy | 三项零告警（37文件） |
+| 死代码引用核查 | `push.qqbot_config`（groups配置移除后无读取方）、`fingerprint.build_signed_url`（零引用）→ 已删除 |
+| 逻辑层检查 | `notify_admins` 字符串入参防御、动态昵称回填去重（同名跳过UPDATE）、重复的 `_check_db_size` 调用删除 |
+| 全装配集成 | 数据库/绑定/池/推送/子进程管理/动态/消费者/结算/面板/watcher 全组件实例化协同验证通过 |
+
+## 二、发现并已修复的问题
+
+| 级别 | 问题 | 修复 |
+|------|------|------|
+| 高 | **CookieMaintainer 双重 `_check_db_size` 调用**：无参调用绕过 `db_size_warn_mb=0`（不提醒）开关配置——即使管理员显式关闭仍会提醒 | 删除无参残留调用，仅保留参数化版本（尊重开关配置） |
+| 中 | `notify_admins` 对误传的单个openid字符串会逐字符发送（str是Iterable） | 增加 `isinstance(admins, str)` 防御包装 |
+| 低 | consumer 动态昵称回填每条新动态都执行UPDATE | 与已存昵称一致时跳过写库 |
+
+## 三、wheel 构建验证
+
+- 产物：`blivepost-1.1.0-py3-none-any.whl`（43文件）
+- **修复 `py.typed` 缺失**：pyproject声明了package-data但文件不存在（PEP 561类型标记无效）→ 已补建，重新构建后whl内包含
+- 依赖核对：16个运行时依赖（含playwright/qrcode，blivedm除外由vendor机制）+ 5个dev可选 ✓
+- 关键模块抽查：qqbot/dynamics/webpanel/cookie_pool/bili_login/manager/env/vendor 全在包内 ✓
+
+## 四、量化摘要（第三轮）
+
+| 指标 | 值 |
+|------|-----|
+| 测试 | 149个用例全过（38秒） |
+| 静态检查 | pyflakes/flake8/mypy 三项零告警 |
+| 本轮修复 | 高1（重复调用绕过开关）、中1（str防御）、低2（回填去重、py.typed补齐） |
+| wheel | 113KB，43文件，内容完整性已验证 |

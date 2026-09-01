@@ -97,6 +97,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - 14张表；单房间/多房间汇总与历史趋势均为聚合SQL；明细导出（CSV/JSON）
 - **Schema迁移**：轻量版本表迁移器（`database/migrations.py`），表结构增量变更自动应用，新旧库均安全
 - **数据保留**：永久保留策略（`Setting.data_retention_days=0`），代码不含任何自动删除逻辑
+- 数据库体积监控：Web面板展示 + 超阈值私聊提醒（`db_size_warn_mb`，跨水位去重）
 
 ## 基础设施
 
@@ -104,6 +105,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - WBI签名单一实现；Redis连接1秒快速降级（进程级记忆）
 - 按天轮转日志（保留30天）
 - 单元测试149个 + flake8/pyflakes/mypy三项零告警（mypy阻塞检查）
+- **wheel构建验证**：43文件（含py.typed），关键模块与16项运行时依赖核对通过
 - Schema迁移器（database/migrations.py，版本表+增量DDL）
 - 版本1.1.0；wheel已重新构建
 
@@ -136,6 +138,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - 第十四批：Schema迁移器（版本表+增量加列，旧库升级/新库跳过）、mypy清零（36文件0错误）、CI阻塞化、数据永久保留策略（`data_retention_days=0`）
 - 第十五批：按官方v2文档对齐消息/富媒体实现（msg_seq递增修复登录流程冲突、群聊本地图片直传、富媒体上传路径标注）、数据量监控（面板体积+超阈值私聊提醒）
 - **2026-09-02 第二轮审查**：修复数据量提醒链路断裂（db_path取值错误致功能失效）与maintainer分级丢失（回滚所致），新增3个端到端测试；149个测试全过，pyflakes/flake8/mypy三项零告警
+- **2026-09-02 第十六批（第三轮审查+wheel）**：修复CookieMaintainer双重体积检查（绕过开关配置）；notify_admins字符串入参防御；动态昵称回填去重；删除死代码（push.qqbot_config、fingerprint.build_signed_url）；**补齐py.typed并重新构建wheel**（43文件，内容完整性已验证）
 
 ## 代码存在的问题（当前仍存在）
 

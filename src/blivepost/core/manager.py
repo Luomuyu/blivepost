@@ -425,8 +425,9 @@ class PushQueueConsumer:
         pub_ts = item.get("pub_ts") or 0
         pub_time = _dt.fromtimestamp(pub_ts).strftime("%Y-%m-%d %H:%M") if pub_ts else "刚刚"
 
-        # 回填UP主昵称
-        if self.binding_store is not None and item.get("author"):
+        # 回填UP主昵称（与已存一致时跳过写库）
+        if (self.binding_store is not None and item.get("author")
+                and self.binding_store.get_dynamic_up_name(up_uid) != item["author"]):
             await self.binding_store.update_dynamic_up_name(up_uid, item["author"])
 
         content = (
@@ -956,9 +957,6 @@ class CookieMaintainer:
         # 数据库体积检查（永久保留策略下的增长监控，提醒而非删除）
         if self.db_size_warn_mb > 0:
             await self._check_db_size(self.db_size_warn_mb)
-
-        # 数据库体积检查（永久保留策略下的增长监控，提醒而非删除）
-        await self._check_db_size()
 
     async def _check_db_size(self, warn_mb: int = 500) -> None:
         """数据库体积超阈值时私聊提醒管理员（只提醒不删除，符合永久保留决策）"""

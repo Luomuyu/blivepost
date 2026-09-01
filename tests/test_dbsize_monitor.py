@@ -2,10 +2,6 @@
 """数据库体积监控端到端测试（真实DatabaseService→db_manager→db_path链路）"""
 
 import asyncio
-import os
-import tempfile
-
-import pytest
 
 from blivepost.config.settings import Settings
 from blivepost.core.manager import CookieMaintainer
@@ -54,8 +50,6 @@ def test_check_db_size_real_chain(tmp_path):
     # 已提醒未恢复：不重复
     asyncio.run(m._check_db_size(0.001))
     assert len(bot.notified) == 1
-
-    db2 = None
     asyncio.run(db.close())
 
 
