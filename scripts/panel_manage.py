@@ -39,7 +39,7 @@ GROUP_ITEMS = [
     {"type": "command", "name": "/取消监控 ", "desc": "取消监控推送，补房间号"},
     {"type": "command", "name": "/解绑 ", "desc": "解除绑定，补房间号"},
     {"type": "command", "name": "/状态", "desc": "查看本群监控状态"},
-    {"type": "command", "name": "/我的绑定", "desc": "查看本群绑定列表"},
+    {"type": "command", "name": "/绑定列表", "desc": "查看本群绑定列表"},
     {"type": "command", "name": "/收入 ", "desc": "查询收入汇总，补房间号"},
     {"type": "command", "name": "/SC榜 ", "desc": "查询SC排行，补房间号"},
     {"type": "command", "name": "/汇总", "desc": "全部房间合计"},
