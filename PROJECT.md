@@ -172,6 +172,18 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - ~~数据治理工具缺失（建议2）~~ → `/体积`私聊命令：库文件体积+13张表行数明细（降序+空表单列）
 - **指令面板脚本**：panel_create.py（c2c+group两面板一次创建，panel_id存panel_ids.json）+ panel_manage.py（query/modify/delete）；PanelItem为type=command/link结构
 
+### 2026-09-02 第十八批（终端stop + 数据治理）
+- logger设置propagate=False修复日志双输出；终端监听stop/quit/exit安全关闭
+- /体积管理员私聊命令（库文件体积+13张表行数明细，数据治理建议2）
+- .gitignore补WheelTest/与.mypy_cache/.pytest_cache
+
+### 2026-09-02 第十九批（真机联调反馈）
+- ~~启动被Redis查询阻断约1分钟~~ → get_sessdata_from_redis加socket_connect_timeout=2/1秒禁重试
+- ~~botpy日志格式突兀~~ → log_config dictConfig纳管botpy logger：统一项目格式、INFO级别、propagate=False
+- ~~botpy.log写在工作目录根~~ → 文件日志定向到logs/botpy.log（按天轮转保留7天）
+- ~~main_openids单独配置时误报警告~~ → Admin条件修正为openids或main_openids任一配置即视为已配置
+- ~~版本横幅硬编码v1.0.0~~ → 引用__version__（1.1.0）
+
 ## 代码存在的问题（当前仍存在）
 
 1. **真机联调未做**：botpy连接、扫码登录、动态轮询、Web面板、结算推送、联系人8事件（加好友/退群/接收开关的实际payload与时序），均未在真实凭证环境验证。

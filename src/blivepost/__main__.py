@@ -120,7 +120,11 @@ def get_sessdata_from_redis(settings) -> Optional[str]:
             port=settings.redis.port,
             password=settings.redis.password if settings.redis.password else None,
             db=settings.redis.db,
-            decode_responses=True
+            decode_responses=True,
+            # 短超时：Redis不可达时快速跳过，避免拖慢启动
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            retry_on_timeout=False,
         )
         sessdata = r.get("SESSDATA")
         if sessdata:
@@ -147,7 +151,8 @@ async def main_async(
     logger = get_logger()
 
     logger.info("=" * 50)
-    logger.info("BLivePost v1.0.0 - B站直播监控与推送系统")
+    from . import __version__
+    logger.info(f"BLivePost v{__version__} - B站直播监控与推送系统")
     logger.info("=" * 50)
 
     settings = None
@@ -247,10 +252,11 @@ async def main_async(
             )
             push_service.contact_store = contact_store
             push_service.bot_client = qqbot
-            if settings.admin.openids:
-                main_count = len(settings.admin.main_openids)
+            admin_count = len(settings.admin.openids)
+            main_count = len(settings.admin.main_openids)
+            if admin_count or main_count:
                 logger.info(
-                    f"已配置 {len(settings.admin.openids)} 个管理员"
+                    f"已配置 {admin_count + main_count} 个管理员"
                     + (f"（含 {main_count} 个主管理员）" if main_count else "")
                     + "（私聊/登录 命令可用）"
                 )

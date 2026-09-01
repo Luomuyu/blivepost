@@ -4,6 +4,7 @@ QQ官方机器人推送客户端（基于botpy）
 """
 
 import asyncio
+import os
 from typing import Iterable, Optional, TYPE_CHECKING
 
 import aiohttp
@@ -32,8 +33,10 @@ class _PushClient(botpy.Client):
         command_handler: Optional["CommandHandler"] = None,
         c2c_handler: Optional["AdminCommandHandler"] = None,
         contact_handler: Optional["ContactEventHandler"] = None,
+        log_config: Optional[dict] = None,
     ):
-        super().__init__(intents=intents)
+        log_kwargs = {"log_config": log_config} if log_config else {}
+        super().__init__(intents=intents, **log_kwargs)
         self._command_handler = command_handler
         self._c2c_handler = c2c_handler
         self._contact_handler = contact_handler
@@ -209,11 +212,47 @@ class QQBotClient:
                 or contact_handler is not None)
             else botpy.Intents.none()
         )
+        # botpy日志纳管：统一为项目格式，文件日志轮转写入logs/目录
+        os.makedirs("logs", exist_ok=True)
+        log_config = {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "std": {
+                    "format": "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                    "datefmt": "%Y-%m-%d %H:%M:%S",
+                }
+            },
+            "handlers": {
+                "console": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "std",
+                    "level": "INFO",
+                },
+                "file": {
+                    "class": "logging.handlers.TimedRotatingFileHandler",
+                    "formatter": "std",
+                    "level": "INFO",
+                    "filename": "logs/botpy.log",
+                    "when": "D",
+                    "backupCount": 7,
+                    "encoding": "utf-8",
+                },
+            },
+            "loggers": {
+                "botpy": {
+                    "handlers": ["console", "file"],
+                    "level": "INFO",
+                    "propagate": False,
+                }
+            },
+        }
         self._client = _PushClient(
             intents=intents,
             command_handler=command_handler,
             c2c_handler=c2c_handler,
             contact_handler=contact_handler,
+            log_config=log_config,
         )
         self._task = self._loop.create_task(
             self._client.start(self.app_id, self.app_secret),
