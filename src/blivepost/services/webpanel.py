@@ -40,6 +40,9 @@ th{{background:#f0f4f8}}
 <h1>BLivePost 状态面板 <small>刷新时间 {now}</small></h1>
 <p>机器人凭证：<b>{bot_state}</b>（token剩余 {token_expires_in} 秒）
 　数据库体积：<b>{db_size_mb} MB</b> <small>（永久保留策略，数据不自动删除）</small></p>
+<h2>机器人详情</h2>
+<table><tr><th>头像</th><th>用户名</th><th>分享</th></tr>
+{me_row}</table>
 <h2>账号池（可用 {active}/{total}）</h2>
 <table><tr><th>UID</th><th>昵称</th><th>状态</th><th>剩余有效期</th><th>使用次数</th><th>最近使用</th><th>关联房间</th></tr>
 {accounts}</table>
@@ -118,6 +121,9 @@ class WebPanel:
         # 机器人凭证状态（access_token，botpy请求级自动刷新）
         token_state = self.bot_client.token_state() if self.bot_client else {
             "client_started": False, "token_ready": False, "token_expires_in": 0}
+        # 机器人详情（username/avatar/share_url，获取失败缓存为{}下轮重试）
+        me = await self.bot_client.get_me() if self.bot_client else None
+        me = me or {}
 
         # 数据库体积（永久保留策略下的增长监控）
         db_size_mb = 0.0
@@ -164,6 +170,7 @@ class WebPanel:
         return {
             "now": now.strftime("%Y-%m-%d %H:%M:%S"),
             "bot": token_state,
+            "me": me,
             "db_size_mb": db_size_mb,
             "accounts": accounts,
             "rooms": rooms,
@@ -213,8 +220,20 @@ class WebPanel:
         history = await self.db_service.get_daily_history(days=30)
         trend_svg = _render_trend_svg(history)
         bot = data["bot"]
+        me = data.get("me") or {}
+        if me.get("username"):
+            avatar_html = (f'<img src="{me["avatar"]}" width="48" height="48" '
+                           f'style="border-radius:6px"/>' if me.get("avatar") else "-")
+            share_html = (f'<a href="{me["share_url"]}" target="_blank">'
+                          f'<button style="padding:4px 12px">分享</button></a>'
+                          if me.get("share_url") else "-")
+            me_row = (f"<tr><td>{avatar_html}</td><td>{me['username']}</td>"
+                      f"<td>{share_html}</td></tr>")
+        else:
+            me_row = '<tr><td colspan=3>暂未获取到机器人详情</td></tr>'
         html = _PAGE.format(
             now=data["now"],
+            me_row=me_row,
             bot_ready=bot["token_ready"],
             bot_state=("在线" if bot["client_started"] else "离线"),
             token_expires_in=bot["token_expires_in"],

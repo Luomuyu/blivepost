@@ -269,6 +269,34 @@ class CookieAccountRecord(Base):
         DateTime, nullable=True, comment="最近一次被取用时间")
 
 
+class FriendRecord(Base):
+    """好友记录表(机器人与用户的联系状态)"""
+    __tablename__ = "friend"
+
+    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    openid: Mapped[str] = mapped_column(String(64), unique=True, comment="用户openid")
+    nickname: Mapped[str] = mapped_column(String(100), default="", comment="用户昵称")
+    del_flag: Mapped[int] = mapped_column(Integer, default=0, comment="是否被删除(0否/1被删)")
+    msg_receive: Mapped[int] = mapped_column(Integer, default=1, comment="单聊消息接收(1开/0关)")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="添加时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+
+
+class GroupRecord(Base):
+    """群记录表(机器人与群的联系状态)"""
+    __tablename__ = "bot_group"
+
+    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    group_openid: Mapped[str] = mapped_column(String(64), unique=True, comment="群openid")
+    group_name: Mapped[str] = mapped_column(String(200), default="", comment="群名称")
+    del_flag: Mapped[int] = mapped_column(Integer, default=0, comment="是否被移除(0否/1被移出)")
+    msg_receive: Mapped[int] = mapped_column(Integer, default=1, comment="群消息接收(1开/0关)")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="加入时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+
+
 class DynamicBindingRecord(Base):
     """动态订阅记录表(群openid与B站UP主的绑定关系)"""
     __tablename__ = "dynamic_binding"

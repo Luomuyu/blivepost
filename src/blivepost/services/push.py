@@ -55,6 +55,8 @@ class PushService:
         self.binding_store: Any = None
         # BilibiliAPI实例（子进程侧设置，开播/下播推送前查询房间信息）
         self.bilibili_api: Any = None
+        # ContactStore实例（可选）：发送前过滤未开启消息接收的群
+        self.contact_store = None
 
     @staticmethod
     def _render(template: str, fields: dict) -> Optional[str]:
@@ -114,6 +116,13 @@ class PushService:
             logger.warning(f"直播间{room_id}无监控中的绑定群，跳过发送")
             return False
 
+        # 过滤未开启消息接收的群
+        if self.contact_store is not None:
+            groups = self.contact_store.filter_receivable_groups(groups)
+            if not groups:
+                logger.info(f"直播间{room_id}的目标群均未开启消息接收，跳过发送")
+                return False
+
         content = convert_cq_message(message)
         if not content:
             logger.warning("消息内容为空，跳过发送")
@@ -141,6 +150,10 @@ class PushService:
         if not groups:
             logger.warning(f"直播间{room_id}无监控中的绑定群，跳过发送")
             return False
+        if self.contact_store is not None:
+            groups = self.contact_store.filter_receivable_groups(groups)
+            if not groups:
+                return False
 
         if hasattr(self.bot_client, "push_media"):
             return self.bot_client.push_media(image_url, content, groups)

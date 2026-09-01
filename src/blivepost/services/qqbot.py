@@ -17,6 +17,7 @@ from ..utils.logger import get_logger
 if TYPE_CHECKING:
     from .commands import CommandHandler
     from .admin_commands import AdminCommandHandler
+    from .contacts import ContactEventHandler
 
 
 logger = get_logger("qqbot")
@@ -30,10 +31,54 @@ class _PushClient(botpy.Client):
         intents,
         command_handler: Optional["CommandHandler"] = None,
         c2c_handler: Optional["AdminCommandHandler"] = None,
+        contact_handler: Optional["ContactEventHandler"] = None,
     ):
         super().__init__(intents=intents)
         self._command_handler = command_handler
         self._c2c_handler = c2c_handler
+        self._contact_handler = contact_handler
+
+    async def on_group_add_robot(self, event) -> None:
+        """机器人加入群"""
+        if self._contact_handler:
+            await self._contact_handler.on_group_add(event.group_openid)
+
+    async def on_group_del_robot(self, event) -> None:
+        """机器人被移出群"""
+        if self._contact_handler:
+            await self._contact_handler.on_group_del(event.group_openid)
+
+    async def on_group_msg_receive(self, event) -> None:
+        """群消息接收开启"""
+        if self._contact_handler:
+            await self._contact_handler.on_group_receive(event.group_openid, 1)
+
+    async def on_group_msg_reject(self, event) -> None:
+        """群消息接收关闭"""
+        if self._contact_handler:
+            await self._contact_handler.on_group_receive(event.group_openid, 0)
+
+    async def on_friend_add(self, event) -> None:
+        """用户添加好友"""
+        if self._contact_handler:
+            await self._contact_handler.on_friend_add(getattr(event, "openid", ""))
+
+    async def on_friend_del(self, event) -> None:
+        """用户删除好友"""
+        if self._contact_handler:
+            await self._contact_handler.on_friend_del(getattr(event, "openid", ""))
+
+    async def on_c2c_msg_receive(self, event) -> None:
+        """单聊消息接收开启"""
+        if self._contact_handler:
+            await self._contact_handler.set_friend_receive_async(
+                getattr(event, "openid", ""), 1)
+
+    async def on_c2c_msg_reject(self, event) -> None:
+        """单聊消息接收关闭"""
+        if self._contact_handler:
+            await self._contact_handler.set_friend_receive_async(
+                getattr(event, "openid", ""), 0)
 
     async def on_c2c_message_create(self, message: C2CMessage) -> None:
         """私聊消息事件：分发给管理员命令处理器"""
@@ -81,6 +126,7 @@ class QQBotClient:
         """
         self.app_id = app_id
         self.app_secret = app_secret
+        self._me_cache: Optional[dict] = None
         self._client: Optional[_PushClient] = None
         self._task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -89,6 +135,33 @@ class QQBotClient:
     def started(self) -> bool:
         """客户端是否正在运行"""
         return self._task is not None and not self._task.done()
+
+    async def get_me(self, force_refresh: bool = False) -> Optional[dict]:
+        """
+        获取机器人详情（GET /users/@me：username/avatar/share_url等）
+
+        Args:
+            force_refresh: 强制刷新缓存
+
+        Returns:
+            Optional[dict]: {"id","username","avatar","share_url"}，失败None
+        """
+        if not force_refresh and self._me_cache is not None:
+            return self._me_cache
+        if not self.started or self._client is None:
+            return None
+        try:
+            me = await self._client.api.me()
+            self._me_cache = {
+                "id": getattr(me, "id", "") or "",
+                "username": getattr(me, "username", "") or "",
+                "avatar": getattr(me, "avatar", "") or "",
+                "share_url": getattr(me, "share_url", "") or "",
+            }
+            return self._me_cache
+        except Exception as e:
+            logger.error(f"获取机器人详情失败: {e}")
+            return None
 
     def token_state(self) -> dict:
         """
@@ -117,6 +190,7 @@ class QQBotClient:
         self,
         command_handler: Optional["CommandHandler"] = None,
         c2c_handler: Optional["AdminCommandHandler"] = None,
+        contact_handler: Optional["ContactEventHandler"] = None,
     ) -> None:
         """
         启动botpy客户端（需在事件循环内调用）
@@ -131,13 +205,15 @@ class QQBotClient:
         self._loop = asyncio.get_running_loop()
         intents = (
             botpy.Intents(public_messages=True)
-            if (command_handler is not None or c2c_handler is not None)
+            if (command_handler is not None or c2c_handler is not None
+                or contact_handler is not None)
             else botpy.Intents.none()
         )
         self._client = _PushClient(
             intents=intents,
             command_handler=command_handler,
             c2c_handler=c2c_handler,
+            contact_handler=contact_handler,
         )
         self._task = self._loop.create_task(
             self._client.start(self.app_id, self.app_secret),
@@ -449,9 +525,7 @@ class QQBotClient:
                 form.add_field("msg_id", msg_id)
                 form.add_field("msg_seq", str(msg_seq))
             form.add_field(
-                "file_data",
-                image_bytes,
-                filename=filename,
+                "file_data", image_bytes, filename=filename,
                 content_type="image/png" if filename.endswith(".png") else "image/jpeg",
             )
             route = Route("POST", "/v2/groups/{group_openid}/files",

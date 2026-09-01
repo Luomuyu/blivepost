@@ -13,7 +13,8 @@ from .models import (
     DanmakuRecord, GiftRecord, SuperChatRecord, GuardRecord,
     AnchorRecord, RedPocketRecord, GuardAchievementRecord,
     SystemEventRecord, RoomChangeRecord, LiveStatusRecord, EventType, local_now,
-    GroupBindingRecord, CookieAccountRecord, DynamicBindingRecord
+    GroupBindingRecord, CookieAccountRecord, DynamicBindingRecord,
+    FriendRecord, GroupRecord
 )
 from ..utils.logger import get_logger
 
@@ -1029,3 +1030,93 @@ class DatabaseService:
                 "sc_total": sc.get(day, 0),
             }
         return [history[day] for day in sorted(history)]
+
+    # ========== 好友与群记录 ==========
+
+    async def save_friend(self, openid: str, name: str = "",
+                          del_flag: int = 0, receive: int = 1) -> None:
+        """保存/更新好友记录（按openid upsert）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(FriendRecord).where(FriendRecord.openid == openid))
+                record = result.scalar_one_or_none()
+                if record is None:
+                    session.add(FriendRecord(openid=openid, nickname=name,
+                                             del_flag=del_flag, msg_receive=receive))
+                else:
+                    if name:
+                        record.nickname = name
+                    record.del_flag = del_flag
+                    record.msg_receive = receive
+                await session.commit()
+        except Exception as e:
+            logger.error(f"保存好友记录失败: {e}")
+
+    async def load_friends(self) -> list:
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(select(FriendRecord))
+                return list(result.scalars().all())
+        except Exception as e:
+            logger.error(f"加载好友记录失败: {e}")
+            return []
+
+    async def set_friend_receive(self, openid: str, receive: int) -> None:
+        """更新好友消息接收开关（不存在则创建）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(FriendRecord).where(FriendRecord.openid == openid))
+                record = result.scalar_one_or_none()
+                if record is None:
+                    session.add(FriendRecord(openid=openid, msg_receive=receive))
+                else:
+                    record.msg_receive = receive
+                await session.commit()
+        except Exception as e:
+            logger.error(f"更新好友接收开关失败: {e}")
+
+    async def save_group(self, group_openid: str, name: str = "",
+                         del_flag: int = 0, receive: int = 1) -> None:
+        """保存/更新群记录（按openid upsert）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(GroupRecord).where(GroupRecord.group_openid == group_openid))
+                record = result.scalar_one_or_none()
+                if record is None:
+                    session.add(GroupRecord(group_openid=group_openid, group_name=name,
+                                            del_flag=del_flag, msg_receive=receive))
+                else:
+                    if name:
+                        record.group_name = name
+                    record.del_flag = del_flag
+                    record.msg_receive = receive
+                await session.commit()
+        except Exception as e:
+            logger.error(f"保存群记录失败: {e}")
+
+    async def load_groups(self) -> list:
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(select(GroupRecord))
+                return list(result.scalars().all())
+        except Exception as e:
+            logger.error(f"加载群记录失败: {e}")
+            return []
+
+    async def set_group_receive(self, group_openid: str, receive: int) -> None:
+        """更新群消息接收开关（不存在则创建）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(GroupRecord).where(GroupRecord.group_openid == group_openid))
+                record = result.scalar_one_or_none()
+                if record is None:
+                    session.add(GroupRecord(group_openid=group_openid, msg_receive=receive))
+                else:
+                    record.msg_receive = receive
+                await session.commit()
+        except Exception as e:
+            logger.error(f"更新群接收开关失败: {e}")

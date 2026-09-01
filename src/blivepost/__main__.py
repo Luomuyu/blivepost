@@ -19,6 +19,7 @@ from .services.admin_commands import AdminCommandHandler
 from .services.bilibili import BilibiliAPI
 from .services.cookie_pool import CookiePool
 from .services.bindings import BindingStore
+from .services.contacts import ContactEventHandler, ContactStore
 from .services.commands import CommandHandler
 from .services.fingerprint import FingerprintService
 from .services.push import PushService
@@ -149,11 +150,13 @@ async def main_async(
         db_service = DatabaseService(db_manager)
         logger.info("数据库初始化成功")
 
-        # 加载群绑定与Cookie账号池
+        # 加载群绑定、Cookie账号池与联系人
         binding_store = BindingStore(db_service)
         await binding_store.load()
         cookie_pool = CookiePool(db_service)
         await cookie_pool.load()
+        contact_store = ContactStore(db_service)
+        await contact_store.load()
 
         # 推送服务（按绑定关系路由）
         push_service = PushService(settings)
@@ -217,7 +220,12 @@ async def main_async(
                     cookie_pool, settings.admin.openids, bot_client=qqbot,
                     db_service=db_service, monitor_manager=monitor_manager
                 ),
+                contact_handler=ContactEventHandler(
+                    contact_store, binding_store, monitor_manager,
+                    db_service=db_service
+                ),
             )
+            push_service.contact_store = contact_store
             push_service.bot_client = qqbot
             if settings.admin.openids:
                 main_count = len(settings.admin.main_openids)

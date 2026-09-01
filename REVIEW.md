@@ -2,7 +2,9 @@
 
 > 第一轮审查：2026-09-01 ｜ src/ 23个模块、tests/ 12个文件 ｜ 结论：**通过（附修复与建议）**
 > 第二轮审查：2026-09-02 ｜ 含第十五批（官方API对齐/数据量监控）后的全量复检 ｜ 结论：**通过**
+> 第二轮审查：2026-09-02 ｜ 含第十五批（官方API对齐/数据量监控）后的全量复检 ｜ 结论：**通过**
 > 第三轮审查：2026-09-02 ｜ 全量代码审查 + wheel构建验证 ｜ 结论：**通过（附2项修复）**
+> 第四轮审查：2026-09-02 ｜ 联系人管理批次的针对性审查 ｜ 结论：**通过**
 
 ## 一、审查方法
 
@@ -175,3 +177,30 @@
 | 静态检查 | pyflakes/flake8/mypy 三项零告警 |
 | 本轮修复 | 高1（重复调用绕过开关）、中1（str防御）、低2（回填去重、py.typed补齐） |
 | wheel | 113KB，43文件，内容完整性已验证 |
+
+
+---
+
+# 第四轮审查（2026-09-02，联系人管理批次）
+
+> 背景：好友/群两张数据表、8个平台事件接线、发送前接收过滤、机器人详情面板合入后的审查。
+> 结论：**通过**；静态三项零告警；154个测试全过；wheel重建后44文件（含contacts模块与py.typed）。
+
+## 审查内容与结论
+
+| 项 | 结论 |
+|----|------|
+| 事件接线完整性 | botpy支持全部8个事件（friend_add/del、group_add/del_robot、group/c2c_msg_receive/reject），`_PushClient`已全部接线到ContactEventHandler |
+| 退群解绑链路 | on_group_del：群标记del+receive=0 → 遍历该群绑定房间 → 逐个unbind → monitor_manager.remove |
+| 发送前过滤 | PushService.send_message/push_media_message在路由后过滤未开启接收的群（未知群默认放行） |
+| 预留API | send_group_image无内部调用（对称预留） |
+| wheel | 44文件（新增contacts.py），py.typed包含 |
+| lint | 新增代码2处E501、1处E127已修复归零 |
+
+## 本批新增组件
+
+- 数据表：friend（openid唯一/nickname/del_flag/msg_receive）、bot_group（group_openid唯一/group_name/del_flag/msg_receive）
+- services/contacts.py：ContactStore（内存+DB）+ ContactEventHandler（事件处理与退群清理）
+- qqbot：8个平台事件回调 + send_group_image（multipart本地直传）
+- push.py：contact_store过滤（发送前检查接收开关）
+- webpanel：机器人详情（username/avatar/分享按钮）+ token鉴权 + SVG趋势图 + 账号健康列

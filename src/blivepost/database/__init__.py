@@ -23,6 +23,8 @@ from .models import (
     GroupBindingRecord,
     CookieAccountRecord,
     DynamicBindingRecord,
+    FriendRecord,
+    GroupRecord,
 )
 from .service import DatabaseService
 
@@ -45,4 +47,6 @@ __all__ = [
     "GroupBindingRecord",
     "CookieAccountRecord",
     "DynamicBindingRecord",
+    "FriendRecord",
+    "GroupRecord",
 ]

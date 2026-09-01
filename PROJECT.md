@@ -18,6 +18,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
   ├─ services/commands.py   群指令（绑定/监控/动态订阅/状态/收入[周月]/SC榜/汇总/帮助）
   ├─ services/admin_commands.py 管理员私聊指令（/登录 /账号 /移除账号 /恢复账号 /导出 /我）
   ├─ services/bindings.py   BindingStore：房间绑定 + 动态订阅（内存缓存 + 数据库持久化）
+  ├─ services/contacts.py   ContactStore（好友/群联系状态与接收开关）+ ContactEventHandler（平台事件）
   ├─ services/cookie_pool.py CookiePool：账号池（轮转/亲和/失效/恢复/刷新/耗尽预警/use_count）
   ├─ services/bili_login.py BiliLoginService：Playwright无头扫码登录 + cookie载入刷新 + nav验证
   ├─ services/push.py       PushService：推送模板（YAML可配置）、按房间绑定路由、富媒体
@@ -71,6 +72,19 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 房间信息变更 | `Setting.room_change` | N |
 | 动态监控（订阅+轮询+推送+开播提醒） | `Setting.dynamic_monitor` | N |
 | 每日/每周/每月结算 | `Setting.daily_report`/`weekly_report`/`monthly_report` | N |
+
+## 联系人管理（好友与群）
+
+- **两张数据表**：`friend`（openid唯一、昵称、del_flag被删标记、msg_receive单聊接收开关）、`bot_group`（group_openid唯一、群名、del_flag被移出标记、msg_receive群接收开关）
+- **8个平台事件接线**（botpy `public_messages` intent）：
+  - `friend_add` → 好友入库（del=0）
+  - `friend_del` → del=1
+  - `group_add_robot` → 群入库（del=0）
+  - `group_del_robot` → del=1，**并自动清理该群的全部房间绑定与监控**（每个房间最后一个绑定群离开后停止监控进程）
+  - `c2c_msg_receive`/`c2c_msg_reject` → 单聊接收开关1/0
+  - `group_msg_receive`/`group_msg_reject` → 群接收开关1/0
+- **发送前检查**：PushService发送（文本与富媒体）前经ContactStore过滤未开启消息接收的群，未开启直接跳过；未知群默认放行
+- **机器人详情**：Web面板展示用户名、头像、分享按钮（share_url），经`GET /users/@me`获取并缓存
 
 ## 数据量监控（永久保留策略的配套）
 
@@ -146,6 +160,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - 第十三批（审查）：pyflakes全清、fingerprint启动崩溃修复、Redis快速降级、死代码清理、README重写（详见REVIEW.md第一轮）
 - 第十四批：Schema迁移器（版本表+增量加列，旧库升级/新库跳过）、mypy清零（36文件0错误）、CI阻塞化、数据永久保留策略（`data_retention_days=0`）
 - 第十五批：按官方v2文档对齐消息/富媒体实现（msg_seq递增修复登录流程冲突、群聊本地图片直传、富媒体上传路径标注）、数据量监控（面板体积+超阈值私聊提醒）
+- **2026-09-02 第十七批（联系人管理）**：好友/群两张数据表、8个平台事件接线（加删好友/入退群/接收开关）、退群自动解绑、发送前接收过滤、机器人详情（users/@me用户名+头像+分享按钮）、wheel重建（44文件）
 - **2026-09-02 第二轮审查**：修复数据量提醒链路断裂（db_path取值错误致功能失效）与maintainer分级丢失（回滚所致），新增3个端到端测试；149个测试全过，pyflakes/flake8/mypy三项零告警
 - **2026-09-02 第十六批（第三轮审查+wheel）**：修复CookieMaintainer双重体积检查（绕过开关配置）；notify_admins字符串入参防御；动态昵称回填去重；删除死代码（push.qqbot_config、fingerprint.build_signed_url）；**补齐py.typed并重新构建wheel**（43文件，内容完整性已验证）
 
@@ -156,7 +171,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 
 ## 代码存在的问题（当前仍存在）
 
-1. **真机联调未做**：botpy连接、扫码登录、动态轮询、Web面板、结算推送，均未在真实凭证环境验证。
+1. **真机联调未做**：botpy连接、扫码登录、动态轮询、Web面板、结算推送、联系人8事件（加好友/退群/接收开关的实际payload与时序），均未在真实凭证环境验证。
 2. **vendor镜像时效性**：第三方镜像可用性随时间变化。
 3. **chromium首次安装耗时**：约180MB，启动时阻塞（Docker镜像已预装）。
 4. **Web面板鉴权为可选**：未配置web_token时不鉴权（默认仅本机，风险可控）；远程访问应配置token或反代鉴权。
