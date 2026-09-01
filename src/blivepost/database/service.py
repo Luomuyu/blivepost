@@ -27,16 +27,16 @@ logger = get_logger("db_service")
 
 class DatabaseService:
     """数据库存储服务"""
-    
+
     def __init__(self, db_manager: DatabaseManager):
         """
         初始化数据库服务
-        
+
         Args:
             db_manager: 数据库管理器
         """
         self.db_manager = db_manager
-    
+
     async def save_danmaku(
         self,
         room_id: int,
@@ -50,7 +50,7 @@ class DatabaseService:
     ) -> None:
         """
         保存弹幕记录
-        
+
         Args:
             room_id: 直播间ID
             uid: 用户ID
@@ -77,7 +77,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存弹幕记录失败: {e}")
-    
+
     async def save_gift(
         self,
         room_id: int,
@@ -91,7 +91,7 @@ class DatabaseService:
     ) -> None:
         """
         保存礼物记录
-        
+
         Args:
             room_id: 直播间ID
             uid: 用户ID
@@ -119,7 +119,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存礼物记录失败: {e}")
-    
+
     async def save_super_chat(
         self,
         room_id: int,
@@ -131,7 +131,7 @@ class DatabaseService:
     ) -> None:
         """
         保存醒目留言记录
-        
+
         Args:
             room_id: 直播间ID
             uid: 用户ID
@@ -154,7 +154,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存SC记录失败: {e}")
-    
+
     async def save_guard(
         self,
         room_id: int,
@@ -167,7 +167,7 @@ class DatabaseService:
     ) -> None:
         """
         保存舰长记录
-        
+
         Args:
             room_id: 直播间ID
             uid: 用户ID
@@ -192,7 +192,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存舰长记录失败: {e}")
-    
+
     async def save_anchor(
         self,
         room_id: int,
@@ -204,7 +204,7 @@ class DatabaseService:
     ) -> None:
         """
         保存天选记录
-        
+
         Args:
             room_id: 直播间ID
             award_name: 奖品名称
@@ -227,7 +227,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存天选记录失败: {e}")
-    
+
     async def save_red_pocket(
         self,
         room_id: int,
@@ -237,7 +237,7 @@ class DatabaseService:
     ) -> None:
         """
         保存红包记录
-        
+
         Args:
             room_id: 直播间ID
             sender_uid: 发送者ID
@@ -256,7 +256,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存红包记录失败: {e}")
-    
+
     async def save_guard_achievement(
         self,
         room_id: int,
@@ -265,7 +265,7 @@ class DatabaseService:
     ) -> None:
         """
         保存大航海成就记录
-        
+
         Args:
             room_id: 直播间ID
             achieve_level: 成就等级
@@ -282,7 +282,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存大航海成就记录失败: {e}")
-    
+
     async def save_system_event(
         self,
         room_id: int,
@@ -293,7 +293,7 @@ class DatabaseService:
     ) -> None:
         """
         保存系统事件记录
-        
+
         Args:
             room_id: 直播间ID
             event_type: 事件类型
@@ -314,7 +314,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存系统事件记录失败: {e}")
-    
+
     async def save_room_change(
         self,
         room_id: int,
@@ -326,7 +326,7 @@ class DatabaseService:
     ) -> None:
         """
         保存房间信息变更记录
-        
+
         Args:
             room_id: 直播间ID
             title: 标题
@@ -349,7 +349,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存房间变更记录失败: {e}")
-    
+
     async def save_live_start(
         self,
         room_id: int,
@@ -358,7 +358,7 @@ class DatabaseService:
     ) -> None:
         """
         保存开播记录
-        
+
         Args:
             room_id: 直播间ID
             title: 标题
@@ -377,7 +377,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存开播记录失败: {e}")
-    
+
     async def save_live_end(
         self,
         room_id: int,
@@ -387,7 +387,7 @@ class DatabaseService:
     ) -> None:
         """
         保存下播记录
-        
+
         Args:
             room_id: 直播间ID
             stats: 直播统计数据
@@ -413,7 +413,7 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存下播记录失败: {e}")
-    
+
     # ========== 绑定记录 ==========
 
     async def save_binding(
@@ -536,23 +536,23 @@ class DatabaseService:
             return []
 
     # ========== 便捷方法 ==========
-    
+
     async def save_cut_off(self, room_id: int, msg: str) -> None:
         """保存直播切断事件"""
         await self.save_system_event(room_id, EventType.CUT_OFF, msg=msg)
-    
+
     async def save_warning(self, room_id: int, msg: str) -> None:
         """保存警告事件"""
         await self.save_system_event(room_id, EventType.WARNING, msg=msg)
-    
+
     async def save_ban(self, room_id: int, uid: int, uname: str) -> None:
         """保存禁言事件"""
         await self.save_system_event(room_id, EventType.BAN, uid=uid, uname=uname)
-    
+
     async def save_admin_set(self, room_id: int, uid: int) -> None:
         """保存设为房管事件"""
         await self.save_system_event(room_id, EventType.ADMIN_SET, uid=uid)
-    
+
     async def save_admin_revoke(self, room_id: int, uid: int) -> None:
         """保存撤销房管事件"""
         await self.save_system_event(room_id, EventType.ADMIN_REVOKE, uid=uid)
@@ -617,13 +617,17 @@ class DatabaseService:
                         _scalar(GiftRecord, func.count(),
                                 GiftRecord.coin_type == "gold").label("gift_count"),
                         # 上舰（瓜子→元）
-                        _scalar(GuardRecord, func.coalesce(func.sum(GuardRecord.price * GuardRecord.num), 0)).label("ship_gold"),
+                        _scalar(GuardRecord, func.coalesce(
+                            func.sum(GuardRecord.price * GuardRecord.num), 0)
+                        ).label("ship_gold"),
                         _scalar(GuardRecord, func.count()).label("ship_count"),
                         # SC（元）
-                        _scalar(SuperChatRecord, func.coalesce(func.sum(SuperChatRecord.price), 0)).label("sc_total"),
+                        _scalar(SuperChatRecord, func.coalesce(
+                            func.sum(SuperChatRecord.price), 0)).label("sc_total"),
                         _scalar(SuperChatRecord, func.count()).label("sc_count"),
                         # 红包（电池）
-                        _scalar(RedPocketRecord, func.coalesce(func.sum(RedPocketRecord.total_price), 0)).label("red_pocket"),
+                        _scalar(RedPocketRecord, func.coalesce(
+                            func.sum(RedPocketRecord.total_price), 0)).label("red_pocket"),
                     )
                 )
                 row = res.one()
@@ -859,7 +863,8 @@ class DatabaseService:
         result = {}
         for name, model, cols in [
             ("danmaku", DanmakuRecord, ["timestamp", "uid", "uname", "msg", "dm_type"]),
-            ("gift", GiftRecord, ["timestamp", "uid", "uname", "gift_name", "num", "total_price", "coin_type"]),
+            ("gift", GiftRecord,
+             ["timestamp", "uid", "uname", "gift_name", "num", "total_price", "coin_type"]),
             ("super_chat", SuperChatRecord, ["timestamp", "uid", "uname", "price", "message"]),
             ("guard", GuardRecord, ["timestamp", "uid", "uname", "guard_level", "gift_name", "price", "num"]),
             ("red_pocket", RedPocketRecord, ["timestamp", "sender_uid", "sender_name", "total_price"]),
@@ -870,7 +875,6 @@ class DatabaseService:
                 logger.error(f"导出{name}明细失败: {e}")
                 result[name] = []
         return result
-
 
     # ========== 动态订阅 ==========
 
@@ -972,7 +976,6 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"查询下播记录失败: {e}")
             return []
-
 
     async def get_daily_history(self, room_ids: Optional[List[int]] = None,
                                 days: int = 30) -> List[dict]:

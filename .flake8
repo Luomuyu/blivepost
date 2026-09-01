@@ -1,0 +1,6 @@
+[flake8]
+max-line-length = 110
+extend-ignore = E203, W503, W293, E301, E306, E701
+exclude = .venv, dist, build, oldsrc
+per-file-ignores =
+    tests/*: E301

@@ -173,7 +173,6 @@ class BindingStore:
         """获取群的所有绑定关系"""
         return list(self._bindings.get(group_openid, {}).values())
 
-
     # ========== 动态订阅 ==========
 
     async def bind_dynamic(self, group_openid: str, up_uid: int, up_name: str = "") -> bool:

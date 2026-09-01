@@ -41,7 +41,8 @@ th{{background:#f0f4f8}}
 {accounts}</table>
 <h2>收入趋势（近{hist_days}天） <small><a href="/api/history?days={hist_days}">JSON</a></small></h2>
 {trend_svg}
-<p><small><span style="color:#4a90d9">—</span> 弹幕　<span style="color:#e67e22">—</span> 礼物(元)　<span style="color:#2e8b57">—</span> 上舰(元)　<span style="color:#c0392b">—</span> SC(元)　 前端: <a href="/api/history?days={hist_days}">/api/history</a></small></p>
+<p><small>图例：蓝=弹幕 橙=礼物(元) 绿=上舰(元) 红=SC(元)
+JSON: <a href="/api/history?days={hist_days}">/api/history</a></small></p>
 <h2>监控房间（{room_count}）</h2>
 <table><tr><th>房间</th><th>进程</th><th>账号</th><th>今日弹幕</th><th>礼物(元)</th><th>上舰(元)</th><th>SC(元)</th></tr>
 {rooms}</table>

@@ -105,7 +105,8 @@ def test_guard_achievement_switch():
 
     h_on = Ctx(make_settings(guard_achievement=True), bot).handler
     h_on._on_guard_achievement(None, AchievementInfo())
-    assert len(bot.text) == 1 and "成就内容" in bot.text[0][0].replace("累计100天舰队壮大", "成就内容") or "大航海成就" in bot.text[0][0]
+    assert len(bot.text) == 1
+    assert "大航海成就" in bot.text[0][0]
 
     # 开关关闭：不推送
     bot2 = RecordingBot()

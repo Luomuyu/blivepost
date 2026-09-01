@@ -36,6 +36,7 @@ _CMD_RE = re.compile(
 # 无参数指令
 _NOARG_RE = re.compile(r"[/／]\s*(帮助|指令|菜单|状态|我的绑定|绑定列表|汇总)(?:\s+(周|月))?\s*$")
 
+
 def _parse_date(text: str):
     """解析YYYYMMDD或YYYY-MM-DD格式的日期，非法返回None"""
     for fmt in ("%Y%m%d", "%Y-%m-%d"):
@@ -121,7 +122,8 @@ class CommandHandler:
         logger.info(f"收到群命令: {cmd} {room_id} (group={group_openid})")
 
         sender = getattr(message.author, "user_openid", "") or ""
-        if cmd in ("绑定", "监控", "取消监控", "解绑", "绑定动态", "取消动态")                 and not self._group_allowed(sender):
+        control_cmds = ("绑定", "监控", "取消监控", "解绑", "绑定动态", "取消动态")
+        if cmd in control_cmds and not self._group_allowed(sender):
             return (
                 "无权限：仅机器人管理员可执行控制指令（查询指令不受限）\n"
                 f"如你是管理员，请让机器人所有者将此openid加入配置Admin.openids：{sender or '未知'}"

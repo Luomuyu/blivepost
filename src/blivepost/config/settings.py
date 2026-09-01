@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from .env import apply_env_overrides, load_dotenv
+
 
 def _as_str_list(value) -> List[str]:
     """配置值转字符串列表（兼容单个字符串）"""
@@ -141,7 +143,11 @@ class Settings:
         
         settings = cls._parse_config(data)
         settings._config_path = path
-        
+
+        # .env文件与环境变量覆盖（密钥类配置建议走环境变量）
+        load_dotenv()
+        apply_env_overrides(settings)
+
         return settings
     
     @classmethod

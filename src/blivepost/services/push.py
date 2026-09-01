@@ -257,11 +257,6 @@ class PushService:
         del room_id
         return False
 
-
-
-
-
-
     def push_anchor(
         self,
         room_id: str,
@@ -279,7 +274,6 @@ class PushService:
                 f"礼物:{award_name}，弹幕:{danmu}，要求:{require_text}"
             )
         return self.send_message(text, room_id=room_id)
-
 
     def push_guard_achievement(
         self,

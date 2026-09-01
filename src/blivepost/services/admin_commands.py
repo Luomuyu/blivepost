@@ -262,7 +262,6 @@ class AdminCommandHandler:
         await self.cookie_pool.reactivate(uid)
         return f"账号 {uid}（{uname or account.nickname}）已恢复为可用"
 
-
     async def _export_room(self, room_id: int, day=None, fmt: str = "csv") -> str:
         """导出房间当日明细到exports目录（CSV带BOM可直接Excel打开，或JSON）"""
         if self.db_service is None:

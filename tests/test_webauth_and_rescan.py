@@ -234,5 +234,3 @@ async def test_rescan_skips_still_invalid(tmp_path, monkeypatch):
     assert n == 0
     assert pool.get_account(1).status == "expired"
     await db.close()
-
-

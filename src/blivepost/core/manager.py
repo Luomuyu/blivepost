@@ -98,7 +98,6 @@ class QueuePushService(PushService):
             media=room_info.cover or None
         )
 
-
     def notify_not_login(self, room_id) -> bool:
         """登录凭证失效上报：经队列发回主进程处理"""
         try:
@@ -452,7 +451,6 @@ class PushQueueConsumer:
         else:
             await bot.broadcast(groups, content)
         logger.info(f"UP主 {up_uid} 新动态已推送到 {len(groups)} 个群")
-
 
     async def _handle_up_live(self, item: dict) -> None:
         """处理开播提醒：推送到所有订阅该UP主动态的群"""

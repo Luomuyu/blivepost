@@ -265,8 +265,10 @@ async def main_async(
         if settings.message.web_panel:
             web_panel = WebPanel(
                 cookie_pool, monitor_manager,
+                dynamic_manager=dynamic_manager,
                 binding_store=binding_store, db_service=db_service,
                 host=settings.message.web_host, port=settings.message.web_port,
+                token=settings.message.web_token,
             )
             await web_panel.start()
 
