@@ -49,6 +49,15 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - **官方API对齐**（QQ开放平台v2文档核对）：群/单聊消息（`msg_type` 0文本/2markdown/7富媒体，`media.file_info`来自files上传，`msg_id`被动5分钟有效，`msg_seq`同ID下须递增）；富媒体上传（`file_type`/`url`/`srv_send_msg`，本地图片multipart `file_data`直传为平台兼容路径，文档标准路径为分片上传——需真机验证，失败时日志提示）
 - **频控依据**：认证60/qpm、未认证30/qpm、单关系20/qpm、每群每天1000条——结算推送等高频功能设计均以此为约束
 
+## 访问凭证（对齐官方access-token文档）
+
+- **获取**：POST `getAppAccessToken`（appId+clientSecret），返回 `access_token`（有效期7200秒）；有效期内重复请求返回相同token
+- **刷新**：botpy在**每次API请求前**执行 `check_session→check_token`，过期自动刷新并重建Authorization头——请求级惰性刷新，等效并优于文档建议的定时刷新
+- **携带**：所有请求头 `Authorization: QQBot <access_token>`；自定义multipart上传同样经 `api._http.request` 自动携带
+- **域名说明**：botpy使用 `bots.qq.com/app/getAppAccessToken`（官方SDK地址）；文档为 `api.bot.qq.com`——两者均为官方入口
+- **诊断**：`QQBotClient.token_state()` 暴露凭证状态（client_started/token_ready/token_expires_in）；Web面板首页展示在线状态与token剩余秒数
+- **安全**：app_secret建议经 `.env`/环境变量注入（`BLIVEPOST_QQBOT_APP_SECRET`）；token仅存进程内存
+
 ## 消息推送范围与开关
 
 弹幕、礼物、舰长（上舰）、SC、红包仅**日志+数据库**，不推送。
@@ -104,7 +113,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - 配置管理（YAML自动生成 + .env/环境变量覆盖密钥）；SESSDATA仅进程内存保存
 - WBI签名单一实现；Redis连接1秒快速降级（进程级记忆）
 - 按天轮转日志（保留30天）
-- 单元测试149个 + flake8/pyflakes/mypy三项零告警（mypy阻塞检查）
+- 单元测试154个 + flake8/pyflakes/mypy三项零告警（mypy阻塞检查）
 - **wheel构建验证**：43文件（含py.typed），关键模块与16项运行时依赖核对通过
 - Schema迁移器（database/migrations.py，版本表+增量DDL）
 - 版本1.1.0；wheel已重新构建
@@ -139,6 +148,11 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - 第十五批：按官方v2文档对齐消息/富媒体实现（msg_seq递增修复登录流程冲突、群聊本地图片直传、富媒体上传路径标注）、数据量监控（面板体积+超阈值私聊提醒）
 - **2026-09-02 第二轮审查**：修复数据量提醒链路断裂（db_path取值错误致功能失效）与maintainer分级丢失（回滚所致），新增3个端到端测试；149个测试全过，pyflakes/flake8/mypy三项零告警
 - **2026-09-02 第十六批（第三轮审查+wheel）**：修复CookieMaintainer双重体积检查（绕过开关配置）；notify_admins字符串入参防御；动态昵称回填去重；删除死代码（push.qqbot_config、fingerprint.build_signed_url）；**补齐py.typed并重新构建wheel**（43文件，内容完整性已验证）
+
+### 2026-09-02 第十七批（本次，凭证诊断）
+- 按官方access-token文档核对凭证链路：获取接口/7200秒有效期/请求级自动刷新/QQBot头携带——实现符合文档
+- 新增 `QQBotClient.token_state()` 凭证诊断；Web面板展示机器人在线状态与token剩余秒数
+- 154个测试
 
 ## 代码存在的问题（当前仍存在）
 
@@ -185,5 +199,6 @@ export BLIVEPOST_ADMIN_OPENIDS="openid1,openid2"
 - Cookie提醒只走私聊（敏感通知优先`Admin.main_openids`）
 - UP主开播期间动态轮询自动暂停，下播自动恢复
 - 多实例部署：各实例独立工作目录即可完全隔离
+- 访问凭证7200秒有效，botpy在每次API请求前自动刷新；Web面板可见剩余秒数
 - 数据库体积超`db_size_warn_mb`（默认500MB）时私聊提醒主管理员；治理靠导出归档，代码不自动删除
 - 审查报告见REVIEW.md（两轮，第二轮2026-09-02）
