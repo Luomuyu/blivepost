@@ -147,5 +147,5 @@ async def test_status_and_my_bindings(handler):
     await ch.handle(FakeMsg("/监控 23058", "G"))
     status = await ch.handle(FakeMsg("/状态", "G"))
     assert "23058" in status and "监控运行中" in status
-    bindings = await ch.handle(FakeMsg("/我的绑定", "G"))
+    bindings = await ch.handle(FakeMsg("/绑定列表", "G"))
     assert "23058" in bindings and "监控中" in bindings

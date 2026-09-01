@@ -34,7 +34,7 @@ _CMD_RE = re.compile(
     re.IGNORECASE,
 )
 # 无参数指令
-_NOARG_RE = re.compile(r"[/／]\s*(帮助|指令|菜单|状态|我的绑定|绑定列表|汇总)(?:\s+(周|月))?\s*$")
+_NOARG_RE = re.compile(r"[/／]\s*(帮助|指令|菜单|状态|绑定列表|汇总)(?:\s+(周|月))?\s*$")
 
 
 def _parse_date(text: str):
@@ -107,7 +107,7 @@ class CommandHandler:
                                            {"周": 7, "月": 30}.get(noarg.group(2)))
             elif cmd == "状态":
                 return await self._status(group_openid)
-            else:  # 我的绑定 / 绑定列表
+            else:  # 绑定列表
                 return await self._my_bindings(group_openid)
 
         # 带房间号指令

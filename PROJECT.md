@@ -91,7 +91,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - **终端stop命令**：程序运行时在终端输入 `stop`（或`quit`/`exit`）即触发安全关闭——停止全部子进程监控/消费者/结算/维护循环/面板后退出，与Ctrl+C等效
 - **日志去重**：项目logger关闭向root传播（propagate=False），修复与botpy日志配置叠加导致的重复输出
 - **指令面板脚本**（scripts/，需凭证：环境变量或config.yaml的QQBot段）：
-  - `scripts/panel_create.py`：**仅需运行一次**——创建两个指令面板（c2c单聊面板：/登录 /账号 /移除账号 /恢复账号 /导出 /我；group群聊面板：/帮助 /绑定 /监控 /取消监控 /解绑 /状态 /我的绑定 /收入 /SC榜 /汇总），创建后把返回的panel_id与PanelItem定义写入 `scripts/panel_ids.json`
+  - `scripts/panel_create.py`：**仅需运行一次**——创建两个指令面板（c2c单聊面板：/登录 /账号 /移除账号 /恢复账号 /导出 /我；group群聊面板：/帮助 /绑定 /监控 /取消监控 /解绑 /状态 /绑定列表 /收入 /SC榜 /汇总），创建后把返回的panel_id与PanelItem定义写入 `scripts/panel_ids.json`
   - `scripts/panel_manage.py`：读取panel_ids.json，支持 `query`（查询详情）/ `modify c2c|group`（按脚本内定义修改面板）/ `delete c2c|group|all`（删除）；修改面板指令时改脚本内PANEL_ITEMS定义后运行modify
   - API对齐：`POST /v2/panels`创建、`PUT/DELETE/GET /connect/panel/{panel_id}`管理；PanelItem为`type=command/link`（command点击后填入输入框）；凭证经getAppAccessToken获取、`Authorization: QQBot <token>`携带
 - **数据治理**（建议2）：管理员私聊 `/体积`——数据库文件体积 + 13张表行数明细（按行数降序、空表单列）；配合永久保留策略（只统计不删除）
@@ -115,7 +115,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ## 群指令
 
 - 控制指令（仅`Admin.openids`/`main_openids`名单内）：`/绑定` `/监控` `/取消监控` `/解绑` `/绑定动态` `/取消动态`
-- 查询指令（不受限）：`/状态`、`/我的绑定`、`/收入 房间号 [日期/周/月]`、`/SC榜 房间号 [日期]`、`/汇总 [周/月]`、`/帮助`
+- 查询指令（不受限）：`/状态`、`/绑定列表`、`/收入 房间号 [日期/周/月]`、`/SC榜 房间号 [日期]`、`/汇总 [周/月]`、`/帮助`
 
 ## Web状态面板
 
