@@ -963,7 +963,9 @@ class CookieMaintainer:
     async def _check_db_size(self, warn_mb: int = 500) -> None:
         """数据库体积超阈值时私聊提醒管理员（只提醒不删除，符合永久保留决策）"""
         db_service = self.db_service
-        path = getattr(db_service, "db_path", None) if db_service else None
+        # db_path在DatabaseManager上（DatabaseService.db_manager转发）
+        db_manager = getattr(db_service, "db_manager", None)
+        path = getattr(db_manager, "db_path", None) if db_manager else None
         if not path or not os.path.exists(path):
             return
         size_mb = os.path.getsize(path) / (1024 * 1024)
@@ -977,7 +979,7 @@ class CookieMaintainer:
             "⚠️ 数据库体积已达 " + str(round(size_mb, 1)) + "MB（阈值" + str(warn_mb) + "MB）。"
         )
         msg2 = "数据按策略永久保留，不会自动删除；建议导出后归档，或考虑迁移到MySQL/PostgreSQL。"
-        await self._notify_admins(msg1 + msg2)
+        await self._notify_admins(msg1 + msg2, sensitive=True)
 
     async def _rescan_expired(self) -> int:
         """
