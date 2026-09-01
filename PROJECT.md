@@ -1,6 +1,8 @@
 # BLivePost 项目信息
 
-> 最后更新：2026-09-01（第十三批：工程化——CI/Dockerfile/.env/wheel）
+> 最后更新：2026-09-01（第十四批：Schema迁移器、mypy清零、数据永久保留策略）
+
+> Git：`04559d8` 基线 → `8625fe3` → `e1cc18b` → `66ebdb4` 工程化 → `ff57e37` → `04f7c9a` 迁移器+mypy清零
 
 > Git：`04559d8` 基线 → `8625fe3` 面板/健康/重扫 → `e1cc18b` 文档 → 工程化提交（CI/Dockerfile/.env/wheel）
 
@@ -81,13 +83,16 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 
 - SQLAlchemy 2.0异步引擎，SQLite/MySQL/PostgreSQL
 - 14张表；单房间/多房间汇总与历史趋势均为聚合SQL；明细导出（CSV/JSON）
+- **Schema迁移**：轻量版本表迁移器（`database/migrations.py`），表结构增量变更自动应用，新旧库均安全
+- **数据保留**：永久保留策略（`Setting.data_retention_days=0`），代码不含任何自动删除逻辑
 
 ## 基础设施
 
 - 配置管理（YAML自动生成 + .env/环境变量覆盖密钥）；SESSDATA仅进程内存保存
 - WBI签名单一实现；Redis连接1秒快速降级（进程级记忆）
 - 按天轮转日志（保留30天）
-- 单元测试143个 + flake8零告警（src+tests）+ mypy渐进收紧
+- 单元测试146个 + flake8零告警（src+tests）+ mypy零错误（36文件，阻塞检查）
+- Schema迁移器（database/migrations.py，版本表+增量DDL）
 - 版本1.1.0；wheel已重新构建
 
 ## 修复批次记录
@@ -104,6 +109,11 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - **2026-09 第十批**：feed wbi签名、多类型提取、批量状态共享、开播提醒
 - **2026-09 第十一批**：首次提交、面板token、趋势、健康、自动重扫
 - **2026-09 第十二批**：CI、Dockerfile、.env/环境变量覆盖、wheel重新构建、flake8/mypy清理、WebPanel装配修复、Redis快速降级
+- **2026-09 第十三批（审查）**：pyflakes全清、修复fingerprint缺random/Tuple导入（启动即崩）、finally变量未初始化、Redis 1秒快速降级、死代码清理4项、README重写结构/架构图
+- **2026-09 第十四批（本次）**：
+  - ~~SQLite无迁移机制~~ → 轻量Schema迁移器（`schema_version`版本表+增量ADD COLUMN，跨sqlite/mysql/pg，列存在自动跳过；`DatabaseManager.initialize`集成，旧库升级/新库幂等均有测试）
+  - ~~mypy约146个历史告警（CI非阻塞）~~ → 配置放宽动态鸭子类型项+修复真实类型错误，**36文件0错误**；CI的type-check移除continue-on-error升为阻塞检查
+  - ~~数据保留策略~~ → 设计决策确认：**所有入库数据永久保留，永不自动删除**（`Setting.data_retention_days`默认0=永久；用户可自行导出后手动清理，代码不提供自动删除逻辑）
 
 ## 代码存在的问题（当前仍存在）
 
@@ -112,8 +122,6 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 3. **chromium首次安装耗时**：约180MB，启动时阻塞（Docker镜像已预装）。
 4. **Web面板鉴权为可选**：未配置web_token时不鉴权（默认仅本机，风险可控）；远程访问应配置token或反代鉴权。
 5. **动态feed接口**：摘要与图片提取依赖feed返回结构，结构变更时需适配（已带wbi签名与防御式提取）。
-6. **SQLite无迁移机制**：表结构变更需删库重建或手动ALTER；正式发布前建议引入Alembic。
-7. **mypy存在约146个历史告警**（CI非阻塞），需渐进收紧。
 
 ## 未实现 / 半成品的功能
 
@@ -124,15 +132,14 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ## 建议添加的新功能（按优先级）
 
 1. **按群推送粒度**：各类推送对所有监控中的群内容一致；可在绑定关系上增加push_types字段细分。
-2. **mypy告警清零**：按模块渐进修复约146个告警并移除CI的continue-on-error。
-3. **数据保留策略**：弹幕等高频表自动清理（按天保留N天），防止SQLite无限膨胀。
+2. **数据量监控**：永久保留策略下SQLite文件会持续增长，可在Web面板展示数据库体积并在超阈值时提醒管理员（提醒而非删除，符合永久保留决策）。
 
 ## 运行要点
 
 ```bash
 pip install -e .           # 安装（自动安装除blivedm外全部依赖）
 pip install -e ".[dev]"    # 开发环境
-pytest tests/              # 单元测试（无需联网）
+pytest tests/              # 单元测试（146个，无需联网）
 flake8 src/ tests/         # lint（零告警）
 blivepost -c config.yaml   # 运行；启动时阻塞安装chromium（已装秒级跳过）
 
