@@ -4,7 +4,7 @@
 """
 
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
 
@@ -796,6 +796,7 @@ class DatabaseService:
                 record = result.scalar_one_or_none()
                 if record is not None:
                     record.last_used_at = local_now()
+                    record.use_count = (record.use_count or 0) + 1
                     await session.commit()
         except Exception as e:
             logger.error(f"更新账号使用时间失败: {e}")
@@ -971,3 +972,57 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"查询下播记录失败: {e}")
             return []
+
+
+    async def get_daily_history(self, room_ids: Optional[List[int]] = None,
+                                days: int = 30) -> List[dict]:
+        """
+        按日聚合的历史趋势数据（Web面板折线图用）
+
+        Args:
+            room_ids: 房间列表（None=全部房间）
+            days: 统计最近N天
+
+        Returns:
+            list[dict]: [{"day": "YYYY-MM-DD", "danmaku": n, "gift_gold": f,
+                          "ship_gold": f, "sc_total": n}] 按日期升序
+        """
+        start = local_now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
+        from datetime import timedelta as _td
+
+        async def _by_day(model, aggregate, coin_filter=None):
+            conditions = [model.timestamp >= start]
+            if coin_filter is not None:
+                conditions.append(coin_filter)
+            if room_ids is not None:
+                conditions.append(model.room_id.in_(room_ids))
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(
+                    select(
+                        func.date(model.timestamp).label("day"),
+                        aggregate,
+                    ).select_from(model).where(*conditions).group_by("day")
+                )
+                return {str(r.day): int(r[1] or 0) for r in res.all()}
+
+        history: Dict[str, dict] = {}
+        try:
+            danmaku = await _by_day(DanmakuRecord, func.count())
+            gift = await _by_day(GiftRecord, func.sum(GiftRecord.total_price),
+                                 GiftRecord.coin_type == "gold")
+            ship = await _by_day(GuardRecord, func.sum(GuardRecord.price * GuardRecord.num))
+            sc = await _by_day(SuperChatRecord, func.sum(SuperChatRecord.price))
+        except Exception as e:
+            logger.error(f"查询历史趋势失败: {e}")
+            return []
+
+        for i in range(days):
+            day = (start + _td(days=i)).strftime("%Y-%m-%d")
+            history[day] = {
+                "day": day,
+                "danmaku": danmaku.get(day, 0),
+                "gift_gold": round(gift.get(day, 0) / 1000, 1),
+                "ship_gold": round(ship.get(day, 0) / 1000, 1),
+                "sc_total": sc.get(day, 0),
+            }
+        return [history[day] for day in sorted(history)]

@@ -258,6 +258,7 @@ class CookieAccountRecord(Base):
     ac_time_value: Mapped[str] = mapped_column(String(100), default="", comment="ac_time_value (refresh token)")
     sessdata_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="SESSDATA过期时间")
     status: Mapped[str] = mapped_column(String(20), default="active", comment="状态(active/expired)")
+    use_count: Mapped[int] = mapped_column(Integer, default=0, comment="被取用次数")
     last_error: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="最近一次失效原因")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="入库时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, onupdate=local_now, comment="更新时间")

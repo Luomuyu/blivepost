@@ -48,6 +48,7 @@ class MessageSettings:
     web_panel: bool = False
     web_host: str = "127.0.0.1"
     web_port: int = 8080
+    web_token: str = ""
     ignore_cmds: List[str] = field(default_factory=list)
 
 
@@ -175,6 +176,7 @@ class Settings:
                 web_panel=setting_data.get("web_panel", "N") == "Y",
                 web_host=str(setting_data.get("web_host", "127.0.0.1")),
                 web_port=int(setting_data.get("web_port", 8080)),
+                web_token=str(setting_data.get("web_token", "")),
                 ignore_cmds=setting_data.get("ignore_cmds", []),
             ),
             redis=RedisConfig(
@@ -239,6 +241,7 @@ Setting: # 消息推送设置
   web_panel: "N" # Web状态面板 (只读, 默认仅本机访问)
   web_host: "127.0.0.1" # Web面板监听地址
   web_port: 8080 # Web面板端口
+  web_token: "" # Web面板访问令牌 (留空不鉴权; 设置后需 ?token= 或 X-Web-Token 头)
   ignore_cmds: [] # 忽略的未知命令列表 (不打印日志)
 
 Redis: # Redis配置 (可选)

@@ -16,6 +16,7 @@ import asyncio
 import multiprocessing
 import os
 import queue
+from datetime import datetime
 
 import aiohttp
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
@@ -865,6 +866,7 @@ class CookieMaintainer:
         self.admin_openids = [str(o) for o in (admin_openids or [])]
         self.main_admin_openids = [str(o) for o in (main_admin_openids or [])]
         self.interval = interval
+        self._last_rescan_date: str = ""
         self._task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
@@ -934,8 +936,48 @@ class CookieMaintainer:
             await self.pool.report_invalid(account.uid, reason)
             await self._notify_admins(
                 f"⚠️ 账号 {account.uid}（{account.nickname}）的Cookie已失效并移出可用池。\n"
-                f"原因：{reason}\n请私聊机器人发送 /登录 重新扫码添加。"
+                f"原因：{reason}\n请私聊机器人发送 /登录 重新扫码添加。",
+                sensitive=True,
             )
+            warn = self.pool.warn_if_needed()
+            if warn:
+                await self._notify_admins(f"⚠️ {warn}", sensitive=True)
+
+        # 失效账号自动重扫：nav复核通过则自动回池（如临时风控恢复场景，每日一次）
+        await self._rescan_expired()
+
+    async def _rescan_expired(self) -> int:
+        """
+        nav复核全部expired账号，登录态恢复的自动回到可用池（每日一次）
+
+        Returns:
+            int: 恢复的账号数量
+        """
+        expired = [a for a in self.pool.accounts if a.status == "expired"]
+        if not expired:
+            return 0
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._last_rescan_date == today:
+            return 0
+        self._last_rescan_date = today
+
+        from ..services.bili_login import verify_nav
+        restored = 0
+        for account in expired:
+            ok, _, uname = await asyncio.to_thread(verify_nav, account.cookie_string)
+            if ok:
+                await self.pool.reactivate(account.uid, reason="自动重扫发现登录态恢复")
+                restored += 1
+                logger.info(f"账号 {account.uid}（{uname or account.nickname}）"
+                            f"重扫通过，已自动恢复可用")
+                await self._notify_admins(
+                    f"✅ 账号 {account.uid}（{uname or account.nickname}）"
+                    f"重扫发现登录态恢复，已自动回到可用池"
+                )
+        if restored:
+            logger.info(f"自动重扫恢复 {restored} 个账号")
+        return restored
 
     async def _notify_admins(self, content: str, sensitive: bool = False) -> None:
         """

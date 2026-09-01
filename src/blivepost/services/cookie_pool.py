@@ -40,6 +40,7 @@ class CookieAccount:
     ac_time_value: str = ""
     sessdata_expires_at: Optional[datetime] = None
     status: str = "active"
+    use_count: int = 0
     last_error: Optional[str] = None
     updated_at: Optional[datetime] = None
     last_used_at: Optional[datetime] = None
@@ -55,6 +56,7 @@ class CookieAccount:
             ac_time_value=rec.ac_time_value,
             sessdata_expires_at=rec.sessdata_expires_at,
             status=rec.status,
+            use_count=rec.use_count,
             last_error=rec.last_error,
             updated_at=rec.updated_at,
             last_used_at=rec.last_used_at,
@@ -121,8 +123,10 @@ class CookiePool:
             key=lambda a: a.last_used_at or datetime.min,
         )
         account.last_used_at = local_now()
+        account.use_count += 1
         await self._db.touch_cookie_account(account.uid)
-        logger.info(f"Cookie池取用账号 {account.uid}（{account.nickname}）")
+        logger.info(f"Cookie池取用账号 {account.uid}（{account.nickname}，"
+                    f"第{account.use_count}次）")
         return account
 
     async def upsert(
@@ -198,6 +202,7 @@ class CookiePool:
         if account is None or account.status != "active":
             return None
         account.last_used_at = local_now()
+        account.use_count += 1
         await self._db.touch_cookie_account(account.uid)
         return account
 
