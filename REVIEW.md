@@ -1,241 +1,134 @@
 # BLivePost 项目审查报告
 
-> 第一轮审查：2026-09-01 ｜ src/ 23个模块、tests/ 12个文件 ｜ 结论：**通过（附修复与建议）**
-> 第二轮审查：2026-09-02 ｜ 含第十五批（官方API对齐/数据量监控）后的全量复检 ｜ 结论：**通过**
-> 第二轮审查：2026-09-02 ｜ 含第十五批（官方API对齐/数据量监控）后的全量复检 ｜ 结论：**通过**
-> 第三轮审查：2026-09-02 ｜ 全量代码审查 + wheel构建验证 ｜ 结论：**通过（附2项修复）**
-> 第三轮审查：2026-09-02 ｜ 全量代码审查 + wheel构建验证 ｜ 结论：**通过（附2项修复）**
-> 第四轮审查：2026-09-02 ｜ 联系人管理批次的针对性审查 ｜ 结论：**通过**
-> 第五轮审查：2026-09-02 ｜ 过期内容专项清理 + 全量复检 ｜ 结论：**通过**
+## 审查轮次索引
 
-## 一、审查方法
+| 轮次 | 日期 | 范围 | 结论 |
+|------|------|------|------|
+| 第一轮 | 2026-09-01 | 首轮全量（src 23模块、tests 12文件） | 通过（严重2、中等2、轻微约25处已修复） |
+| 第二轮 | 2026-09-02 | 第十五批后全量复检 | 通过（修复2项严重：数据量提醒链路断裂、分级丢失） |
+| 第三轮 | 2026-09-02 | 第十六批后全量 + wheel构建验证 | 通过（高1、中1、低2；py.typed缺失补齐） |
+| 第四轮 | 2026-09-02 | 联系人管理批次专项 | 通过（154用例全过） |
+| 第五轮 | 2026-09-02 | 过期内容专项清理 | 通过（README配置示例与代码模板同步） |
+| **第六轮** | **2026-09-03** | **qq-botpy-v2替换 / union链路 / chromium目录 / 绑定风控 / 文档重建** | **通过（union回填补接线、风控接口替换、2个日期边界测试缺陷修复）** |
 
-| 手段 | 覆盖内容 |
-|------|----------|
-| pyflakes 静态扫描 | 未用导入、未用变量、未定义名称（已全清，扫描结果为0） |
-| 引用追溯（grep） | 候选死代码的全部引用点核对 |
-| 装配审计 | `__main__` 主流程逐行核对变量作用域与生命周期 |
-| 链路核对 | 群命令/私聊命令/弹幕事件/动态/失效轮换/维护循环/Web面板 8条链路 |
-| 回归测试 | 125个用例全量通过（pytest + pytest-asyncio，37秒） |
-| 默认配置一致性 | 自动生成的 config.yaml 与解析器逐段核对（8个段全部一致） |
+## 当前全量基线（第六轮审查后）
 
-## 二、发现并已修复的问题
+| 检查 | 结果 |
+|------|------|
+| pyflakes（src+tests） | 0告警 |
+| flake8（src+tests） | 0告警 |
+| mypy | 0错误（40文件） |
+| pytest | **159个用例全过**（约48秒，无网络依赖） |
+| wheel | `blivepost-1.1.0-py3-none-any.whl`，含py.typed |
 
-### 严重（会在真实部署中触发）
-
-| # | 问题 | 位置 | 修复 |
-|---|------|------|------|
-| S1 | `fingerprint.py` 缺失 `import random` 与 `Tuple` 导入（此前WBI重构误删）——`get_cookie()` 内 `get_fingerprint()` 调用 `random.randrange` 时直接 NameError，**主进程启动即崩溃** | services/fingerprint.py | 补齐导入；新增 `test_get_cookie_full_chain` 回归（mock网络，覆盖 buvid/fingerprint/sid 全链路） |
-| S2 | `daily_report`/`live_watcher`/`consumer`/`web_panel` 在条件分支内赋值但 `finally` 无条件引用——**未启用对应功能时正常退出路径抛 NameError** | `__main__.py` | 全部预初始化为 None；`finally` 补齐 `consumer.stop()`/`web_panel.stop()`（此前消费者任务从不优雅停止） |
-
-### 中等（性能/体验）
-
-| # | 问题 | 修复 |
-|---|------|------|
-| M1 | 无 Redis 环境时 `FingerprintService` 构造**阻塞21秒**（redis-py 对 localhost 双栈地址族逐一连接重试） | `RedisCache` 连接超时收紧至1秒、禁用超时重试、**进程级降级记忆**（失败一次后本进程内直接走内存缓存） |
-| M2 | `database/service.py` 的 `get_top_super_chat` 类型注解引用未导入的 `List/Tuple`（Python 3.14 延迟注解下不报错，但 `typing.get_type_hints` 会炸） | 补齐导入 |
-
-### 轻微（代码卫生）
-
-- 删除死代码 4 项：`utils/logger.log_to_file`（旧兼容函数，零引用）、`push.MessageContext`（零引用）、`vendor/importer.import_open_live_models`（零引用）、`vendor/patch._original_handle`（保存原方法但从未使用）
-- 清理无用导入约 20 处（pyflakes 复扫为 0）
-- 测试桩缺陷修正：指纹测试真实网络请求导致套件85秒（现37秒）、consumer测试缺 `binding_store`/`bot_client` 注入
-
-## 三、功能实现核对（8条链路全部验证通过）
+### 功能链路核对（9条，第六轮全量复检）
 
 | 链路 | 路径 | 状态 |
 |------|------|------|
-| 群指令 | qqbot事件 → CommandHandler → 绑定/监控/取消/解绑/动态订阅/状态/收入/SC榜/汇总 → 被动回复 | ✅ 125个用例覆盖 |
-| 私聊指令 | on_c2c_message_create → AdminCommandHandler：/登录（扫码）/账号/移除/恢复/导出/我 | ✅ 权限分级正确 |
-| 弹幕事件 | 子进程blivedm → handler（日志+统计+落库，5类事件仅入库不推送）→ 队列 → consumer → 按房间绑定路由推送 | ✅ |
-| 开播/下播 | LIVE/PREPARING + 子进程90秒状态校正合成事件 → 富媒体推送（封面）+ 统计落库 | ✅ |
-| 动态监控 | dynamic_monitor开关（默认关）→ 每UID子进程wbi签名轮询 → 摘要/首图提取 → 富媒体推送订阅群；开播联动暂停；LiveStateWatcher批量状态共享 + 开播提醒 | ✅ |
-| 凭证失效轮换 | 子进程LOG_IN_NOTICE → 队列 → 账号标记expired → 主管理员私聊预警 → 亲和/LRU换号重建 → 池空暂停 | ✅ |
-| Cookie维护 | 6小时循环：临近过期（<7天或>25天）无头浏览器重载刷新 → 失效nav复核 → 标记+分级提醒 | ✅ |
-| Web面板 | web_panel开关 → aiohttp（HTML + /api/status JSON）：账号池/房间/动态/下播记录 | ✅ 默认仅本机 |
+| 群指令 | qqbot事件 → CommandHandler → 绑定/监控/收入/SC榜/汇总等 → 被动回复 | ✅ |
+| 私聊指令 | on_c2c_message_create → AdminCommandHandler（/登录 /账号 /导出 /体积 /我） | ✅ |
+| 弹幕事件 | 子进程blivedm → handler（日志+统计+落库）→ 队列 → consumer → 按绑定路由推送 | ✅ |
+| 开播/下播 | LIVE/PREPARING + 90秒状态校正合成事件 → 富媒体推送 + 统计落库 | ✅ |
+| 动态监控 | wbi签名轮询（每UID子进程）→ 摘要/首图富媒体推送；开播联动暂停 | ✅ |
+| 凭证失效轮换 | LOG_IN_NOTICE → 标记expired → 主管理员预警 → 亲和/LRU换号 | ✅ |
+| Cookie维护 | 6小时循环：临近过期刷新 → 失效nav复核 → 分级提醒 | ✅ |
+| Web面板 | aiohttp只读面板（token鉴权、SVG趋势图、账号健康、库体积） | ✅ |
+| **union身份链路（第六轮新增核对）** | 消息author原生解析union_openid → extract_sender（union优先）→ 群/私聊权限判定；friend_add事件author取union入库；私聊消息自动回填好友表 | ✅ 本轮补接线 |
 
-装配完整性：chromium阻塞安装 → 配置 → 数据库 → 绑定/账号池加载 → 推送服务 → 指纹 → MonitorManager → DynamicManager → 机器人 → 消费者 → 结算/watcher/面板 → 恢复房间与订阅 → 常驻等待；`finally` 全组件安全停止。默认配置模板与解析器逐段一致。
-
-## 四、保留的"看似无用"代码（有意保留，非遗留）
+### 保留的"看似无用"代码（有意保留，非遗留）
 
 | 项 | 理由 |
 |----|------|
-| `core/monitor.py`（LiveMonitor） | 顶层导出的库API（`from blivepost import LiveMonitor`），单房间库级接入场景；主流程已不使用。**建议下个大版本评估移除** |
-| `models/live.py` 的 UserInfo/DanmakuInfo/GiftInfo/SuperChatInfo/GuardInfo/DynamicInfo | 导出的库级数据模型，当前内部仅 DynamicInfo 历史引用已清；保留供库用户 |
-| `QueueDbBridge.__getattr__` 动态分发 | 设计意图：子进程侧无需枚举主进程的save_*方法清单 |
-| `push.py` 中已移除5类推送方法 | 弹幕/礼物/舰长/SC/红包仅入库为产品决策，方法与模板已同步删除，无残留 |
-
-## 五、新功能建议（按优先级）
-
-1. **按群推送粒度**（延续建议）：绑定关系增加 `push_types` 字段，各群自选订阅开播/天选等事件
-2. **Web面板鉴权与趋势图**：token认证 + 按日聚合的折线数据（`/api/history?days=30`）
-3. **账号池健康页**：Web面板增加Cookie剩余有效期分布、各账号轮换次数
-4. **失效凭证自动重扫**：expired账号每日nav复核一次，密码重登等场景恢复后自动回到可用池（当前需手动`/恢复账号`）
-5. **工程化**：CI（lint+mypy+pytest）、Dockerfile、`.env`密钥覆盖、重新构建wheel、**完成首次git提交**（当前全部改动未提交，为最高工程风险）
-
-## 六、量化摘要
-
-| 指标 | 值 |
-|------|-----|
-| 源码规模 | src/ 23个模块，约5600行 |
-| 测试 | 12个文件，125个用例，37秒（无网络依赖） |
-| 静态扫描 | pyflakes 0告警 |
-| 数据表 | 14张 |
-| 本次修复 | 严重2、中等2、轻微约25处 |
-| 本次删除 | 死代码4项 + 未用导入约20处 |
-
-## 七、遗留风险（代码外）
-
-- 仓库无任何commit，全部工作仅存于工作区——**建议立即首次提交**
-- 真机联调未做（botpy连接、扫码登录、真实群推送）
-- vendor第三方镜像时效性依赖
-
+| `core/monitor.py`（LiveMonitor） | 顶层导出的库API；主流程已不使用。建议下个大版本评估移除 |
+| `models/live.py` 的 UserInfo/DanmakuInfo/GiftInfo/SuperChatInfo/GuardInfo/DynamicInfo | 导出的库级数据模型，供库用户 |
+| `services/wbi.py`（WbiSigner/wbi_sign/derive_wbi_key） | 第六轮确认非死代码：`dynamics.py`/`fingerprint.py` 在用，`test_wbi.py` 覆盖。bilibili.py 摘除签名调用不影响其存续 |
+| `push.send_group_image` | 预留API，与单聊files接口对称 |
+| `QueueDbBridge.__getattr__` 动态分发 | 子进程侧无需枚举主进程save_*方法清单 |
 
 ---
 
-# 第二轮审查（2026-09-02）
+# 第六轮审查（2026-09-03）详细记录
 
-> 背景：第十五批（官方API对齐、数据量监控）合入后的全量复检。
-> 结论：**发现并修复1个真实bug**（数据量提醒链路断裂）；其余链路与静态检查全部通过。
+> 背景：QQ机器人SDK由官方 `qq-botpy 1.2.1` 替换为自建 `qq-botpy-v2 1.0.0`（基于官方API v2文档适配、接口兼容，已发布PyPI）前后的全量审查；随后真机反馈「绑定」命令风控失败，一并处理并重建三文档。
+> 结论：**通过**。发现并修复：union回填链路断裂（存量设计未接线）、friend_add读错层级（存量）、绑定命令风控失败（真机）、2个日期边界测试缺陷（存量）。
 
-## 一、静态检查（三项全绿）
+## 一、qq-botpy-v2替换验证
 
-| 检查 | 结果 |
-|------|------|
-| pyflakes（src+tests） | 0告警 |
-| flake8（src+tests） | 0告警 |
-| mypy（37文件，阻塞级） | 0错误 |
+- 官方 `qq-botpy 1.2.1` 卸载，自建 `qq-botpy-v2 1.0.0` 安装（替换期本地wheel钉版 `==1.0.0`，PyPI发布后由维护者放宽为 `>=1.0.0`；**PyPI wheel与本地构建的botpy包内容逐字节一致**——48个.py文件零差异）。
+- **导入包名仍为 `botpy`**，全部 `import` 零改动；发行名引用更新于 pyproject（`qq-botpy-v2==1.0.0`）与 Dockerfile。
+- 接口面核对：`botpy.http.Route`/`Client`/`Intents`/`message.C2CMessage/GroupMessage`/`manage.C2CManageEvent` 全部在位；pip依赖（aiohttp/PyYAML/APScheduler）复用现有包，`pip check` 无冲突。
+- union解析面核对：`C2CMessage._User`/`GroupMessage._User` 原生解析 `union_openid`（另含 `union_user_account`/`member_role`/`username`）；`C2CManageEvent._FriendAuthor` 原生解析好友事件author的 `union_openid`（官方1.2.1的C2CManageEvent仅有openid/timestamp，无author对象）。
 
-## 二、发现并已修复的问题
+## 二、发现并修复的问题
 
 | 级别 | 问题 | 位置 | 修复 |
 |------|------|------|------|
-| 严重 | **数据量提醒链路断裂**：`CookieMaintainer._check_db_size` 从 `db_service.db_path` 取文件路径，但该属性实际在 `DatabaseManager` 上——提醒功能从未生效 | core/manager.py | 修正取值链为 `db_service.db_manager.db_path`，并新增3个端到端测试（真链路触发/阈值内不触发/无管理员仅记录） |
-| 严重 | `CookieMaintainer._notify_admins` 丢失分级逻辑（外部修改回滚导致）——数据库体积预警发给了全部管理员而非主管理员 | core/manager.py | 恢复sensitive分级；`_check_db_size` 的提醒补传 `sensitive=True`，测试断言修正为验证MAIN名单 |
+| 高（存量） | **union「消息自动回填」从未接线**：`update_friend_union` 自第二十三批引入起全仓库无调用方（`git log -S` 核实），文档宣称的设计未实现——好友表union永远为空 | services/qqbot.py、contacts.py | `on_c2c_message_create` 补接线（author.user_openid为键、union_openid回填）；新增 `ContactEventHandler.backfill_friend_union` |
+| 高（存量） | **回填实现有幻影创建风险**：`ContactStore.update_friend_union` 走 `upsert_friend`，对未知openid会凭空创建 receive=1 的缓存记录，可能导致向非好友推送 | services/contacts.py | 改为仅更新已有记录；与缓存一致时跳过DB写入 |
+| 高（存量） | **friend_add读错层级**：读 `event.union_openid` 顶层属性，官方1.2.1与qq-botpy-v2的C2CManageEvent顶层均无此字段——两条SDK下都永远得到空串 | services/qqbot.py | 改读 `event.author.union_openid`（空author安全回退） |
+| 高（真机） | **绑定命令风控失败**：`/绑定` 走 `x/space/wbi/acc/info`（Wbi签名+登录态），真机返回-352「风控校验失败」 | services/bilibili.py | `get_room_info` 改用免签名接口：`/room/v1/Room/get_info`（uid/长号/标题/封面user_cover/观看人数，短号兼容）+ `/x/web-interface/card` 用户名片（昵称）；**实测原失败房间9646546成功返回完整信息** |
+| 中（存量） | monkeypatch union_openid解析在qq-botpy-v2下冗余（消息_User类已原生解析，补丁只剩重复赋值） | services/qqbot.py | 移除补丁30行 |
+| 低（存量） | **2个导出测试写死日期 `20260902`**：实现按当天日期生成导出文件名，测试零点后必然失败（2026-09-03 00:00起触发；日期边界测试缺陷，非产品bug） | tests/test_dynamics_and_reports.py、tests/test_export_and_pool.py | 期望文件名改为按当天日期生成；修复后159用例首次全绿 |
 
-## 三、死代码审计结果
+## 三、chromium安装位置变更
 
-| 项 | 结论 |
-|----|------|
-| `send_group_image`（群聊本地图片multipart直传） | 无内部调用——**预留API**，与单聊files接口对称，保留并注明 |
-| `LiveMonitor` / models数据类 | 库级API，保留（同第一轮结论） |
-| `_db_service_ref` | 无残留（已改为 `self.db_service` 直连） |
-| 其余 | pyflakes零告警，无未用导入/变量 |
+- `PLAYWRIGHT_BROWSERS_PATH` 默认值设为 `<运行目录>/ms-playwright`（`os.environ.setdefault`，显式配置优先——Docker经此接入）。
+- Dockerfile ENV 改为 `/app/ms-playwright`（容器内运行目录，构建期安装随镜像烘焙）；`.dockerignore`/`.gitignore` 补 `ms-playwright`——**防止本地已下载的Windows版浏览器经 `COPY . .` 混入Linux镜像**。
+- `playwright install --dry-run chromium` 实测安装位置正确（chromium与ffmpeg均指向运行目录）。
+- 顺带发现：venv中playwright包此前未实际安装（声明了依赖但缺失），已补装并随 `-e .` 验证。
 
-## 四、功能链路复检（全部通过）
+## 四、真机验证状态
 
-- 数据量监控：面板体积展示（真链路）+ 超阈值私聊提醒（跨水位去重）+ sensitive分级 ✅
-- msg_seq递增：登录流程文本(seq1)→二维码图(seq2)→结果(seq3+) ✅
-- 动态轮询：wbi签名URL + 摘要/首图提取 + 状态文件联动 ✅（单测覆盖）
-- 迁移器：v2 use_count加列对旧库升级/新库跳过 ✅
-- 其余7条链路（群命令/私聊/弹幕事件/开播下播/失效轮换/Cookie维护/Web面板）第一轮结论维持 ✅
+- **已验证**（第二十/二十二/二十五批 + 本轮）：access_token获取、websocket鉴权与心跳、终端stop、/登录权限判定（main_openids单配）、扫码流程启动、日志输出。
+- **待复验**：`/绑定` 端到端（风控修复后）、分片上传富媒体、`/v2/panels` 指令面板。
 
-## 五、量化摘要（第二轮）
-
-| 指标 | 值 |
-|------|-----|
-| 测试 | 12→13个文件，149个用例，38秒 |
-| 静态检查 | pyflakes/flake8/mypy 三项零告警 |
-| 本轮修复 | 严重2项（提醒链路断裂、分级丢失） |
-| 保留项 | send_group_image（预留）、LiveMonitor（库API） |
-
-
----
-
-# 第三轮审查（2026-09-02）
-
-> 背景：第十六批（工程化+审查修复）合入后、wheel构建前的全量代码审查。
-> 结论：**发现并修复3项问题（含1个安全隐患）**，随后构建wheel并验证内容完整性。
-
-## 一、静态与逻辑检查
-
-| 检查 | 结果 |
-|------|------|
-| pyflakes / flake8 / mypy | 三项零告警（37文件） |
-| 死代码引用核查 | `push.qqbot_config`（groups配置移除后无读取方）、`fingerprint.build_signed_url`（零引用）→ 已删除 |
-| 逻辑层检查 | `notify_admins` 字符串入参防御、动态昵称回填去重（同名跳过UPDATE）、重复的 `_check_db_size` 调用删除 |
-| 全装配集成 | 数据库/绑定/池/推送/子进程管理/动态/消费者/结算/面板/watcher 全组件实例化协同验证通过 |
-
-## 二、发现并已修复的问题
-
-| 级别 | 问题 | 修复 |
-|------|------|------|
-| 高 | **CookieMaintainer 双重 `_check_db_size` 调用**：无参调用绕过 `db_size_warn_mb=0`（不提醒）开关配置——即使管理员显式关闭仍会提醒 | 删除无参残留调用，仅保留参数化版本（尊重开关配置） |
-| 中 | `notify_admins` 对误传的单个openid字符串会逐字符发送（str是Iterable） | 增加 `isinstance(admins, str)` 防御包装 |
-| 低 | consumer 动态昵称回填每条新动态都执行UPDATE | 与已存昵称一致时跳过写库 |
-
-## 三、wheel 构建验证
-
-- 产物：`blivepost-1.1.0-py3-none-any.whl`（43文件）
-- **修复 `py.typed` 缺失**：pyproject声明了package-data但文件不存在（PEP 561类型标记无效）→ 已补建，重新构建后whl内包含
-- 依赖核对：16个运行时依赖（含playwright/qrcode，blivedm除外由vendor机制）+ 5个dev可选 ✓
-- 关键模块抽查：qqbot/dynamics/webpanel/cookie_pool/bili_login/manager/env/vendor 全在包内 ✓
-
-## 四、量化摘要（第三轮）
+## 五、第六轮量化摘要
 
 | 指标 | 值 |
 |------|-----|
-| 测试 | 149个用例全过（38秒） |
-| 静态检查 | pyflakes/flake8/mypy 三项零告警 |
-| 本轮修复 | 高1（重复调用绕过开关）、中1（str防御）、低2（回填去重、py.typed补齐） |
-| wheel | 113KB，43文件，内容完整性已验证 |
-
-
----
-
-# 第四轮审查（2026-09-02，联系人管理批次）
-
-> 背景：好友/群两张数据表、8个平台事件接线、发送前接收过滤、机器人详情面板合入后的审查。
-> 结论：**通过**；静态三项零告警；154个测试全过；wheel重建后44文件（含contacts模块与py.typed）。
-
-## 审查内容与结论
-
-| 项 | 结论 |
-|----|------|
-| 事件接线完整性 | botpy支持全部8个事件（friend_add/del、group_add/del_robot、group/c2c_msg_receive/reject），`_PushClient`已全部接线到ContactEventHandler |
-| 退群解绑链路 | on_group_del：群标记del+receive=0 → 遍历该群绑定房间 → 逐个unbind → monitor_manager.remove |
-| 发送前过滤 | PushService.send_message/push_media_message在路由后过滤未开启接收的群（未知群默认放行） |
-| 预留API | send_group_image无内部调用（对称预留） |
-| wheel | 44文件（新增contacts.py），py.typed包含 |
-| lint | 新增代码2处E501、1处E127已修复归零 |
-
-## 本批新增组件
-
-- 数据表：friend（openid唯一/nickname/del_flag/msg_receive）、bot_group（group_openid唯一/group_name/del_flag/msg_receive）
-- services/contacts.py：ContactStore（内存+DB）+ ContactEventHandler（事件处理与退群清理）
-- qqbot：8个平台事件回调 + send_group_image（multipart本地直传）
-- push.py：contact_store过滤（发送前检查接收开关）
-- webpanel：机器人详情（username/avatar/分享按钮）+ token鉴权 + SVG趋势图 + 账号健康列
-
+| 测试 | 159用例全过（本轮修复2个日期缺陷后首次全绿；154→159为此前批次增量） |
+| 静态检查 | pyflakes/flake8/mypy 三项零告警（mypy 40文件） |
+| 本次移除 | botpy monkeypatch 30行；bilibili.py 的 Wbi 签名调用链约40行 |
+| 本次新增 | 私聊消息union回填写线、chromium运行目录机制 |
+| 真机 | 绑定房间9646546经新接口链路实测成功 |
 
 ---
 
-# 第五轮审查（2026-09-02，过期内容专项）
+# 历史轮次记录（第一~第五轮，细节见git历史）
 
-> 背景：项目经历十六批迭代后，专项清理文档与代码中的过期内容，并做全量复检。
-> 结论：**通过**。发现并清理了README中最严重的过期内容（配置示例仍是早期版本）。
+## 第一轮（2026-09-01，首轮全量）
 
-## 发现与清理
+- **严重**：S1 `fingerprint.py` 缺 `import random`/`Tuple`（WBI重构误删）——启动即崩溃；S2 `daily_report`/`live_watcher`/`consumer`/`web_panel` 条件分支赋值但finally无条件引用——正常退出路径NameError。均修复。
+- **中等**：无Redis环境FingerprintService构造阻塞21秒 → 连接超时收紧+进程级降级记忆；`get_top_super_chat` 注解引用未导入类型 → 补齐。
+- **轻微**：死代码4项删除；无用导入约20处清理；测试桩缺陷修正。
+- 8条功能链路核对通过；`LiveMonitor`/models数据类等"看似无用"代码确立保留结论。
 
-| 项 | 问题 | 处理 |
-|----|------|------|
-| README配置示例严重过时 | 仍为早期版本（含已删除的Dynamic段、旧Setting的dm/gift/ship开关、缺QQBot/Admin/Template/Web等全部新段） | **直接从代码模板同步**（`Settings._create_default_config`生成的最新内容），杜绝再次漂移 |
-| push.py过时注释 | "由外部（main/LiveMonitor）设置"——LiveMonitor已不在主流程 | 注释更新 |
-| PROJECT.md建议列表过期 | "数据量监控"已实现仍列在建议中 | 移除，替换为"数据治理工具"（按需的治理工具方向） |
-| 死代码复核 | `send_group_image`（预留）、`LiveMonitor`（库API）等 | 维持保留结论 |
+## 第二轮（2026-09-02，第十五批后复检）
 
-## 全量复检
+- **严重**：`CookieMaintainer._check_db_size` 从 `db_service.db_path` 取值（实际在 `db_manager` 上）——数据量提醒从未生效；`_notify_admins` 分级丢失——预警误发全部管理员。均修复并补端到端测试。
+- 死代码审计：`send_group_image` 确立预留API结论；`_db_service_ref` 残留清除。
+- 数据量监控、msg_seq递增、动态轮询、迁移器复检通过。
 
-| 检查 | 结果 |
-|------|------|
-| pyflakes（src+tests） | 0告警 |
-| flake8（src+tests） | 0告警 |
-| mypy（38文件） | 0错误 |
-| pytest | 154个用例全过 |
-| wheel | 重建后44文件，contacts模块与py.typed均在 |
+## 第三轮（2026-09-02，工程化批次后）
 
-## 过期内容清理原则（供后续维护参考）
+- **高**：`_check_db_size` 无参重复调用绕过 `db_size_warn_mb=0` 开关——删除残留。
+- **中**：`notify_admins` 对字符串入参逐字符发送——加防御包装。
+- **低**：动态昵称回填去重；**py.typed缺失补齐**（pyproject声明了package-data但文件不存在，PEP 561无效）。
+- wheel构建验证：43文件、依赖核对、关键模块抽查通过。
 
-- 配置示例：以代码内`_create_default_config`为唯一真源，文档示例从中生成
-- 事件/接口描述：以官方文档核对结论为准，标注"已核对"与"待真机验证"
-- 修复批次记录：PROJECT.md保留摘要，过程细节留在git历史与REVIEW.md
+## 第四轮（2026-09-02，联系人管理批次）
+
+- friend/bot_group两表、8个平台事件接线、退群自动解绑清理、发送前接收过滤、机器人详情面板——审查通过；lint归零；wheel 44文件。
+
+## 第五轮（2026-09-02，过期内容专项）
+
+- README配置示例严重过时 → **从代码 `_create_default_config` 同步**，确立"配置示例以代码模板为唯一真源"原则（第六轮复核仍一致）。
+- push.py过时注释更新；PROJECT.md过期建议清理；保留项复核维持。
+- 过期内容清理原则固化：配置示例从模板生成；接口描述标注"已核对/待真机验证"；批次细节留git历史与REVIEW.md。
+
+## 遗留风险（代码外）
+
+- 真机联调部分完成：见第六轮"真机验证状态"，绑定/分片上传/指令面板待复验。
+- vendor第三方镜像时效性依赖（blivedm运行时下载）。
+- chromium首次安装约180MB（现装于运行目录；Docker镜像已预装）。
+- Web面板未配置web_token时不鉴权（默认仅本机，远程访问应配置token或反代）。

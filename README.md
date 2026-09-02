@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)](https://github.com/luomuyu/blivepost)
+[![Version](https://img.shields.io/badge/version-1.1.0-orange.svg)](https://github.com/luomuyu/blivepost)
 
 B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化Python应用
 
@@ -10,7 +10,7 @@ B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化P
 
 ### 核心功能
 - 🔴 **直播监控** - 实时监控B站直播间，支持弹幕、礼物、上舰、SC、红包等消息
-- 📢 **消息推送** - 通过QQ官方机器人（[botpy](https://github.com/tencent-connect/botpy)）主动推送消息到QQ群，开播推送支持图片富媒体（失败自动回退文本）
+- 📢 **消息推送** - 通过QQ官方机器人（自建[qq-botpy-v2](https://github.com/tencent-connect/botpy)适配版，接口兼容官方botpy）主动推送消息到QQ群，开播推送支持图片富媒体（失败自动回退文本）
 - 📊 **数据统计** - 弹幕/礼物/舰长/SC/红包入库，支持群指令查询、跨房间汇总、每日/每周/每月自动结算与CSV/JSON导出
 - 🖥️ **Web状态面板** - 可选只读面板：账号池健康（剩余有效期/使用次数/关联房间）、监控房间当日汇总、收入趋势折线图（SVG）、动态订阅、下播记录；支持token鉴权与 `/api/history` JSON接口（默认关闭，仅本机访问）
 
@@ -31,17 +31,14 @@ B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化P
 git clone https://github.com/luomuyu/blivepost.git
 cd blivepost
 
-# 安装依赖
+# 安装（自动安装全部依赖，含PyPI的qq-botpy-v2；blivedm由vendor机制运行时下载）
 pip install -e .
-
-# 或者使用 pip 安装
-pip install blivepost
 ```
 
 ### 依赖要求
 
 - Python 3.11+
-- 扫码登录需要无头浏览器内核（获取完整cookie必需）：`pip install`时自动安装playwright依赖，**chromium内核在程序启动时自动下载**（已装时秒级跳过），也可手动执行`playwright install chromium`
+- 扫码登录需要无头浏览器内核（获取完整cookie必需）：`pip install`时自动安装playwright依赖，**chromium内核在程序启动时自动下载到运行目录`ms-playwright/`**（已装时秒级跳过），也可手动执行`playwright install chromium`
 - blivedm (自动安装)
 - requests
 - PyYAML
@@ -166,24 +163,25 @@ blivepost/
 │   │   ├── monitor.py       # LiveMonitor（早期库API，主流程已不用）
 │   │   └── handler.py       # 直播事件处理（日志/统计/落库/推送开关）
 │   ├── services/
-│   │   ├── qqbot.py         # QQ机器人客户端（botpy封装）
+│   │   ├── qqbot.py         # QQ机器人客户端（qq-botpy-v2封装）
 │   │   ├── commands.py      # 群指令
 │   │   ├── admin_commands.py# 管理员私聊指令
 │   │   ├── bindings.py      # 群绑定+动态订阅存储
+│   │   ├── contacts.py      # 联系人管理（好友/群状态、union_openid）
 │   │   ├── cookie_pool.py   # Cookie账号池
 │   │   ├── bili_login.py    # 扫码登录（Playwright无头）
 │   │   ├── dynamics.py      # UP主动态轮询管理
 │   │   ├── push.py          # 推送服务（模板/路由/富媒体）
 │   │   ├── report.py        # 日/周/月结算推送
-│   │   ├── bilibili.py      # B站API
+│   │   ├── bilibili.py      # B站API（免签名直播间/用户接口）
 │   │   ├── fingerprint.py   # 指纹服务
 │   │   ├── wbi.py           # WBI签名
 │   │   └── webpanel.py      # Web状态面板
-│   ├── database/            # 模型/引擎/服务（14张表）
+│   ├── database/            # 模型/引擎/服务（14张表）+ Schema迁移器
 │   ├── models/live.py       # 数据模型
-│   ├── utils/logger.py      # 日志（按天轮转）
+│   ├── utils/               # 日志、sender提取（union优先）、TCP预检
 │   └── vendor/              # blivedm下载与补丁
-├── tests/                   # 单元测试（125个）
+├── tests/                   # 单元测试（159个）
 ├── pyproject.toml
 └── PROJECT.md               # 详细项目信息与审查记录
 ```
@@ -345,6 +343,16 @@ class MyPushService(PushService):
 
 ## 📝 更新日志
 
+### v1.1.0 (2026-09)
+
+- ✨ Cookie账号池：扫码登录、多账号轮转、房间亲和、临近过期自动刷新、失效轮换+每日重扫
+- ✨ 动态监控：UP主订阅、富媒体推送、开播联动；Web状态面板（token鉴权、趋势图）
+- ✨ 联系人管理：好友/群状态跟踪、退群自动解绑、发送前接收过滤、union_openid链路
+- ✨ 数据治理：Schema迁移器、数据永久保留、库体积监控、CSV/JSON导出
+- 🔧 QQ机器人SDK切换为自建qq-botpy-v2（对齐官方API v2：分片上传、指令面板、msg_seq）
+- 🔧 绑定命令改用免签名B站接口，规避acc/info风控（-352）
+- 🔧 chromium内核安装到运行目录ms-playwright/（便携部署，Docker烘焙进镜像）
+
 ### v1.0.0 (2026-03)
 
 - 🎉 完全重构项目架构
@@ -366,4 +374,4 @@ class MyPushService(PushService):
 ## 🙏 致谢
 
 - [blivedm](https://github.com/xfgryujk/blivedm) - B站直播弹幕库
-- [botpy](https://github.com/tencent-connect/botpy) - QQ机器人官方Python SDK
+- [botpy](https://github.com/tencent-connect/botpy) - QQ机器人官方Python SDK（本项目使用的qq-botpy-v2基于其接口风格适配最新API v2文档）
