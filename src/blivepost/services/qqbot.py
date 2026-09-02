@@ -4,6 +4,7 @@ QQ官方机器人推送客户端（基于botpy）
 """
 
 import asyncio
+import hashlib
 import os
 from typing import Any, Iterable, Optional, TYPE_CHECKING
 
@@ -508,21 +509,10 @@ class QQBotClient:
             return False
 
         try:
-            # 官方v2 files接口：multipart本地上传（file_data字段）
-            form = aiohttp.FormData()
-            form.add_field("file_type", "1")
-            form.add_field("srv_send_msg", "false")
-            if msg_id:
-                form.add_field("msg_id", msg_id)
-                form.add_field("msg_seq", str(msg_seq))
-            form.add_field(
-                "file_data",
-                image_bytes,
-                filename=filename,
-                content_type="image/png" if filename.endswith(".png") else "image/jpeg",
-            )
-            route = Route("POST", "/v2/users/{openid}/files", openid=openid)
-            media = await self._client.api._http.request(route, data=form)
+            media = await self._upload_image_file(openid, image_bytes, filename)
+            if media is None:
+                logger.error(f"私聊图片上传失败: user={openid}")
+                return False
 
             await self._client.api.post_c2c_message(
                 openid=openid,
@@ -536,6 +526,87 @@ class QQBotClient:
         except Exception as e:
             logger.error(f"发送私聊图片失败: user={openid}, error={e}")
             return False
+
+
+    async def _upload_image_file(self, openid: str, image_bytes: bytes,
+                                 filename: str):
+        """
+        按官方文档分片上传本地图片，返回files接口的media（file_info）
+
+        流程：upload_prepare（MD5/SHA1校验）→ 逐片PUT预签名URL →
+        upload_part_finish逐片确认 → files合并返回media。
+
+        Args:
+            openid: 用户openid
+            image_bytes: 图片二进制数据
+            filename: 文件名
+
+        Returns:
+            media对象（file_info），失败返回None
+        """
+        api = self._client.api
+        http = api._http
+        file_size = len(image_bytes)
+        md5 = hashlib.md5(image_bytes).hexdigest()
+        sha1 = hashlib.sha1(image_bytes).hexdigest()
+        # 文档要求：文件前10002432字节（约10MB）的MD5；不足10MB时即整个文件
+        md5_10m = hashlib.md5(image_bytes[:10002432]).hexdigest()
+
+        prepare = await http.request(
+            Route("POST", "/v2/users/{user_id}/upload_prepare", user_id=openid),
+            json={
+                "file_type": 1,
+                "file_size": str(file_size),
+                "file_name": filename,
+                "md5": md5,
+                "sha1": sha1,
+                "md5_10m": md5_10m,
+            },
+        )
+        upload_id = (prepare or {}).get("upload_id")
+        parts = (prepare or {}).get("parts") or []
+        if not upload_id or not parts:
+            logger.error(f"upload_prepare未返回上传任务: {prepare}")
+            return None
+
+        # 逐片PUT到预签名URL（COS）
+        import aiohttp as _aiohttp
+        async with _aiohttp.ClientSession() as put_session:
+            for part in parts:
+                index = int(part.get("index", 0))
+                presigned = part.get("presigned_url") or ""
+                block = int(part.get("block_size") or 0) or 5 * 1024 * 1024
+                chunk = image_bytes[index * block:(index + 1) * block]
+                chunk_md5 = hashlib.md5(chunk).hexdigest()
+                async with put_session.put(presigned, data=chunk) as put_resp:
+                    if put_resp.status not in (200, 201, 206):
+                        body = await put_resp.text()
+                        logger.error(f"分片PUT失败 index={index}: "
+                                     f"{put_resp.status} {body[:120]}")
+                        return None
+                # 逐片确认
+                await http.request(
+                    Route("POST", "/v2/users/{user_id}/upload_part_finish",
+                          user_id=openid),
+                    json={
+                        "upload_id": upload_id,
+                        "part_index": index,
+                        "block_size": str(len(chunk)),
+                        "md5": chunk_md5,
+                    },
+                )
+
+        # 合并：携带upload_id调用files接口
+        media = await http.request(
+            Route("POST", "/v2/users/{openid}/files", openid=openid),
+            json={
+                "file_type": 1,
+                "upload_id": upload_id,
+                "file_name": filename,
+                "srv_send_msg": False,
+            },
+        )
+        return media
 
     async def send_group_image(
         self,

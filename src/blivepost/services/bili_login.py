@@ -139,7 +139,7 @@ class BiliLoginService:
 
     def __init__(
         self,
-        on_qrcode: Optional[Callable[[bytes], Awaitable[None]]] = None,
+        on_qrcode: Optional[Callable[[bytes, str], Awaitable[None]]] = None,
         timeout: int = 180,
         headless: bool = True,
     ):
@@ -147,7 +147,7 @@ class BiliLoginService:
         初始化登录服务
 
         Args:
-            on_qrcode: 二维码图片回调（PNG bytes），用于展示给管理员
+            on_qrcode: 二维码回调（PNG bytes, 二维码URL），用于展示给管理员
             timeout: 单个二维码的扫码等待时长（秒）
             headless: 是否无头模式
         """
@@ -212,7 +212,7 @@ class BiliLoginService:
             # 渲染二维码并展示
             if self._on_qrcode is not None:
                 try:
-                    await self._on_qrcode(render_qrcode_png(qrcode_url))
+                    await self._on_qrcode(render_qrcode_png(qrcode_url), qrcode_url)
                 except Exception as e:
                     logger.error(f"二维码展示回调失败: {e}")
 

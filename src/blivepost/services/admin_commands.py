@@ -189,14 +189,17 @@ class AdminCommandHandler:
             seq_counter["n"] += 1
             return seq_counter["n"]
 
-        async def on_qrcode(png: bytes) -> None:
-            """二维码图片回调：私聊发给管理员"""
+        async def on_qrcode(png: bytes, qrcode_url: str) -> None:
+            """二维码回调：图片私聊发给管理员；失败回退为文本链接（电脑打开扫码）"""
             sent = await bot.send_c2c_image(
                 openid, png, msg_id=msg_id, filename="bili_qrcode.png", msg_seq=next_seq()
             )
             if not sent:
                 await bot.send_c2c_message(
-                    openid, "二维码图片发送失败，请检查机器人图片发送权限", msg_id=msg_id
+                    openid,
+                    "二维码图片发送失败。可在电脑浏览器打开以下链接显示二维码后扫码：\n"
+                    + qrcode_url,
+                    msg_id=msg_id, msg_seq=next_seq()
                 )
 
         service = BiliLoginService(on_qrcode=on_qrcode, timeout=180)
