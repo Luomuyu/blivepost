@@ -22,6 +22,8 @@ logger = get_logger("migrations")
 MIGRATIONS: List[Tuple[int, str, str, List[str]]] = [
     (2, "cookie_account.use_count", "cookie_account",
      ["ALTER TABLE cookie_account ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0"]),
+    (3, "friend.union_openid", "friend",
+     ["ALTER TABLE friend ADD COLUMN union_openid VARCHAR(64)"]),
 ]
 
 SCHEMA_VERSION_TABLE = "schema_version"

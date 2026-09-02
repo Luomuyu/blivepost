@@ -77,3 +77,41 @@ def test_migration_skips_fresh_db():
         assert len(accounts) == 1
     finally:
         asyncio.run(db.close())
+
+
+def test_migration_upgrades_legacy_friend_table():
+    """旧friend表（无union_openid列）经迁移补齐，且新库迁移跳过"""
+    tmp = tempfile.mkdtemp()
+    db_path = os.path.join(tmp, "legacy.db")
+
+    # 模拟v2旧库：friend表无union_openid列
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE friend (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "openid TEXT UNIQUE, nickname TEXT DEFAULT '', del_flag INTEGER DEFAULT 0, "
+        "msg_receive INTEGER DEFAULT 1)"
+    )
+    conn.execute("INSERT INTO friend (openid, nickname) VALUES ('O1', '好友甲')")
+    conn.commit()
+    conn.close()
+
+    settings = Settings()
+    settings.database.sqlite_path = db_path
+
+    async def run():
+        db = DatabaseManager(settings.database)
+        await db.initialize()
+        svc = DatabaseService(db)
+        friends = await svc.load_friends()
+        return db, friends
+
+    db, friends = asyncio.run(run())
+    try:
+        conn = sqlite3.connect(db_path)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(friend)")}
+        rows = list(conn.execute("SELECT openid, nickname, union_openid FROM friend"))
+        conn.close()
+        assert "union_openid" in cols
+        assert rows == [("O1", "好友甲", None)]
+    finally:
+        asyncio.run(db.close())
