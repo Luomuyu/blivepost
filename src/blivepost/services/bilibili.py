@@ -103,6 +103,29 @@ class BilibiliAPI:
             logger.warning(f"查询直播间{room_id}状态异常: {e}")
             return None
 
+    def get_status_info_by_uids(self, uids: list) -> dict:
+        """
+        批量查询直播间与主播状态（免登录，POST JSON；上限50个/次）
+
+        Args:
+            uids: 主播mid列表
+
+        Returns:
+            dict: {int uid: {title, room_id, uid, online, live_status, short_id,
+                  area_v2_name, area_v2_parent_name, uname, face, cover_from_user,
+                  keyframe, ...}}
+
+        Raises:
+            ValueError: 查询失败时抛出
+        """
+        url = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids"
+        response = requests.post(url, json={"uids": [int(u) for u in uids]},
+                                 headers=self.HEADERS, timeout=10)
+        data = response.json()
+        if data.get("code", 0) != 0:
+            raise ValueError(f"批量查询直播间状态失败: {data.get('message', '未知错误')}")
+        return {int(k): v for k, v in (data.get("data") or {}).items()}
+
     def get_user_name(self, uid: int) -> str:
         """
         获取用户昵称（用户名片接口，免签名无风控；失败返回空串）

@@ -314,6 +314,40 @@ class DynamicBindingRecord(Base):
     )
 
 
+class StreamerRecord(Base):
+    """主播信息表(绑定主播的资料快照：绑定时写入、每日0点get_status_info_by_uids批量刷新)"""
+    __tablename__ = "streamer"
+
+    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    uid: Mapped[int] = mapped_column(BigInteger, unique=True, comment="主播UID")
+    uname: Mapped[str] = mapped_column(String(100), default="", comment="主播昵称")
+    face: Mapped[str] = mapped_column(String(255), default="", comment="主播头像url")
+    room_id: Mapped[int] = mapped_column(BigInteger, default=0, comment="主直播间长号")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="添加时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+
+
+class LiveRoomRecord(Base):
+    """直播间信息表(绑定直播间的资料快照，与主播表同源刷新)"""
+    __tablename__ = "live_room"
+
+    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, unique=True, comment="直播间长号")
+    uid: Mapped[int] = mapped_column(BigInteger, index=True, default=0, comment="主播UID")
+    title: Mapped[str] = mapped_column(String(200), default="", comment="直播间标题")
+    short_id: Mapped[int] = mapped_column(BigInteger, default=0, comment="短号(0为无)")
+    live_status: Mapped[int] = mapped_column(Integer, default=0, comment="开播状态(0未开/1直播/2轮播)")
+    area_name: Mapped[str] = mapped_column(String(50), default="", comment="分区名")
+    parent_area_name: Mapped[str] = mapped_column(String(50), default="", comment="父分区名")
+    cover: Mapped[str] = mapped_column(String(255), default="", comment="直播间封面url")
+    keyframe: Mapped[str] = mapped_column(String(255), default="", comment="关键帧url")
+    online: Mapped[int] = mapped_column(BigInteger, default=0, comment="在线人数")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="添加时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+
+
 class LiveStatusRecord(Base):
     """开播/下播记录表"""
     __tablename__ = "live_status"

@@ -35,9 +35,6 @@ _env = Environment(
     autoescape=True,
 )
 
-# 主播昵称缓存：{uid: (过期时刻, 昵称)}，避免每次刷新重复请求名片接口
-_NAME_CACHE_TTL = 6 * 3600
-
 
 class WebPanel:
     """Web状态面板服务"""
@@ -64,7 +61,6 @@ class WebPanel:
         self.token = token
         self.bot_client = bot_client
         self._runner: Optional[web.AppRunner] = None
-        self._name_cache: dict = {}
 
     async def start(self) -> None:
         """启动HTTP服务"""
@@ -178,9 +174,7 @@ class WebPanel:
         }
 
     async def _streamer_name(self, room_id: int) -> str:
-        """
-        查询直播间对应主播昵称（绑定关系携带主播uid → 名片接口查昵称，带缓存）
-        """
+        """直播间对应主播昵称（直接读库：绑定时写入、每日0点批量刷新）"""
         uid = 0
         if self.binding_store is not None:
             for group in self.binding_store.get_monitored_groups(room_id):
@@ -188,18 +182,9 @@ class WebPanel:
                 if b is not None and b.uid:
                     uid = b.uid
                     break
-        if not uid:
+        if not uid or self.db_service is None:
             return ""
-        now = datetime.now().timestamp()
-        cached = self._name_cache.get(uid)
-        if cached and cached[0] > now:
-            return cached[1]
-        from .bilibili import BilibiliAPI
-        import asyncio as _asyncio
-        name = await _asyncio.to_thread(BilibiliAPI().get_user_name, uid)
-        if name:
-            self._name_cache[uid] = (now + _NAME_CACHE_TTL, name)
-        return name
+        return await self.db_service.get_streamer_name(uid)
 
     # ========== 页面与局部渲染 ==========
 

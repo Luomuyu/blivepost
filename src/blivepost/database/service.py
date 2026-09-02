@@ -15,7 +15,7 @@ from .models import (
     AnchorRecord, RedPocketRecord, GuardAchievementRecord,
     SystemEventRecord, RoomChangeRecord, LiveStatusRecord, EventType, local_now,
     GroupBindingRecord, CookieAccountRecord, DynamicBindingRecord,
-    FriendRecord, GroupRecord
+    FriendRecord, GroupRecord, StreamerRecord, LiveRoomRecord
 )
 from ..utils.logger import get_logger
 
@@ -1139,6 +1139,122 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存群记录失败: {e}")
+
+    # ========== 主播与直播间信息快照 ==========
+
+    async def save_streamer_info(self, uid: int, uname: str = "", face: str = "",
+                                 room_id: int = 0) -> None:
+        """保存/更新主播信息（按uid upsert；字段仅有值时覆盖）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(StreamerRecord).where(StreamerRecord.uid == uid))
+                record = result.scalar_one_or_none()
+                if record is None:
+                    session.add(StreamerRecord(uid=uid, uname=uname, face=face,
+                                               room_id=room_id))
+                else:
+                    if uname:
+                        record.uname = uname
+                    if face:
+                        record.face = face
+                    if room_id:
+                        record.room_id = room_id
+                await session.commit()
+        except Exception as e:
+            logger.error(f"保存主播信息失败(uid={uid}): {e}")
+
+    async def save_live_room_info(self, room_id: int, uid: int = 0, title: str = "",
+                                  short_id: int = 0, live_status: Optional[int] = None,
+                                  area_name: str = "", parent_area_name: str = "",
+                                  cover: str = "", keyframe: str = "",
+                                  online: Optional[int] = None) -> None:
+        """保存/更新直播间信息（按room_id upsert；字段仅有值时覆盖）"""
+        if not room_id:
+            return
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(LiveRoomRecord).where(LiveRoomRecord.room_id == room_id))
+                record = result.scalar_one_or_none()
+                if record is None:
+                    session.add(LiveRoomRecord(
+                        room_id=room_id, uid=uid, title=title, short_id=short_id,
+                        live_status=live_status if live_status is not None else 0,
+                        area_name=area_name, parent_area_name=parent_area_name,
+                        cover=cover, keyframe=keyframe,
+                        online=online if online is not None else 0))
+                else:
+                    if uid:
+                        record.uid = uid
+                    if title:
+                        record.title = title
+                    if short_id:
+                        record.short_id = short_id
+                    if live_status is not None:
+                        record.live_status = live_status
+                    if area_name:
+                        record.area_name = area_name
+                    if parent_area_name:
+                        record.parent_area_name = parent_area_name
+                    if cover:
+                        record.cover = cover
+                    if keyframe:
+                        record.keyframe = keyframe
+                    if online is not None:
+                        record.online = online
+                await session.commit()
+        except Exception as e:
+            logger.error(f"保存直播间信息失败(room={room_id}): {e}")
+
+    async def apply_status_info(self, status_by_uid: dict) -> None:
+        """
+        批量写入主播/直播间信息快照（get_status_info_by_uids返回结构，键为主播uid）
+
+        每个uid的条目同时更新streamer（uname/face/room_id）与live_room
+        （title/short_id/live_status/分区/封面/在线）两表。
+        """
+        for uid_key, info in status_by_uid.items():
+            try:
+                uid = int(uid_key)
+                room_id = int(info.get("room_id") or 0)
+                await self.save_streamer_info(
+                    uid, uname=str(info.get("uname") or ""),
+                    face=str(info.get("face") or ""), room_id=room_id)
+                await self.save_live_room_info(
+                    room_id, uid=uid, title=str(info.get("title") or ""),
+                    short_id=int(info.get("short_id") or 0),
+                    live_status=int(info.get("live_status") or 0),
+                    area_name=str(info.get("area_v2_name") or info.get("area_name") or ""),
+                    parent_area_name=str(info.get("area_v2_parent_name") or ""),
+                    cover=str(info.get("cover_from_user") or ""),
+                    keyframe=str(info.get("keyframe") or ""),
+                    online=int(info.get("online") or 0))
+            except (ValueError, TypeError) as e:
+                logger.warning(f"跳过无效的状态条目({uid_key}): {e}")
+
+    async def get_streamer_name(self, uid: int) -> str:
+        """查询主播昵称（streamer表，绑定时写入/每日0点刷新）"""
+        if not uid:
+            return ""
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(StreamerRecord.uname).where(StreamerRecord.uid == uid))
+                return str(result.scalar_one_or_none() or "")
+        except Exception as e:
+            logger.error(f"查询主播昵称失败(uid={uid}): {e}")
+            return ""
+
+    async def streamer_count(self) -> int:
+        """主播表行数（启动回填判断用）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(func.count()).select_from(StreamerRecord))
+                return int(res.scalar() or 0)
+        except Exception as e:
+            logger.error(f"查询主播表行数失败: {e}")
+            return 0
 
     async def load_groups(self) -> list:
         try:

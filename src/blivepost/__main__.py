@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .core.manager import MonitorManager, PushQueueConsumer, CookieMaintainer
+from .core.manager import MonitorManager, PushQueueConsumer, CookieMaintainer, StreamerRefresher
 from .database import DatabaseManager, DatabaseService
 from .services.admin_commands import AdminCommandHandler
 from .services.bilibili import BilibiliAPI
@@ -187,6 +187,7 @@ async def main_async(
     consumer = None
     web_panel = None
     admin_handler = None
+    streamer_refresher = None
 
     try:
         # 加载配置（文件不存在时自动生成默认配置）
@@ -343,6 +344,11 @@ async def main_async(
         )
         maintainer.start()
 
+        # 绑定主播信息每日0点批量刷新（streamer/live_room两表快照）
+        streamer_refresher = StreamerRefresher(binding_store, db_service)
+        streamer_refresher.start()
+        await streamer_refresher.backfill_if_empty()
+
         # 恢复上次运行中处于监控状态的房间与动态订阅
         await monitor_manager.restore(binding_store.get_monitored_room_ids())
         dynamic_ups = binding_store.get_dynamic_up_uids() \
@@ -413,6 +419,13 @@ async def main_async(
             pass
         try:
             await maintainer.stop()
+        except Exception:
+            pass
+
+        # 停止主播信息每日刷新
+        try:
+            if streamer_refresher:
+                await streamer_refresher.stop()
         except Exception:
             pass
 

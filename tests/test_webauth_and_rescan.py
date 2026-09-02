@@ -295,3 +295,94 @@ async def test_rescan_skips_still_invalid(tmp_path, monkeypatch):
     assert n == 0
     assert pool.get_account(1).status == "expired"
     await db.close()
+
+
+# ==================== 主播/直播间信息表 ====================
+
+
+async def test_streamer_and_room_tables(tmp_path):
+    """主播/直播间快照表：按uid/room_id upsert、仅有值时覆盖"""
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    await svc.save_streamer_info(91156053, uname="墨翎", room_id=9646546)
+    await svc.save_streamer_info(91156053, uname="墨翎2")  # 仅更新有值字段
+    assert await svc.get_streamer_name(91156053) == "墨翎2"
+    assert await svc.get_streamer_name(1) == ""
+    assert await svc.streamer_count() == 1
+
+    await svc.save_live_room_info(9646546, uid=91156053, title="标题",
+                                  live_status=1, online=5, area_name="虚拟主播")
+    await svc.save_live_room_info(9646546, online=9)  # 仅覆盖online
+    # 借apply_status_info刷新主播昵称验证room表联动不受影响
+    assert await svc.streamer_count() == 1
+    await db.close()
+
+
+async def test_apply_status_info(tmp_path):
+    """get_status_info_by_uids结构批量写入两表"""
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    await svc.apply_status_info({
+        "672328094": {
+            "title": "【B限】玩个毛线", "room_id": 22637261, "uid": 672328094,
+            "online": 4087370, "live_status": 2, "short_id": 0,
+            "area_v2_name": "虚拟主播", "area_v2_parent_name": "虚拟主播",
+            "uname": "嘉然今天吃什么", "face": "http://example.com/f.jpg",
+            "cover_from_user": "http://example.com/c.jpg", "keyframe": "http://example.com/k.jpg",
+        },
+        "bad": {"room_id": 1},  # 非法键跳过不抛
+    })
+    assert await svc.get_streamer_name(672328094) == "嘉然今天吃什么"
+    assert await svc.streamer_count() == 1
+    await db.close()
+
+
+def test_get_bound_uids():
+    """全部绑定关系中的主播uid（去重、去0）"""
+    from blivepost.services.bindings import Binding, BindingStore
+    store = BindingStore(None)
+    store._bindings = {
+        "G1": {1: Binding("G1", 1, uid=5), 2: Binding("G1", 2, uid=7)},
+        "G2": {3: Binding("G2", 3, uid=5), 4: Binding("G2", 4, uid=0)},
+    }
+    assert store.get_bound_uids() == [5, 7]
+
+
+async def test_streamer_refresher_batch(tmp_path, monkeypatch):
+    """每日刷新：分批查询并落库两表"""
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+
+    from blivepost.services.bindings import Binding, BindingStore
+    store = BindingStore(None)
+    store._bindings = {
+        "G1": {1: Binding("G1", 1, uid=7), 2: Binding("G1", 2, uid=8)},
+    }
+
+    class FakeAPI:
+        def __init__(self):
+            pass
+
+        def get_status_info_by_uids(self, uids):
+            return {str(u): {"uname": f"u{u}", "room_id": 1000 + u, "uid": u,
+                             "live_status": 1, "online": 10} for u in uids}
+
+    import blivepost.services.bilibili as bili
+    monkeypatch.setattr(bili, "BilibiliAPI", FakeAPI)
+
+    from blivepost.core.manager import StreamerRefresher
+    refresher = StreamerRefresher(store, svc)
+    n = await refresher.refresh_once()
+    assert n == 2
+    assert await svc.streamer_count() == 2
+    assert await svc.get_streamer_name(7) == "u7"
+    await db.close()

@@ -169,6 +169,20 @@ class BindingStore:
             if b.monitored
         })
 
+    def get_bound_uids(self) -> List[int]:
+        """
+        获取全部绑定关系中的主播uid（去重、去0；每日0点批量刷新用）
+
+        Returns:
+            List[int]: 排序后的主播uid列表
+        """
+        return sorted({
+            b.uid
+            for bindings in self._bindings.values()
+            for b in bindings.values()
+            if b.uid
+        })
+
     def get_group_bindings(self, group_openid: str) -> List[Binding]:
         """获取群的所有绑定关系"""
         return list(self._bindings.get(group_openid, {}).values())

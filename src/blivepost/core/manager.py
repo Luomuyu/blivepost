@@ -16,7 +16,7 @@ import asyncio
 import multiprocessing
 import os
 import queue
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import aiohttp
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
@@ -1030,3 +1030,93 @@ class CookieMaintainer:
             logger.warning(f"机器人未启动，无法私聊提醒管理员: {content}")
             return
         await self.bot_client.notify_admins(targets, content)
+
+
+class StreamerRefresher:
+    """
+    绑定主播信息每日0点批量刷新（主进程）
+
+    通过免登录的get_status_info_by_uids批量查询全部绑定主播，
+    更新streamer与live_room两表快照（WebPanel主播名直接读库，
+    不再实时调API）。
+    """
+
+    BATCH_SIZE = 50  # get_status_info_by_uids单次上限
+
+    def __init__(self, binding_store, db_service):
+        """
+        Args:
+            binding_store: 群绑定存储（取全部绑定主播uid）
+            db_service: 数据库服务（快照写入）
+        """
+        self.binding_store = binding_store
+        self.db_service = db_service
+        self._task: Optional[asyncio.Task] = None
+
+    def start(self) -> None:
+        """启动每日刷新循环（需在事件循环内调用）"""
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self.run(), name="streamer-refresher")
+            logger.info("主播信息每日刷新任务已启动（每日0点）")
+
+    async def stop(self) -> None:
+        """停止刷新循环"""
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+
+    @staticmethod
+    def _seconds_until_midnight() -> int:
+        """距下一个0点的秒数（本地时区）"""
+        now = datetime.now()
+        next_mid = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=5, microsecond=0)
+        return max(int((next_mid - now).total_seconds()), 1)
+
+    async def run(self) -> None:
+        """每日0点刷新主循环"""
+        while True:
+            await asyncio.sleep(self._seconds_until_midnight())
+            try:
+                count = await self.refresh_once()
+                logger.info(f"每日主播信息刷新完成：{count}个主播")
+            except Exception as e:
+                logger.error(f"每日主播信息刷新失败: {e}")
+
+    async def refresh_once(self) -> int:
+        """
+        执行一轮批量刷新
+
+        Returns:
+            int: 本次更新的主播数量
+
+        Raises:
+            Exception: 批量查询失败时上抛（由调用方记录）
+        """
+        uids = self.binding_store.get_bound_uids()
+        if not uids:
+            return 0
+
+        from ..services.bilibili import BilibiliAPI
+        api = BilibiliAPI()
+        total = 0
+        for i in range(0, len(uids), self.BATCH_SIZE):
+            batch = uids[i:i + self.BATCH_SIZE]
+            status = await asyncio.to_thread(api.get_status_info_by_uids, batch)
+            await self.db_service.apply_status_info(status)
+            total += len(status)
+        return total
+
+    async def backfill_if_empty(self) -> None:
+        """主播表为空时立即回填一次（旧绑定升级后无需等到0点）"""
+        try:
+            if await self.db_service.streamer_count() == 0:
+                count = await self.refresh_once()
+                if count:
+                    logger.info(f"主播表为空，已回填{count}个绑定主播")
+        except Exception as e:
+            logger.warning(f"主播信息回填失败: {e}")

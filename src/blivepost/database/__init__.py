@@ -25,6 +25,8 @@ from .models import (
     DynamicBindingRecord,
     FriendRecord,
     GroupRecord,
+    StreamerRecord,
+    LiveRoomRecord,
 )
 from .service import DatabaseService
 
@@ -49,4 +51,6 @@ __all__ = [
     "DynamicBindingRecord",
     "FriendRecord",
     "GroupRecord",
+    "StreamerRecord",
+    "LiveRoomRecord",
 ]

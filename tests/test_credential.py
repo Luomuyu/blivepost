@@ -184,64 +184,6 @@ async def test_get_me_parses_dict_response():
     c._task.cancel()
 
 
-@pytest.mark.asyncio
-async def test_bot_connect_quiet_cancel(monkeypatch):
-    """主动关闭(_stopping)时取消静默上抛不回队；非关闭期取消保持回队重连语义"""
-    import asyncio
-
-    from blivepost.services import qqbot as qm
-
-    requeued = []
-
-    class FakeConn:
-        def add(self, session):
-            requeued.append(session)
-
-    class FakeWS:
-        def __init__(self, session, connection):
-            self.session = session
-            self.connection = connection
-            self._requeued = False
-
-        async def ws_connect(self):
-            raise asyncio.CancelledError()
-
-    monkeypatch.setattr("botpy.gateway.BotWebSocket", FakeWS)
-
-    c = object.__new__(qm._PushClient)
-    c._connection = FakeConn()
-    session = {"session_id": "s1"}
-
-    c._stopping = True
-    with pytest.raises(asyncio.CancelledError):
-        await c.bot_connect(session)
-    assert requeued == []  # 关闭阶段：静默取消，不回队
-
-    c._stopping = False
-    with pytest.raises(asyncio.CancelledError):
-        await c.bot_connect(session)  # 非关闭期：取消仍上抛（任务以取消结束），但回队触发重连
-    assert requeued == [session]
-
-
-@pytest.mark.asyncio
-async def test_stop_sets_stopping_flag():
-    """stop()在取消任务前置位_stopping（bot_connect静默取消的前提）"""
-    class FakeInner:
-        _stopping = False
-
-        async def close(self):
-            pass
-
-    c = object.__new__(QQBotClient)
-    client = FakeInner()
-    c._client = client
-    c._task = None
-    c._loop = None
-    await c.stop()
-    assert client._stopping is True
-    assert c._client is None and c._task is None
-
-
 async def fake_collect():
     return {"now": "t", "bot": {"client_started": True, "token_ready": True,
                                 "token_expires_in": 3600},

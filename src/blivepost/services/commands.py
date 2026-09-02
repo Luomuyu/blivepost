@@ -185,10 +185,11 @@ class CommandHandler:
         return None
 
     async def _bind(self, group_openid: str, room_id: int) -> str:
-        """绑定群与直播间，记录主播uid（房间号归一化为真实房间号）"""
+        """绑定群与直播间，记录主播uid并落库主播/直播间信息（房间号归一化为真实房间号）"""
         room_info = await self.monitor_manager.get_room_info(room_id)
         real_id = int(room_info.room_id) or room_id
         await self.binding_store.bind(group_openid, real_id, room_info.uid)
+        await self._save_binding_snapshot(real_id, room_info)
 
         reply = (
             f"绑定成功：本群 <-> 直播间{real_id}\n"
@@ -198,6 +199,30 @@ class CommandHandler:
             reply += f"\n（房间号已归一化，输入的{room_id}为短号）"
         reply += f"\n发送 /监控 {real_id} 开始推送"
         return reply
+
+    async def _save_binding_snapshot(self, real_id: int, room_info) -> None:
+        """绑定信息入库：get_status_info_by_uids全量快照写streamer/live_room两表；
+        快照失败时退回get_room_info已知字段，均不阻断绑定流程"""
+        if self.db_service is None or not room_info.uid:
+            return
+        import asyncio as _asyncio
+
+        from .bilibili import BilibiliAPI
+        try:
+            status = await _asyncio.to_thread(
+                BilibiliAPI().get_status_info_by_uids, [room_info.uid])
+            await self.db_service.apply_status_info(status)
+            return
+        except Exception as e:
+            logger.warning(f"绑定快照批量查询失败(房间{real_id})，退回已知字段: {e}")
+        try:
+            await self.db_service.save_streamer_info(
+                room_info.uid, uname=room_info.name, room_id=real_id)
+            await self.db_service.save_live_room_info(
+                real_id, uid=room_info.uid, title=room_info.title,
+                cover=room_info.cover)
+        except Exception as e:
+            logger.warning(f"绑定信息入库失败(房间{real_id}): {e}")
 
     async def _monitor(self, group_openid: str, room_id: int) -> str:
         """开始监控推送（每个房间仅创建一个监控任务，已存在则忽略）"""
