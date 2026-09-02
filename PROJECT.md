@@ -115,7 +115,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ## 群指令（权限组模型，逐级包含：main ⊇ openids ⊇ default）
 
 - **default**（未配置用户）：查询指令——`/状态`、`/绑定列表`、`/收入 房间号 [日期/周/月]`、`/SC榜 房间号 [日期]`、`/汇总 [周/月]`、`/帮助`
-- **管理员组**（`Admin.openids`）：包含default全部权限 + 控制指令——`/绑定` `/监控` `/取消监控` `/解绑` `/绑定动态` `/取消动态`（名单为空时不限制，建议配置）
+- **管理员组**（`Admin.openids`）：包含default全部权限 + 控制指令（名单配置值：群场景为member_openid或union_openid，与消息sender提取值一致——`/绑定` `/监控` `/取消监控` `/解绑` `/绑定动态` `/取消动态`（名单为空时不限制，建议配置）
 - **主管理员组**（`Admin.main_openids`）：包含管理员全部权限 + Cookie失效等敏感通知接收；`/登录`添加账号对openids∪main两组开放
 
 ## 私聊指令（权限组同上，逐级包含）
@@ -207,6 +207,13 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - ~~登录流程消息seq去重冲突（真机40054005）~~ → 全流程消息seq递增（二维码图片、图片失败回退文本、结果消息各占独立seq）
 - ~~二维码仅图片一种形态~~ → 图片发送失败时回退为**二维码URL文本**（管理员电脑浏览器打开显示二维码后扫码）
 - 真机已验证：access_token获取、websocket鉴权、/登录权限判定（main_openids）、扫码流程启动（等待扫码第1/3个二维码）
+
+### 2026-09-02 第二十三批（sender身份与union_openid）
+- 真机确认：**群@消息的author是member_openid（群内唯一、跨群不同），非user_openid**——此前群控制指令的权限判定与提示均取不到发送者（显示"未知"）
+- 新增 `utils/contact.py` `extract_sender`：按 union_openid > member_openid > user_openid > id 优先级提取
+- 群指令与管理员私聊的sender判定/提示全部改用extract_sender
+- **friend表新增union_openid列**：friend_add事件携带则写入；C2C消息中获取到时自动回填（update_friend_union）——union跨场景一致，是管理员名单的理想配置值
+- 分片上传诊断日志增强（prepare/PUT/finish/files全响应记录）
 
 ## 代码存在的问题（当前仍存在）
 
