@@ -263,8 +263,11 @@ class QQBotClient:
 
     @staticmethod
     def _on_task_done(task: asyncio.Task) -> None:
-        """客户端任务退出回调"""
-        exc = task.exception()
+        """客户端任务退出回调（stop主动取消不算异常）"""
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return  # stop时被取消，非异常
         if exc is not None and not isinstance(exc, asyncio.CancelledError):
             logger.error(f"botpy客户端异常退出: {exc}")
 
