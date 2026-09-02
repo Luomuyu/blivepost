@@ -25,38 +25,6 @@ if TYPE_CHECKING:
 logger = get_logger("qqbot")
 
 
-def _patch_union_openid_parsing() -> None:
-    """
-    补齐botpy未解析的union_openid字段（平台2024年新增）
-
-    monkeypatch以下类的_User/事件解析，使union_openid可从payload读出：
-      - C2CMessage._User（私聊消息author）
-      - GroupMessage._User（群消息author，部分场景携带）
-    群场景author主体是member_openid；union_openid跨场景一致，
-    是Admin管理员名单的推荐配置值。
-    """
-    from botpy.message import C2CMessage as _C2C
-    from botpy.message import GroupMessage as _Group
-
-    for msg_cls in (_C2C, _Group):
-        user_cls = msg_cls._User
-        has_slots = getattr(user_cls, "__slots__", None) is not None
-        if has_slots and "union_openid" in user_cls.__slots__:
-            continue
-        if has_slots:
-            user_cls.__slots__ = tuple(user_cls.__slots__) + ("union_openid",)
-        _orig_init = user_cls.__init__
-
-        def _init(self, data, _orig_init=_orig_init):
-            _orig_init(self, data)
-            self.union_openid = data.get("union_openid", None)
-
-        user_cls.__init__ = _init
-
-
-_patch_union_openid_parsing()
-
-
 class _PushClient(botpy.Client):
     """botpy客户端：负责消息API调用与群/私聊命令事件处理"""
 
@@ -98,7 +66,8 @@ class _PushClient(botpy.Client):
     async def on_friend_add(self, event) -> None:
         """用户添加好友"""
         if self._contact_handler:
-            union = getattr(event, "union_openid", None) or ""
+            # union_openid在author子对象上（C2CManageEvent顶层无此字段）
+            union = getattr(getattr(event, "author", None), "union_openid", None) or ""
             await self._contact_handler.on_friend_add(getattr(event, "openid", ""), union)
 
     async def on_friend_del(self, event) -> None:
@@ -119,7 +88,17 @@ class _PushClient(botpy.Client):
                 getattr(event, "openid", ""), 0)
 
     async def on_c2c_message_create(self, message: C2CMessage) -> None:
-        """私聊消息事件：分发给管理员命令处理器"""
+        """私聊消息事件：回填好友union后分发给管理员命令处理器"""
+        if self._contact_handler:
+            # 好友记录以单聊user_openid为主键，union_openid仅作回填值
+            author = message.author
+            union = getattr(author, "union_openid", None)
+            openid = getattr(author, "user_openid", None)
+            if union and openid:
+                try:
+                    await self._contact_handler.backfill_friend_union(openid, union)
+                except Exception as e:
+                    logger.error(f"回填好友union_openid失败: {e}")
         if self._c2c_handler is None:
             return
         try:

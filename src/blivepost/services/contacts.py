@@ -134,8 +134,11 @@ class ContactStore:
         await self._db.set_friend_receive(openid, receive)
 
     async def update_friend_union(self, openid: str, union_openid: str) -> None:
-        """回填好友的union_openid"""
-        self.upsert_friend(openid, union_openid=union_openid)
+        """回填好友的union_openid（仅更新已有记录；不新建、与缓存一致时跳过）"""
+        f = self._friends.get(openid)
+        if f is None or not union_openid or f.get("union") == union_openid:
+            return
+        f["union"] = union_openid
         await self._db.update_friend_union(openid, union_openid)
 
 
@@ -189,6 +192,10 @@ class ContactEventHandler:
         await self.contact_store.save_friend(openid, del_flag=0, receive=1,
                                              union_openid=union_openid)
         logger.info(f"新增好友 {openid}")
+
+    async def backfill_friend_union(self, openid: str, union_openid: str) -> None:
+        """私聊消息携带union_openid时回填好友记录（仅已有记录）"""
+        await self.contact_store.update_friend_union(openid, union_openid)
 
     async def on_friend_del(self, openid: str) -> None:
         await self.contact_store.save_friend(openid, del_flag=1, receive=0)

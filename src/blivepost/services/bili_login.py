@@ -15,12 +15,15 @@ B站扫码登录与Cookie维护（基于Playwright无头浏览器）
 依赖（使用时才导入，缺失时给出明确提示）：
     pip install playwright qrcode[pil]
     playwright install chromium
+chromium内核默认安装到运行目录ms-playwright/（PLAYWRIGHT_BROWSERS_PATH）
 """
 
 import asyncio
 import io
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Awaitable, Callable, List, Optional, Tuple
 
 import requests
@@ -29,6 +32,20 @@ from ..utils.logger import get_logger
 
 
 logger = get_logger("bili_login")
+
+
+def _apply_browsers_path() -> None:
+    """
+    chromium内核默认安装到运行目录ms-playwright/（随程序目录走，便携部署）。
+
+    playwright的安装与浏览器启动都读PLAYWRIGHT_BROWSERS_PATH；已显式
+    配置时尊重原值（如Docker镜像的构建期安装路径）。
+    """
+    if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(Path.cwd() / "ms-playwright")
+
+
+_apply_browsers_path()
 
 HOME_PAGE = "https://www.bilibili.com"
 VIDEO_PAGE = "https://www.bilibili.com/video/BV1GJ411x7h7"
@@ -363,7 +380,8 @@ async def ensure_playwright_chromium() -> bool:
         )
         _, _ = await proc.communicate()
         if proc.returncode == 0:
-            logger.info("playwright chromium内核已就绪")
+            logger.info(f"playwright chromium内核已就绪 "
+                        f"({os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '默认位置')})")
             return True
         logger.error(f"playwright chromium安装失败 (exit={proc.returncode})，"
                      f"请手动执行: playwright install chromium")

@@ -3,15 +3,12 @@
 B站API服务模块
 """
 
-import time
-from typing import Optional
-
 import requests
+
+from typing import Optional
 
 from ..models.live import LiveRoomInfo
 from ..utils.logger import get_logger
-from .wbi import WbiSigner
-
 
 logger = get_logger("bilibili")
 
@@ -36,7 +33,6 @@ class BilibiliAPI:
         """
         self.sessdata = sessdata
         self.fp_cookie = fp_cookie
-        self._wbi = WbiSigner(headers=self.HEADERS)
 
     def set_fp_cookie(self, fp_cookie: str) -> None:
         """
@@ -54,7 +50,7 @@ class BilibiliAPI:
         注意：内部使用同步requests，事件循环中调用时请配合asyncio.to_thread。
 
         Args:
-            room_id: 直播间ID
+            room_id: 直播间ID（短号/长号均可）
 
         Returns:
             LiveRoomInfo: 直播间信息
@@ -62,26 +58,27 @@ class BilibiliAPI:
         Raises:
             ValueError: 获取信息失败时抛出
         """
-        # 获取UID
-        init_url = f"https://api.live.bilibili.com/room/v1/Room/room_init?id={room_id}"
-        response = requests.get(url=init_url, headers=self.HEADERS, timeout=10)
+        # 直播间信息：uid/长号/标题/封面/观看人数（无需签名，无风控）
+        info_url = f"https://api.live.bilibili.com/room/v1/Room/get_info?room_id={room_id}"
+        response = requests.get(url=info_url, headers=self.HEADERS, timeout=10)
         data = response.json()
 
         if data.get("code", 0) != 0:
             raise ValueError(f"获取直播间信息失败: {data.get('message', '未知错误')}")
 
-        uid = data["data"]["uid"]
+        info = data["data"]
+        uid = info["uid"]
 
-        # 获取用户信息
+        # 获取用户信息（用户名片，仅取昵称）
         user_info = self._get_user_info(uid)
 
         return LiveRoomInfo(
             uid=uid,
             name=user_info.get("name", ""),
-            title=user_info.get("live_room", {}).get("title", ""),
-            cover=user_info.get("live_room", {}).get("cover", ""),
-            room_id=user_info.get("live_room", {}).get("roomid", 0),
-            online=user_info.get("live_room", {}).get("watched_show", {}).get("text_large", "0"),
+            title=info.get("title", ""),
+            cover=info.get("user_cover", "") or info.get("keyframe", ""),
+            room_id=info.get("room_id", 0),
+            online=f'{info.get("online", 0)}人看过',
         )
 
     def get_live_status(self, room_id) -> Optional[bool]:
@@ -108,52 +105,25 @@ class BilibiliAPI:
 
     def _get_user_info(self, uid: int) -> dict:
         """
-        获取用户信息（WBI签名，密钥失效自动刷新重试一次）
+        获取用户信息（用户名片接口）
+
+        x/space/wbi/acc/info风控严格（-352风控校验失败频发），改用无需
+        Wbi签名与登录态的x/web-interface/card；调用方仅消费昵称。
 
         Args:
             uid: 用户ID
 
         Returns:
-            dict: 用户信息
+            dict: 用户名片（card对象）
+
+        Raises:
+            ValueError: 获取失败时抛出
         """
-        w_data = f"mid={uid}&platform=web&token=&web_location=1550101"
-        wts = str(int(time.time()))
-        w_rid = self._wbi.sign(w_data, wts)
-
-        url = (
-            f"https://api.bilibili.com/x/space/wbi/acc/info?{w_data}"
-            f"&w_rid={w_rid}&wts={wts}"
-        )
-
-        headers = self.HEADERS.copy()
-        headers["referer"] = f"https://space.bilibili.com/{uid}"
-
-        # 使用完整的fp_cookie，否则使用sessdata
-        if self.fp_cookie:
-            headers["cookie"] = self.fp_cookie
-        elif self.sessdata:
-            headers["cookie"] = f"SESSDATA={self.sessdata}"
-
-        response = requests.get(url=url, headers=headers, timeout=10)
+        url = f"https://api.bilibili.com/x/web-interface/card?mid={uid}"
+        response = requests.get(url=url, headers=self.HEADERS, timeout=10)
         data = response.json()
-
-        # 处理WBI密钥失效
-        if data.get("code") == -403:
-            logger.warning("WBI密钥失效，重新获取")
-            w_rid = self._resign(w_data, wts)
-            url = (
-                f"https://api.bilibili.com/x/space/wbi/acc/info?{w_data}"
-                f"&w_rid={w_rid}&wts={wts}"
-            )
-            response = requests.get(url=url, headers=headers, timeout=10)
-            data = response.json()
 
         if data.get("code", 0) != 0:
             raise ValueError(f"获取用户信息失败: {data.get('message', '未知错误')}")
 
-        return data.get("data", {})
-
-    def _resign(self, w_data: str, wts: str) -> str:
-        """强制刷新密钥后重新签名"""
-        self._wbi.get_w_key(force_refresh=True)
-        return self._wbi.sign(w_data, wts)
+        return data.get("data", {}).get("card", {})

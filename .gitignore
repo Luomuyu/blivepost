@@ -33,3 +33,7 @@ _*.py
 # 旧代码归档
 oldsrc
 scripts/panel_ids.json
+
+*.whl
+# playwright chromium内核（运行目录本地安装）
+ms-playwright/
