@@ -6,7 +6,6 @@ import pytest
 from blivepost.config.settings import Settings
 from blivepost.database import DatabaseManager, DatabaseService
 from blivepost.services.cookie_pool import CookiePool
-from blivepost.services.webpanel import _render_trend_svg
 
 
 @pytest.fixture
@@ -97,14 +96,14 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
                 "rooms": [], "dynamics": [], "recent": []}
     panel._collect = fake_collect
 
-    import blivepost.services.webpanel as wp
-    monkeypatch.setattr(wp, "_render_trend_svg", lambda h: "")
-
     class Req:
         query = {"token": "SECRET"}
         headers = {}
     resp = await panel._handle_home(Req())
     assert resp.status == 200
+    body = resp.text
+    # 趋势数据内嵌JSON + 定时刷新 + viewport（移动端）
+    assert "trend-data" in body and "自动刷新" in body and "viewport" in body
 
 
 @pytest.mark.asyncio
@@ -144,21 +143,6 @@ async def test_daily_history(tmp_path):
     assert today["danmaku"] == 1
     assert all(h["danmaku"] == 0 for h in history[:-1])
     await db.close()
-
-
-def test_render_trend_svg():
-    history = [
-        {"day": f"2026-08-{d:02d}", "danmaku": d, "gift_gold": d * 2,
-         "ship_gold": d, "sc_total": 0}
-        for d in range(1, 31)
-    ]
-    svg = _render_trend_svg(history)
-    assert svg.startswith("<svg") and "polyline" in svg
-    assert svg.count("<polyline") == 4  # 四条序列
-
-
-def test_render_trend_svg_empty():
-    assert "暂无" in _render_trend_svg([])
 
 
 # ==================== 自动重扫 ====================

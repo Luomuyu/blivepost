@@ -169,11 +169,15 @@ class QQBotClient:
             return None
         try:
             me = await self._client.api.me()
+            # botpy的http.request返回解析后的dict（非User对象），按dict取字段
+            if not isinstance(me, dict):
+                me = {"id": getattr(me, "id", ""), "username": getattr(me, "username", ""),
+                      "avatar": getattr(me, "avatar", ""), "share_url": getattr(me, "share_url", "")}
             self._me_cache = {
-                "id": getattr(me, "id", "") or "",
-                "username": getattr(me, "username", "") or "",
-                "avatar": getattr(me, "avatar", "") or "",
-                "share_url": getattr(me, "share_url", "") or "",
+                "id": str(me.get("id") or ""),
+                "username": str(me.get("username") or ""),
+                "avatar": str(me.get("avatar") or ""),
+                "share_url": str(me.get("share_url") or ""),
             }
             return self._me_cache
         except Exception as e:

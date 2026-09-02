@@ -7,10 +7,10 @@ Web状态面板（只读，aiohttp实现）
 通过Setting.web_panel开关，web_host/web_port配置监听。
 """
 
+import json
+import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
-
-import os
 
 from aiohttp import web
 
@@ -26,8 +26,83 @@ if TYPE_CHECKING:
 
 logger = get_logger("webpanel")
 
+
+# 收入趋势图（原生JS渲染，无外部依赖）：
+# 按容器实际宽度绘制SVG（窗口resize重绘，移动端自适应）；
+# 鼠标悬停/触摸显示该日四项数据浮层；数据由页面内嵌JSON提供
+_TREND_JS = """
+(function(){
+  var el=document.getElementById('trend'), tip=document.getElementById('trend-tip');
+  var data=[];
+  try{ data=JSON.parse(document.getElementById('trend-data').textContent)||[]; }catch(e){}
+  var S=[["danmaku","#4a90d9","弹幕"],["gift_gold","#e67e22","礼物(元)"],
+         ["ship_gold","#2e8b57","上舰(元)"],["sc_total","#c0392b","SC(元)"]];
+  if(!data.length){el.innerHTML='<p style="margin:12px;color:#888">暂无趋势数据</p>';return;}
+  function fmt(v){v=+v||0;return Math.abs(v)>=100?String(Math.round(v)):(Math.round(v*10)/10).toString();}
+  var PL=42, PR=10, step=0, n=0;
+  function draw(){
+    var W=el.clientWidth||600; if(W<260)W=260;
+    var H=240, iw=W-PL-PR, ih=H-36; n=data.length;
+    var peak=1;
+    for(var s=0;s<S.length;s++){
+      var arr=data.map(function(r){return +r[S[s][0]]||0;});
+      S[s][3]=arr;
+      for(var i=0;i<arr.length;i++) if(arr[i]>peak)peak=arr[i];
+    }
+    function X(i){return PL+(n>1?i*iw/(n-1):iw/2);}
+    function Y(v){return 12+ih-(v/peak)*ih;}
+    step=n>1?iw/(n-1):0;
+    var g='';
+    for(var f=0;f<=4;f++){
+      var y=12+ih-ih*f/4;
+      g+='<line x1="'+PL+'" y1="'+y+'" x2="'+(W-PR)+'" y2="'+y+'" stroke="#e8e8e8"/>'+
+         '<text x="'+(PL-5)+'" y="'+(y+3)+'" font-size="10" fill="#999" text-anchor="end">'+fmt(peak*f/4)+'</text>';
+    }
+    var labN=Math.min(n,Math.max(2,Math.floor(W/95)));
+    for(var j=0;j<labN;j++){
+      var i2=labN>1?Math.round(j*(n-1)/(labN-1)):0;
+      g+='<text x="'+X(i2)+'" y="'+(H-6)+'" font-size="10" fill="#999" text-anchor="middle">'+data[i2].day.slice(5)+'</text>';
+    }
+    var sv='<svg width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg">'+g;
+    for(var s2=0;s2<S.length;s2++){
+      var pts=S[s2][3].map(function(v,i3){return X(i3).toFixed(1)+','+Y(v).toFixed(1);}).join(' ');
+      sv+='<polyline fill="none" stroke="'+S[s2][1]+'" stroke-width="1.8" points="'+pts+'"/>';
+    }
+    sv+='</svg>';
+    el.innerHTML=sv;
+    var svg=el.querySelector('svg');
+    function pos(e){
+      var cx=(e.touches?e.touches[0].clientX:e.clientX);
+      var r=svg.getBoundingClientRect();
+      var i=step?Math.round((cx-r.left-PL)/step):0;
+      i=Math.max(0,Math.min(n-1,i));
+      var rows='<b>'+data[i].day+'</b>';
+      for(var s3=0;s3<S.length;s3++)
+        rows+='<br><span style="color:'+S[s3][1]+'">●</span> '+S[s3][2]+': '+fmt(S[s3][3][i]);
+      tip.innerHTML=rows; tip.style.display='block';
+      var box=el.parentElement.getBoundingClientRect();
+      var lx=cx-box.left+14;
+      if(lx+150>box.width) lx=cx-box.left-164;
+      if(lx<0) lx=0;
+      tip.style.left=lx+'px'; tip.style.top='10px';
+    }
+    function hide(){tip.style.display='none';}
+    svg.addEventListener('mousemove',pos);
+    svg.addEventListener('mouseleave',hide);
+    svg.addEventListener('touchstart',pos,{passive:true});
+    svg.addEventListener('touchmove',pos,{passive:true});
+    svg.addEventListener('touchend',hide);
+  }
+  var rt=null;
+  window.addEventListener('resize',function(){clearTimeout(rt);rt=setTimeout(draw,200);});
+  draw();
+})();
+"""
+
 _PAGE = """<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="30">
 <title>BLivePost 状态面板</title>
 <style>
 body{{font-family:"Microsoft YaHei",sans-serif;margin:24px;background:#f7f8fa;color:#333}}
@@ -36,29 +111,41 @@ table{{border-collapse:collapse;width:100%;background:#fff;font-size:13px}}
 th,td{{border:1px solid #e0e0e0;padding:6px 10px;text-align:left}}
 th{{background:#f0f4f8}}
 .ok{{color:#2e8b57}} .bad{{color:#c0392b}} small{{color:#888}}
+.tbl{{overflow-x:auto;-webkit-overflow-scrolling:touch}}
+.trend-box{{position:relative}}
+#trend{{background:#fff;border:1px solid #e0e0e0}}
+#trend-tip{{position:absolute;pointer-events:none;display:none;background:rgba(40,40,40,.92);
+color:#fff;font-size:12px;line-height:1.6;padding:6px 10px;border-radius:4px;white-space:nowrap;z-index:5}}
+@media (max-width:640px){{
+body{{margin:10px}}
+h1{{font-size:17px}} h2{{font-size:15px;margin-top:18px}}
+table{{font-size:12px}} th,td{{padding:4px 6px}}
+}}
 </style></head><body>
-<h1>BLivePost 状态面板 <small>刷新时间 {now}</small></h1>
+<h1>BLivePost 状态面板 <small>刷新时间 {now} · 每30秒自动刷新</small></h1>
 <p>机器人凭证：<b>{bot_state}</b>（token剩余 {token_expires_in} 秒）
 　数据库体积：<b>{db_size_mb} MB</b> <small>（永久保留策略，数据不自动删除）</small></p>
 <h2>机器人详情</h2>
-<table><tr><th>头像</th><th>用户名</th><th>分享</th></tr>
-{me_row}</table>
+<div class="tbl"><table><tr><th>头像</th><th>用户名</th><th>分享</th></tr>
+{me_row}</table></div>
 <h2>账号池（可用 {active}/{total}）</h2>
-<table><tr><th>UID</th><th>昵称</th><th>状态</th><th>剩余有效期</th><th>使用次数</th><th>最近使用</th><th>关联房间</th></tr>
-{accounts}</table>
-<h2>收入趋势（近{hist_days}天） <small><a href="/api/history?days={hist_days}">JSON</a></small></h2>
-{trend_svg}
+<div class="tbl"><table><tr><th>UID</th><th>昵称</th><th>状态</th><th>剩余有效期</th><th>使用次数</th><th>最近使用</th><th>关联房间</th></tr>
+{accounts}</table></div>
+<h2>收入趋势（近{hist_days}天） <small><a href="/api/history?days={hist_days}">JSON</a> · 悬停/触摸查看各日明细</small></h2>
+<div class="trend-box"><div id="trend"></div><div id="trend-tip"></div></div>
 <p><small>图例：蓝=弹幕 橙=礼物(元) 绿=上舰(元) 红=SC(元)
 JSON: <a href="/api/history?days={hist_days}">/api/history</a></small></p>
 <h2>监控房间（{room_count}）</h2>
-<table><tr><th>房间</th><th>进程</th><th>账号</th><th>今日弹幕</th><th>礼物(元)</th><th>上舰(元)</th><th>SC(元)</th></tr>
-{rooms}</table>
+<div class="tbl"><table><tr><th>房间</th><th>进程</th><th>账号</th><th>今日弹幕</th><th>礼物(元)</th><th>上舰(元)</th><th>SC(元)</th></tr>
+{rooms}</table></div>
 <h2>动态订阅（{dyn_count}）</h2>
-<table><tr><th>UP主UID</th><th>昵称</th><th>轮询进程</th><th>订阅群数</th></tr>
-{dynamics}</table>
+<div class="tbl"><table><tr><th>UP主UID</th><th>昵称</th><th>轮询进程</th><th>订阅群数</th></tr>
+{dynamics}</table></div>
 <h2>最近下播记录</h2>
-<table><tr><th>时间</th><th>房间</th><th>弹幕</th><th>礼物(元)</th><th>上舰(元)</th><th>SC(元)</th><th>时长</th></tr>
-{live_records}</table>
+<div class="tbl"><table><tr><th>时间</th><th>房间</th><th>弹幕</th><th>礼物(元)</th><th>上舰(元)</th><th>SC(元)</th><th>时长</th></tr>
+{live_records}</table></div>
+<script id="trend-data" type="application/json">__TREND_JSON__</script>
+<script>__TREND_JS__</script>
 </body></html>"""
 
 
@@ -218,7 +305,8 @@ class WebPanel:
             f"<td>{'、'.join(map(str, a['rooms'])) or '-'}</td></tr>"
             for a in data["accounts"])
         history = await self.db_service.get_daily_history(days=30)
-        trend_svg = _render_trend_svg(history)
+        # 内嵌JSON供前端JS绘制趋势图（</转义防提前闭合script标签）
+        trend_json = json.dumps(history, ensure_ascii=False).replace("</", "<\\/")
         bot = data["bot"]
         me = data.get("me") or {}
         if me.get("username"):
@@ -240,84 +328,17 @@ class WebPanel:
             db_size_mb=data["db_size_mb"],
             active=sum(1 for a in data["accounts"] if a["status"] == "active"),
             total=len(data["accounts"]), accounts=accounts or "<tr><td colspan=7>空</td></tr>",
-            hist_days=30, trend_svg=trend_svg,
-            room_count=len(data["rooms"]), rooms=rooms or "<tr><td colspan=7>无</td></tr>",
+            hist_days=30, room_count=len(data["rooms"]), rooms=rooms or "<tr><td colspan=7>无</td></tr>",
             dyn_count=len(data["dynamics"]),
             dynamics=dynamics or "<tr><td colspan=4>无</td></tr>",
             live_records=recent or "<tr><td colspan=7>无</td></tr>",
         )
+        html = (html.replace("__TREND_JSON__", trend_json)
+                .replace("__TREND_JS__", _TREND_JS))
         return web.Response(text=html, content_type="text/html", charset="utf-8")
 
     async def _handle_api(self, request):
+        if not self._check_token(request):
+            return web.Response(status=401, text="unauthorized: token required")
         data = await self._collect()
         return web.json_response(data)
-
-
-def _render_trend_svg(history: list, width: int = 900, height: int = 220) -> str:
-    """
-    将按日历史数据渲染为内联SVG折线图（无外部JS依赖）
-
-    Args:
-        history: get_daily_history返回的按日数据
-        width/height: 画布尺寸
-
-    Returns:
-        str: SVG标记
-    """
-    if not history:
-        return "<p><small>暂无趋势数据</small></p>"
-
-    pad_l, pad_r, pad_t, pad_b = 40, 12, 12, 24
-    w = width - pad_l - pad_r
-    h = height - pad_t - pad_b
-    n = len(history)
-
-    def series(key):
-        return [row.get(key, 0) for row in history]
-
-    danmaku = series("danmaku")
-    gift = series("gift_gold")
-    ship = series("ship_gold")
-    sc = series("sc_total")
-
-    peak = max(danmaku + gift + ship + sc + [1])
-    scale = peak if peak > 0 else 1
-
-    def points(values):
-        step = w / max(n - 1, 1)
-        pts = []
-        for i, v in enumerate(values):
-            x = pad_l + i * step
-            y = pad_t + h - (v / scale) * h
-            pts.append(f"{x:.1f},{y:.1f}")
-        return " ".join(pts)
-
-    lines = ""
-    for values, color in [
-        (danmaku, "#4a90d9"), (gift, "#e67e22"),
-        (ship, "#2e8b57"), (sc, "#c0392b"),
-    ]:
-        lines += (f'<polyline fill="none" stroke="{color}" stroke-width="1.8" '
-                  f'points="{points(values)}"/>')
-
-    # 网格与刻度
-    grid = ""
-    for frac in (0, 0.25, 0.5, 0.75, 1.0):
-        y = pad_t + h - frac * h
-        grid += (f'<line x1="{pad_l}" y1="{y:.1f}" x2="{width-pad_r}" y2="{y:.1f}" '
-                 f'stroke="#e8e8e8" stroke-width="1"/>'
-                 f'<text x="{pad_l-4}" y="{y+3:.1f}" font-size="9" fill="#999" '
-                 f'text-anchor="end">{int(frac*peak)}</text>')
-
-    # 日期刻度（首/中/末）
-    def day_label(i):
-        return history[i]["day"][5:] if i < len(history) else ""
-    labels = ""
-    for i in {0, n // 2, n - 1}:
-        x = pad_l + i * (w / max(n - 1, 1))
-        labels += (f'<text x="{x:.1f}" y="{height-6}" font-size="9" fill="#999" '
-                   f'text-anchor="middle">{day_label(i)}</text>')
-
-    return (f'<svg width="{width}" height="{height}" '
-            f'viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">'
-            f'{grid}{lines}{labels}</svg>')

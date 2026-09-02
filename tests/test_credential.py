@@ -135,8 +135,6 @@ async def test_panel_token_ok_renders_credentials(monkeypatch):
                 "token_expires_in": 3600}, "db_size_mb": 1.2, "accounts": [],
                 "rooms": [], "dynamics": [], "recent": []}
     panel._collect = fake_collect
-    import blivepost.services.webpanel as wp
-    monkeypatch.setattr(wp, "_render_trend_svg", lambda h: "")
 
     from aiohttp.test_utils import make_mocked_request
     req = make_mocked_request("GET", "/?token=SECRET")
@@ -144,6 +142,34 @@ async def test_panel_token_ok_renders_credentials(monkeypatch):
     assert resp.status == 200
     body = resp.text
     assert "token剩余" in body and "在线" in body
+
+
+@pytest.mark.asyncio
+async def test_get_me_parses_dict_response():
+    """get_me正确解析botpy返回的dict（此前按对象属性取值恒为空串）"""
+    import asyncio
+
+    class FakeAPI:
+        async def me(self):
+            return {"id": "123", "username": "测试机器人",
+                    "avatar": "http://example.com/a.png", "bot": True}
+
+    class FakeInner:
+        api = FakeAPI()
+
+    c = object.__new__(QQBotClient)
+    c._me_cache = None
+    c._client = FakeInner()
+
+    async def _hang():
+        await asyncio.Event().wait()
+    c._task = asyncio.get_running_loop().create_task(_hang())
+
+    me = await c.get_me()
+    assert me["username"] == "测试机器人"
+    assert me["id"] == "123"
+    assert me["avatar"] == "http://example.com/a.png"
+    c._task.cancel()
 
 
 async def fake_collect():
