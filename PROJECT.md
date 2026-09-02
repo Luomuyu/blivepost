@@ -138,7 +138,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - WBI签名单一实现；Redis连接1秒快速降级（进程级记忆）
 - 按天轮转日志（保留30天）
 - 单元测试154个 + flake8/pyflakes/mypy三项零告警（mypy阻塞检查）
-- **wheel构建验证**：43文件（含py.typed），关键模块与16项运行时依赖核对通过
+- **wheel构建验证**：45文件（含py.typed与utils/net.py），关键模块与16项运行时依赖核对通过
 - Schema迁移器（database/migrations.py，版本表+增量DDL）
 - 版本1.1.0；wheel已重新构建
 
@@ -189,6 +189,11 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - **已真机验证**：access_token获取（getAppAccessToken，expires_in实测）、websocket鉴权与心跳、终端stop、日志输出
 - **待真机复验**：`/v2/panels`创建面板（端点修正后）
 
+### 2026-09-02 第二十一批（真机反馈二轮）
+- ~~Redis不可达时启动仍阻断26-48秒（1秒socket超时在Windows双栈localhost下不可靠）~~ → 新增 `utils/net.py` TCP预检（0.5秒）：`get_sessdata_from_redis` 与 `RedisCache` 构造前先探测端口，不可达直接跳过Redis，启动等待封顶约1秒
+- ~~根目录botpy.log与logs/botpy.log双份~~ → botpy Client构造传 `ext_handlers=False` 禁用默认文件handler（logs/botpy.log已接管）
+- wheel重新构建（45文件，含 utils/net.py）
+
 ## 代码存在的问题（当前仍存在）
 
 1. **真机联调未做**：botpy连接、扫码登录、动态轮询、Web面板、结算推送、联系人8事件（加好友/退群/接收开关的实际payload与时序），均未在真实凭证环境验证。
@@ -233,6 +238,7 @@ export BLIVEPOST_ADMIN_OPENIDS="openid1,openid2"
 - 主动消息有平台频控；`daily/weekly/monthly_report`均消耗配额
 - Cookie提醒只走私聊（敏感通知优先`Admin.main_openids`）
 - UP主开播期间动态轮询自动暂停，下播自动恢复
+- Redis不可达时通过0.5秒TCP预检快速跳过，不会拖慢启动
 - 多实例部署：各实例独立工作目录即可完全隔离
 - 访问凭证7200秒有效，botpy在每次API请求前自动刷新；Web面板可见剩余秒数
 - 数据库体积超`db_size_warn_mb`（默认500MB）时私聊提醒主管理员；治理靠导出归档，代码不自动删除
