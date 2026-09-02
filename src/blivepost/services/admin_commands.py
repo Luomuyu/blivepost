@@ -80,9 +80,28 @@ class AdminCommandHandler:
         self.monitor_manager = monitor_manager
         self._login_task: Optional[asyncio.Task] = None
 
+    def user_level(self, openid: str) -> int:
+        """
+        计算用户权限级别（权限组逐级包含）
+
+        Returns:
+            int: 2=主管理员（main_openids）、1=管理员（openids）、0=默认用户
+        """
+        if openid in self.main_admin_openids:
+            return 2
+        if openid in self.admin_openids:
+            return 1
+        return 0
+
     def is_admin(self, openid: str) -> bool:
-        """判断是否管理员（openids与main_openids名单内均可）"""
-        return openid in self._command_allowed
+        """判断是否管理员（openids与main_openids名单内均可，级别≥1）"""
+        return self.user_level(openid) >= 1
+
+    def is_main_admin(self, openid: str) -> bool:
+        """判断是否主管理员（级别≥2；main_openids为空时回落到openids名单）"""
+        if self.main_admin_openids:
+            return openid in self.main_admin_openids
+        return openid in self.admin_openids
 
     async def handle(self, message: "C2CMessage") -> None:
         """

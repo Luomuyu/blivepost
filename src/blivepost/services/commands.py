@@ -78,7 +78,7 @@ class CommandHandler:
         self.binding_store = binding_store
         self.monitor_manager = monitor_manager
         self.db_service = db_service
-        # 群控制指令名单：由Admin.openids与Admin.main_openids合并（外部传入）；空=不限制
+        # 群控制指令名单（管理员=Admin.openids ∪ Admin.main_openids，外部合并传入）；空=不限制
         self.group_admin_openids = [str(o) for o in (group_admin_openids or [])]
         self.dynamic_manager = dynamic_manager
 

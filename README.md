@@ -57,9 +57,9 @@ pip install blivepost
 # BLivePost 配置文件
 # 版本: 1.0.0
 
-Admin: # 管理员设置
-  openids: [] # 管理员用户openId列表 (私聊命令、普通通知接收者)
-  main_openids: [] # 主管理员openId列表 (Cookie失效等敏感通知接收者, 留空则发全部管理员)
+Admin: # 管理员设置（权限组逐级包含：main ⊇ openids ⊇ default）
+  openids: [] # 管理员名单 (私聊管理命令+群控制指令+普通通知；包含default用户权限)
+  main_openids: [] # 主管理员名单 (包含openids全部权限；额外接收Cookie失效等敏感通知；/登录命令仅此组可用)
 
 QQBot: # QQ官方机器人设置 (基于botpy)
   app_id: "" # 机器人AppID
@@ -261,7 +261,10 @@ Template:
 
 ### 群命令（@机器人发送）
 
-在群里@机器人发送以下指令，实现多群绑定与多房间监控：
+在群里@机器人发送以下指令，实现多群绑定与多房间监控。
+
+**权限分级**：控制指令（/绑定 /监控 /取消监控 /解绑 /绑定动态 /取消动态）仅 `Admin.openids` ∪ `Admin.main_openids` 名单内的用户可执行（名单为空时不限制）；查询指令（/状态 /我的绑定 /收入 /SC榜 /汇总 /帮助）不受限。
+
 
 | 指令 | 说明 |
 |------|------|
