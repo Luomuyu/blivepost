@@ -25,6 +25,38 @@ if TYPE_CHECKING:
 logger = get_logger("qqbot")
 
 
+def _patch_union_openid_parsing() -> None:
+    """
+    补齐botpy未解析的union_openid字段（平台2024年新增）
+
+    monkeypatch以下类的_User/事件解析，使union_openid可从payload读出：
+      - C2CMessage._User（私聊消息author）
+      - GroupMessage._User（群消息author，部分场景携带）
+    群场景author主体是member_openid；union_openid跨场景一致，
+    是Admin管理员名单的推荐配置值。
+    """
+    from botpy.message import C2CMessage as _C2C
+    from botpy.message import GroupMessage as _Group
+
+    for msg_cls in (_C2C, _Group):
+        user_cls = msg_cls._User
+        has_slots = getattr(user_cls, "__slots__", None) is not None
+        if has_slots and "union_openid" in user_cls.__slots__:
+            continue
+        if has_slots:
+            user_cls.__slots__ = tuple(user_cls.__slots__) + ("union_openid",)
+        _orig_init = user_cls.__init__
+
+        def _init(self, data, _orig_init=_orig_init):
+            _orig_init(self, data)
+            self.union_openid = data.get("union_openid", None)
+
+        user_cls.__init__ = _init
+
+
+_patch_union_openid_parsing()
+
+
 class _PushClient(botpy.Client):
     """botpy客户端：负责消息API调用与群/私聊命令事件处理"""
 
