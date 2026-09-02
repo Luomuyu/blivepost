@@ -32,3 +32,4 @@ _*.py
 
 # 旧代码归档
 oldsrc
+scripts/panel_ids.json
