@@ -112,6 +112,11 @@ def get_sessdata_from_redis(settings) -> Optional[str]:
     Returns:
         Optional[str]: SESSDATA，如果获取失败返回None
     """
+    # Redis不可达时快速跳过（TCP预检0.5秒，避免Windows双栈连接数十秒等待）
+    from blivepost.utils.net import tcp_reachable
+    if not tcp_reachable(settings.redis.host, settings.redis.port, timeout=0.5):
+        return None
+
     try:
         import redis
 

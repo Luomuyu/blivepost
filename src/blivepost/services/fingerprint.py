@@ -62,6 +62,10 @@ class RedisCache(CacheBackend):
     def __init__(self, config: RedisConfig):
         self._redis = None
         try:
+            # TCP预检：不可达直接降级内存缓存（Windows上redis连接超时不可靠）
+            from ..utils.net import tcp_reachable
+            if not tcp_reachable(config.host, config.port, timeout=0.5):
+                raise RuntimeError("Redis端口不可达")
             import redis
             if RedisCache._connect_failed:
                 raise RuntimeError("Redis此前连接失败（进程内降级）")

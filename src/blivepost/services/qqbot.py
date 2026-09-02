@@ -5,7 +5,7 @@ QQ官方机器人推送客户端（基于botpy）
 
 import asyncio
 import os
-from typing import Iterable, Optional, TYPE_CHECKING
+from typing import Any, Iterable, Optional, TYPE_CHECKING
 
 import aiohttp
 from botpy.http import Route
@@ -34,9 +34,10 @@ class _PushClient(botpy.Client):
         c2c_handler: Optional["AdminCommandHandler"] = None,
         contact_handler: Optional["ContactEventHandler"] = None,
         log_config: Optional[dict] = None,
+        ext_handlers: Any = True,
     ):
         log_kwargs = {"log_config": log_config} if log_config else {}
-        super().__init__(intents=intents, **log_kwargs)
+        super().__init__(intents=intents, ext_handlers=ext_handlers, **log_kwargs)
         self._command_handler = command_handler
         self._c2c_handler = c2c_handler
         self._contact_handler = contact_handler
@@ -253,6 +254,8 @@ class QQBotClient:
             c2c_handler=c2c_handler,
             contact_handler=contact_handler,
             log_config=log_config,
+            # 禁用botpy默认的根目录botpy.log文件handler（logs/botpy.log已接管）
+            ext_handlers=False,
         )
         self._task = self._loop.create_task(
             self._client.start(self.app_id, self.app_secret),
