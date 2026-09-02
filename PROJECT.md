@@ -85,6 +85,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
   - `group_msg_receive`/`group_msg_reject` → 群接收开关1/0
 - **发送前检查**：PushService发送（文本与富媒体）前经ContactStore过滤未开启消息接收的群，未开启直接跳过；未知群默认放行
 - **机器人详情**：Web面板展示用户名、头像、分享按钮（share_url），经`GET /users/@me`获取并缓存
+- **union_openid**：好友表含union_openid列（跨场景一致的用户标识，管理员名单推荐配置值）；botpy默认不解析该字段，已monkeypatch补齐；私聊消息中获取到时自动回填好友表
 
 ## 终端命令与指令面板
 
@@ -218,6 +219,11 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - 群指令与管理员私聊的sender判定/提示全部改用extract_sender
 - **friend表新增union_openid列**：friend_add事件携带则写入；C2C消息中获取到时自动回填（update_friend_union）——union跨场景一致，是管理员名单的理想配置值
 - 分片上传诊断日志增强（prepare/PUT/finish/files全响应记录）
+
+### 2026-09-02 第二十五批（真机反馈三轮）
+- ~~Redis不可达启动仍阻断（TCP预检已加但用户环境实测依旧）~~ → 根因确认：Windows上redis-py对双栈localhost的连接超时不可靠 → `get_sessdata_from_redis`与`RedisCache`构造前加 **0.5秒TCP端口预检**（`utils/net.py tcp_reachable`），不可达直接跳过，启动等待封顶约1秒
+- ~~botpy未解析union_openid~~ → monkeypatch消息`_User`类补齐解析（群场景author主体是member_openid；union_openid跨场景一致）；好友表union_openid可从私聊消息自动回填
+- 已真机验证：websocket鉴权/心跳、access_token获取、终端stop、/登录权限判定（main_openids单配场景）、扫码流程启动
 
 ## 代码存在的问题（当前仍存在）
 
