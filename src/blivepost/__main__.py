@@ -8,6 +8,7 @@ BLivePost 命令行入口
 
 import argparse
 import asyncio
+import threading
 import multiprocessing
 import sys
 from pathlib import Path
@@ -71,19 +72,36 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _stdin_reader_loop(loop: asyncio.AbstractEventLoop, queue: "asyncio.Queue") -> None:
+    """daemon线程：阻塞读stdin，逐行投递到事件循环队列（进程退出不被拖住）"""
+    import sys as _sys
+    import threading as _threading
+
+    _threading.current_thread().name = "stdin-reader"
+    while True:
+        try:
+            line = _sys.stdin.readline()
+        except (OSError, ValueError):
+            break
+        if not line:
+            break
+        loop.call_soon_threadsafe(queue.put_nowait, line.rstrip("\n"))
+
+
 async def _listen_terminal(stop_event: asyncio.Event) -> None:
     """
     监听终端输入：输入stop（或quit/exit）后置位停止事件，安全关闭程序
-    """
-    import sys as _sys
 
+    读取在daemon线程中执行，进程退出不会被阻塞的stdin读取拖住。
+    """
     logger = get_logger("terminal")
     logger.info("终端命令监听已启动：输入 stop 安全关闭程序")
+    queue: "asyncio.Queue" = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    threading.Thread(target=_stdin_reader_loop, args=(loop, queue),
+                     daemon=True, name="stdin-reader").start()
     while True:
-        line = await asyncio.to_thread(_sys.stdin.readline)
-        if not line:  # EOF（如后台运行无stdin）
-            await asyncio.sleep(5)
-            continue
+        line = await queue.get()
         cmd = line.strip().lower()
         if cmd in ("stop", "quit", "exit"):
             logger.info(f"收到终端命令 {cmd}，正在安全关闭...")
@@ -168,6 +186,7 @@ async def main_async(
     live_watcher = None
     consumer = None
     web_panel = None
+    admin_handler = None
 
     try:
         # 加载配置（文件不存在时自动生成默认配置）
@@ -239,6 +258,11 @@ async def main_async(
         if settings.qqbot.app_id:
             logger.info("正在启动QQ官方机器人...")
             qqbot = QQBotClient(settings.qqbot.app_id, settings.qqbot.app_secret)
+            admin_handler = AdminCommandHandler(
+                cookie_pool, settings.admin.openids, bot_client=qqbot,
+                db_service=db_service, monitor_manager=monitor_manager,
+                main_admin_openids=settings.admin.main_openids
+            )
             qqbot.start(
                 CommandHandler(
                     binding_store, monitor_manager, db_service=db_service,
@@ -246,11 +270,7 @@ async def main_async(
                         settings.admin.openids, settings.admin.main_openids
                     ),
                 ),
-                c2c_handler=AdminCommandHandler(
-                    cookie_pool, settings.admin.openids, bot_client=qqbot,
-                    db_service=db_service, monitor_manager=monitor_manager,
-                    main_admin_openids=settings.admin.main_openids
-                ),
+                c2c_handler=admin_handler,
                 contact_handler=ContactEventHandler(
                     contact_store, binding_store, monitor_manager,
                     db_service=db_service
@@ -360,6 +380,13 @@ async def main_async(
         # 停止全部房间监控进程
         if monitor_manager:
             await monitor_manager.stop_all()
+
+        # 取消进行中的登录流程（避免playwright资源与任务残留）
+        try:
+            if admin_handler:
+                await admin_handler.stop()
+        except Exception:
+            pass
 
         # 停止子进程消息消费者与Web面板
         try:

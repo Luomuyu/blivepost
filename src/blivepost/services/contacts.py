@@ -36,7 +36,8 @@ class ContactStore:
         friends = await self._db.load_friends()
         groups = await self._db.load_groups()
         self._friends = {
-            f.openid: {"del": f.del_flag, "receive": f.msg_receive, "name": f.nickname}
+            f.openid: {"del": f.del_flag, "receive": f.msg_receive,
+                       "name": f.nickname, "union": f.union_openid}
             for f in friends
         }
         self._groups = {
@@ -81,12 +82,15 @@ class ContactStore:
     # ---- 好友 ----
 
     def upsert_friend(self, openid: str, name: str = "",
-                      del_flag: int = 0, receive: int = 1) -> None:
+                      del_flag: int = 0, receive: int = 1,
+                      union_openid: Optional[str] = None) -> None:
         f = self._friends.setdefault(openid, {"del": 0, "receive": 1, "name": ""})
         f["del"] = del_flag
         f["receive"] = receive
         if name:
             f["name"] = name
+        if union_openid:
+            f["union"] = union_openid
 
     def set_friend_del(self, openid: str, flag: int = 1) -> bool:
         f = self._friends.get(openid)
@@ -116,9 +120,10 @@ class ContactStore:
         await self._db.save_group(group_openid, name, del_flag, receive)
 
     async def save_friend(self, openid: str, name: str = "",
-                          del_flag: int = 0, receive: int = 1) -> None:
-        self.upsert_friend(openid, name, del_flag, receive)
-        await self._db.save_friend(openid, name, del_flag, receive)
+                          del_flag: int = 0, receive: int = 1,
+                          union_openid: Optional[str] = None) -> None:
+        self.upsert_friend(openid, name, del_flag, receive, union_openid)
+        await self._db.save_friend(openid, name, del_flag, receive, union_openid)
 
     async def set_group_receive_async(self, group_openid: str, receive: int) -> None:
         self.set_group_receive(group_openid, receive)
@@ -127,6 +132,11 @@ class ContactStore:
     async def set_friend_receive_async(self, openid: str, receive: int) -> None:
         self.set_friend_receive(openid, receive)
         await self._db.set_friend_receive(openid, receive)
+
+    async def update_friend_union(self, openid: str, union_openid: str) -> None:
+        """回填好友的union_openid"""
+        self.upsert_friend(openid, union_openid=union_openid)
+        await self._db.update_friend_union(openid, union_openid)
 
 
 class ContactEventHandler:
@@ -175,8 +185,9 @@ class ContactEventHandler:
         """设置好友单聊消息接收开关（无记录则创建）"""
         await self.contact_store.set_friend_receive_async(openid, receive)
 
-    async def on_friend_add(self, openid: str) -> None:
-        await self.contact_store.save_friend(openid, del_flag=0, receive=1)
+    async def on_friend_add(self, openid: str, union_openid: str = "") -> None:
+        await self.contact_store.save_friend(openid, del_flag=0, receive=1,
+                                             union_openid=union_openid)
         logger.info(f"新增好友 {openid}")
 
     async def on_friend_del(self, openid: str) -> None:

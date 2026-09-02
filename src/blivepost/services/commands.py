@@ -10,6 +10,8 @@ QQ群命令处理器
 """
 
 import re
+
+from ..utils.contact import extract_sender
 from datetime import datetime, timedelta
 from typing import Optional, TYPE_CHECKING
 
@@ -121,7 +123,7 @@ class CommandHandler:
         query_day = _parse_date(match.group(3)) if match.group(3) else None
         logger.info(f"收到群命令: {cmd} {room_id} (group={group_openid})")
 
-        sender = getattr(message.author, "user_openid", "") or ""
+        sender = extract_sender(message.author)
         control_cmds = ("绑定", "监控", "取消监控", "解绑", "绑定动态", "取消动态")
         if cmd in control_cmds and not self._group_allowed(sender):
             return (

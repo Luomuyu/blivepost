@@ -1035,8 +1035,9 @@ class DatabaseService:
     # ========== 好友与群记录 ==========
 
     async def save_friend(self, openid: str, name: str = "",
-                          del_flag: int = 0, receive: int = 1) -> None:
-        """保存/更新好友记录（按openid upsert）"""
+                          del_flag: int = 0, receive: int = 1,
+                          union_openid: Optional[str] = None) -> None:
+        """保存/更新好友记录（按openid upsert；union_openid仅在有值时覆盖）"""
         try:
             async with self.db_manager.get_session() as session:
                 result = await session.execute(
@@ -1044,12 +1045,15 @@ class DatabaseService:
                 record = result.scalar_one_or_none()
                 if record is None:
                     session.add(FriendRecord(openid=openid, nickname=name,
-                                             del_flag=del_flag, msg_receive=receive))
+                                             del_flag=del_flag, msg_receive=receive,
+                                             union_openid=union_openid))
                 else:
                     if name:
                         record.nickname = name
                     record.del_flag = del_flag
                     record.msg_receive = receive
+                    if union_openid:
+                        record.union_openid = union_openid
                 await session.commit()
         except Exception as e:
             logger.error(f"保存好友记录失败: {e}")
@@ -1077,6 +1081,19 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"更新好友接收开关失败: {e}")
+
+    async def update_friend_union(self, openid: str, union_openid: str) -> None:
+        """补充好友的union_openid（消息中获取到时回填）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(FriendRecord).where(FriendRecord.openid == openid))
+                record = result.scalar_one_or_none()
+                if record is not None and union_openid:
+                    record.union_openid = union_openid
+                    await session.commit()
+        except Exception as e:
+            logger.error(f"回填好友union_openid失败: {e}")
 
     async def save_group(self, group_openid: str, name: str = "",
                          del_flag: int = 0, receive: int = 1) -> None:

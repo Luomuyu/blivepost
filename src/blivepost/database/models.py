@@ -275,6 +275,8 @@ class FriendRecord(Base):
 
     id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
     openid: Mapped[str] = mapped_column(String(64), unique=True, comment="用户openid")
+    union_openid: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, comment="UnionID体系标识(跨场景一致)")
     nickname: Mapped[str] = mapped_column(String(100), default="", comment="用户昵称")
     del_flag: Mapped[int] = mapped_column(Integer, default=0, comment="是否被删除(0否/1被删)")
     msg_receive: Mapped[int] = mapped_column(Integer, default=1, comment="单聊消息接收(1开/0关)")

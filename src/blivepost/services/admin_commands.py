@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 from typing import List, Optional, TYPE_CHECKING
 
+from ..utils.contact import extract_sender
 from ..utils.logger import get_logger
 from .bili_login import BiliLoginService, LoginResult, verify_nav
 from .cookie_pool import CookiePool
@@ -111,7 +112,8 @@ class AdminCommandHandler:
             message: botpy私聊消息
         """
         content = (message.content or "").strip()
-        sender = getattr(message.author, "user_openid", "") or ""
+        # sender提取：union_openid优先（跨场景一致），回退user_openid
+        sender = extract_sender(message.author)
         logger.info(f"收到私聊消息 (user={sender}): {content[:50]}")
 
         # /我：所有人可用，回复发送者openid（便于收集配置管理员名单）
@@ -261,6 +263,16 @@ class AdminCommandHandler:
     def busy(self) -> bool:
         """是否有登录流程进行中"""
         return self._login_task is not None and not self._login_task.done()
+
+    async def stop(self) -> None:
+        """取消进行中的登录流程（安全关闭时调用，避免任务与playwright资源残留）"""
+        if self._login_task is not None and not self._login_task.done():
+            self._login_task.cancel()
+            try:
+                await self._login_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._login_task = None
 
     def _pool_status(self) -> str:
         """账号池状态文本（含关联房间与最近使用时间）"""

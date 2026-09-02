@@ -66,7 +66,8 @@ class _PushClient(botpy.Client):
     async def on_friend_add(self, event) -> None:
         """用户添加好友"""
         if self._contact_handler:
-            await self._contact_handler.on_friend_add(getattr(event, "openid", ""))
+            union = getattr(event, "union_openid", None) or ""
+            await self._contact_handler.on_friend_add(getattr(event, "openid", ""), union)
 
     async def on_friend_del(self, event) -> None:
         """用户删除好友"""
@@ -543,6 +544,8 @@ class QQBotClient:
         Returns:
             media对象（file_info），失败返回None
         """
+        if self._client is None:
+            return None
         api = self._client.api
         http = api._http
         file_size = len(image_bytes)
@@ -562,6 +565,7 @@ class QQBotClient:
                 "md5_10m": md5_10m,
             },
         )
+        logger.debug(f"upload_prepare响应: {prepare}")
         upload_id = (prepare or {}).get("upload_id")
         parts = (prepare or {}).get("parts") or []
         if not upload_id or not parts:
@@ -578,11 +582,12 @@ class QQBotClient:
                 chunk = image_bytes[index * block:(index + 1) * block]
                 chunk_md5 = hashlib.md5(chunk).hexdigest()
                 async with put_session.put(presigned, data=chunk) as put_resp:
+                    put_body = await put_resp.text()
                     if put_resp.status not in (200, 201, 206):
-                        body = await put_resp.text()
                         logger.error(f"分片PUT失败 index={index}: "
-                                     f"{put_resp.status} {body[:120]}")
+                                     f"{put_resp.status} {put_body[:200]}")
                         return None
+                    logger.debug(f"分片PUT成功 index={index}: {put_body[:120]}")
                 # 逐片确认
                 await http.request(
                     Route("POST", "/v2/users/{user_id}/upload_part_finish",
@@ -605,6 +610,7 @@ class QQBotClient:
                 "srv_send_msg": False,
             },
         )
+        logger.debug(f"files合并响应: {media}")
         return media
 
     async def send_group_image(
