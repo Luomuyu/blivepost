@@ -208,6 +208,10 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - ~~二维码仅图片一种形态~~ → 图片发送失败时回退为**二维码URL文本**（管理员电脑浏览器打开显示二维码后扫码）
 - 真机已验证：access_token获取、websocket鉴权、/登录权限判定（main_openids）、扫码流程启动（等待扫码第1/3个二维码）
 
+### 2026-09-02 第二十四批（真机反馈：旧库union_openid列缺失）
+- ~~旧库启动报`no such column: friend.union_openid`~~（第十五批加列时未注册迁移）→ 迁移v3补注册；旧库升级测试覆盖（数据保留验证）
+- 教训固化：**后续任何表结构变更必须同步注册MIGRATIONS条目**
+
 ### 2026-09-02 第二十三批（sender身份与union_openid）
 - 真机确认：**群@消息的author是member_openid（群内唯一、跨群不同），非user_openid**——此前群控制指令的权限判定与提示均取不到发送者（显示"未知"）
 - 新增 `utils/contact.py` `extract_sender`：按 union_openid > member_openid > user_openid > id 优先级提取
