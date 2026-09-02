@@ -138,6 +138,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 2026-09 第二十七批 | **chromium安装至运行目录ms-playwright/**（本地默认+Docker /app/ms-playwright）；.dockerignore/.gitignore排除 |
 | 2026-09 第二十八批 | **绑定风控修复**：get_room_info改免签名接口（Room/get_info+用户名片card），弃用wbi/acc/info（真机-352）；房间9646546实测通过 |
 | 2026-09 第二十九批（审查） | 第六轮审查：修复2个日期边界测试缺陷（导出文件名写死20260902）→159用例首次全绿；三文档整理重建；wheel重构建 |
+| 2026-09 第三十批（真机反馈：stop退出噪音） | botpy的start循环经ensure_future派生ws/心跳子任务且不留句柄，取消start任务不传播——子任务存活到循环拆除被强杀（CancelledError回溯/"会话未正常回队"/Unclosed session噪音）；stop改为先取消start任务、按协程所属模块（botpy.*）清扫余留子任务、最后关http会话；真机stop链路本身已验证正常 |
 
 各批次过程细节见REVIEW.md（六轮审查记录）与git历史。
 

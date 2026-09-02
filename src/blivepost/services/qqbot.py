@@ -288,7 +288,25 @@ class QQBotClient:
             logger.error(f"botpy客户端异常退出: {exc}")
 
     async def stop(self) -> None:
-        """停止botpy客户端"""
+        """停止botpy客户端（含start循环派生的ws/心跳/事件子任务）"""
+        # 先取消start任务：botpy的start循环经ensure_future派生ws子任务且不保留
+        # 句柄，取消不会传播到子任务；若留给事件循环拆除时强杀，会产出
+        # CancelledError回溯、"会话未正常回队"与Unclosed client session噪音
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass  # 任务异常已由_on_task_done记录，不阻断关闭序列
+            self._task = None
+
+        if self._loop is not None and self._loop.is_running():
+            await self._cancel_botpy_tasks(self._loop)
+            self._loop = None
+
+        # 子任务全部退出后再关http会话（避免在存活连接脚下关闭）
         if self._client is not None:
             try:
                 await self._client.close()
@@ -296,14 +314,30 @@ class QQBotClient:
                 logger.warning(f"关闭botpy客户端出错: {e}")
             self._client = None
 
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._task = None
-            self._loop = None
+    @staticmethod
+    async def _cancel_botpy_tasks(loop: asyncio.AbstractEventLoop) -> None:
+        """取消事件循环上botpy模块派生的余留任务（ws连接/心跳/事件回调）"""
+        pending = []
+        for t in asyncio.all_tasks(loop):
+            if t is asyncio.current_task() or t.done():
+                continue
+            if QQBotClient._coro_module(t.get_coro()).startswith("botpy"):
+                pending.append(t)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    @staticmethod
+    def _coro_module(coro) -> str:
+        """协程所属模块名（coroutine对象无__module__属性，从frame globals取）"""
+        mod = getattr(coro, "__module__", None)
+        if mod:
+            return mod
+        frame = getattr(coro, "cr_frame", None)
+        if frame is not None:
+            return frame.f_globals.get("__name__", "") or ""
+        return ""
 
     async def send_group_message(self, group_openid: str, content: str) -> bool:
         """
