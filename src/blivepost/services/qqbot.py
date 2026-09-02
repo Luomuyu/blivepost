@@ -527,7 +527,6 @@ class QQBotClient:
             logger.error(f"发送私聊图片失败: user={openid}, error={e}")
             return False
 
-
     async def _upload_image_file(self, openid: str, image_bytes: bytes,
                                  filename: str):
         """
