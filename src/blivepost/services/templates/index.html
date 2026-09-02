@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BLivePost 状态面板</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"></script>
+<style>
+  html{color-scheme:dark}
+  ::-webkit-scrollbar{width:8px;height:8px}
+  ::-webkit-scrollbar-thumb{background:#334155;border-radius:4px}
+</style>
+<script>
+/* 收入趋势图（原生JS，无外部依赖）：按容器宽度绘制SVG，resize重绘；悬停/触摸显示各日明细 */
+window.renderTrend = function(data, mode){
+  var el = document.getElementById('trend'), tip = document.getElementById('trend-tip');
+  if(!el) return;
+  if(!data || !data.length){ el.innerHTML = '<p class="py-10 text-center text-sm text-slate-500">暂无趋势数据</p>'; return; }
+  var S = [["danmaku","#60a5fa","弹幕"],["gift_gold","#f59e0b","礼物(元)"],
+           ["ship_gold","#34d399","上舰(元)"],["sc_total","#f87171","SC(元)"]];
+  function fmt(v){ v = +v||0; return Math.abs(v)>=100 ? String(Math.round(v)) : (Math.round(v*10)/10).toString(); }
+  var PL=44, PR=12, step=0, n=0;
+  function draw(){
+    var W = el.clientWidth || 600; if(W < 260) W = 260;
+    var H = 250, iw = W-PL-PR, ih = H-40; n = data.length;
+    var peak = 1;
+    for(var s=0;s<S.length;s++){
+      var arr = data.map(function(r){ return +r[S[s][0]]||0; });
+      S[s][3] = arr;
+      for(var i=0;i<arr.length;i++) if(arr[i]>peak) peak = arr[i];
+    }
+    function X(i){ return PL + (n>1 ? i*iw/(n-1) : iw/2); }
+    function Y(v){ return 14 + ih - (v/peak)*ih; }
+    step = n>1 ? iw/(n-1) : 0;
+    var g = '';
+    for(var f=0;f<=4;f++){
+      var y = 14 + ih - ih*f/4;
+      g += '<line x1="'+PL+'" y1="'+y+'" x2="'+(W-PR)+'" y2="'+y+'" stroke="#1e293b"/>' +
+           '<text x="'+(PL-6)+'" y="'+(y+3)+'" font-size="10" fill="#64748b" text-anchor="end">'+fmt(peak*f/4)+'</text>';
+    }
+    var labN = Math.min(n, Math.max(2, Math.floor(W/90)));
+    for(var j=0;j<labN;j++){
+      var i2 = labN>1 ? Math.round(j*(n-1)/(labN-1)) : 0;
+      var lab = data[i2].day;
+      if(mode === 'monthly' && lab.length >= 7) lab = lab.slice(0, 7);
+      else if(lab.length >= 10) lab = lab.slice(5, 10);
+      g += '<text x="'+X(i2)+'" y="'+(H-8)+'" font-size="10" fill="#64748b" text-anchor="middle">'+lab+'</text>';
+    }
+    var sv = '<svg width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg">'+g;
+    for(var s2=0;s2<S.length;s2++){
+      var pts = S[s2][3].map(function(v,i3){ return X(i3).toFixed(1)+','+Y(v).toFixed(1); }).join(' ');
+      sv += '<polyline fill="none" stroke="'+S[s2][1]+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="'+pts+'"/>';
+    }
+    sv += '</svg>';
+    el.innerHTML = sv;
+    var svg = el.querySelector('svg');
+    function pos(e){
+      var cx = (e.touches ? e.touches[0].clientX : e.clientX);
+      var r = svg.getBoundingClientRect();
+      var i = step ? Math.round((cx - r.left - PL)/step) : 0;
+      i = Math.max(0, Math.min(n-1, i));
+      var rows = '<b class="text-slate-100">'+data[i].day+'</b>';
+      for(var s3=0;s3<S.length;s3++)
+        rows += '<br><span style="color:'+S[s3][1]+'">●</span> '+S[s3][2]+': '+fmt(S[s3][3][i]);
+      tip.innerHTML = rows;
+      tip.classList.remove('hidden');
+      var box = el.parentElement.getBoundingClientRect();
+      var lx = cx - box.left + 14;
+      if(lx + 150 > box.width) lx = cx - box.left - 164;
+      if(lx < 0) lx = 0;
+      tip.style.left = lx+'px'; tip.style.top = '10px';
+    }
+    function hide(){ tip.classList.add('hidden'); }
+    svg.addEventListener('mousemove', pos);
+    svg.addEventListener('mouseleave', hide);
+    svg.addEventListener('touchstart', pos, {passive:true});
+    svg.addEventListener('touchmove', pos, {passive:true});
+    svg.addEventListener('touchend', hide);
+  }
+  var rt = null;
+  window.addEventListener('resize', function(){ clearTimeout(rt); rt = setTimeout(draw, 200); });
+  draw();
+};
+</script>
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen font-sans antialiased">
+<header class="sticky top-0 z-20 backdrop-blur bg-slate-950/80 border-b border-slate-800">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-2.5">
+      <span class="w-2.5 h-2.5 rounded-full bg-pink-500 shadow-[0_0_8px_rgba(236,72,153,.8)]"></span>
+      <h1 class="text-lg font-bold tracking-wide">BLivePost <span class="text-slate-500 font-normal">状态面板</span></h1>
+    </div>
+    <span class="text-xs text-slate-500">每30秒自动刷新 · 只读</span>
+  </div>
+</header>
+<main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
+  {% include 'partials/summary.html' %}
+  {% include 'partials/trend.html' %}
+</main>
+</body>
+</html>

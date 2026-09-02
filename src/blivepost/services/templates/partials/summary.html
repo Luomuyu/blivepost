@@ -1,0 +1,222 @@
+<div id="summary" hx-get="/panel/summary" hx-trigger="every 30s" hx-swap="outerHTML" class="space-y-6">
+  <!-- 状态卡片 -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div class="text-xs text-slate-500 mb-1">机器人凭证</div>
+      {% if bot.client_started %}
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+        <span class="text-xl font-semibold text-emerald-400">在线</span>
+      </div>
+      {% else %}
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-red-400"></span>
+        <span class="text-xl font-semibold text-red-400">离线</span>
+      </div>
+      {% endif %}
+      <div class="text-xs text-slate-500 mt-1">token剩余 {{ bot.token_expires_in }} 秒</div>
+    </div>
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div class="text-xs text-slate-500 mb-1">账号池</div>
+      <div class="text-xl font-semibold">{{ pool_active }}<span class="text-slate-500 text-sm"> / {{ pool_total }} 可用</span></div>
+      <div class="text-xs text-slate-500 mt-1">多账号轮转 · 亲和绑定</div>
+    </div>
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div class="text-xs text-slate-500 mb-1">监控房间</div>
+      <div class="text-xl font-semibold">{{ rooms | length }}</div>
+      <div class="text-xs text-slate-500 mt-1">独立子进程 · 90秒状态校正</div>
+    </div>
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div class="text-xs text-slate-500 mb-1">数据库体积</div>
+      <div class="text-xl font-semibold">{{ db_size_mb }} <span class="text-slate-500 text-sm">MB</span></div>
+      <div class="text-xs text-slate-500 mt-1">永久保留策略，不自动删除</div>
+    </div>
+  </div>
+
+  <!-- 机器人详情 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+    <div class="flex items-center gap-4">
+      {% if me.avatar %}
+      <img src="{{ me.avatar }}" alt="avatar" class="w-14 h-14 rounded-xl border border-slate-700 object-cover">
+      {% else %}
+      <div class="w-14 h-14 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-xl font-bold text-slate-400">
+        {{ (me.username or '?')[:1] }}
+      </div>
+      {% endif %}
+      <div class="min-w-0">
+        <div class="font-semibold text-base truncate">{{ me.username or '暂未获取到机器人详情' }}</div>
+        <div class="text-xs text-slate-500 font-mono mt-0.5">AppID: {{ app_id or '-' }}</div>
+        <div class="mt-1.5">
+          {% if me.share_url %}
+          <a href="{{ me.share_url }}" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors">
+            分享机器人
+          </a>
+          {% else %}
+          <span class="text-xs text-slate-600">暂无分享链接</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 监控房间 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+    <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+      <h2 class="font-semibold">监控房间 <span class="text-slate-500 text-sm font-normal">{{ rooms | length }}</span></h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-5 py-2.5 font-medium">房间</th>
+            <th class="px-4 py-2.5 font-medium">主播</th>
+            <th class="px-4 py-2.5 font-medium">进程</th>
+            <th class="px-4 py-2.5 font-medium">今日弹幕</th>
+            <th class="px-4 py-2.5 font-medium">礼物(元)</th>
+            <th class="px-4 py-2.5 font-medium">上舰(元)</th>
+            <th class="px-4 py-2.5 font-medium">SC(元)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rooms %}
+          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
+            <td class="px-5 py-2.5 font-mono">{{ r.room_id }}</td>
+            <td class="px-4 py-2.5">{{ r.streamer or '-' }}</td>
+            <td class="px-4 py-2.5">
+              {% if r.alive %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">运行中</span>
+              {% else %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-500/10 text-red-400">未运行</span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-2.5">{{ r.danmaku }}</td>
+            <td class="px-4 py-2.5">{{ r.gold }}</td>
+            <td class="px-4 py-2.5">{{ r.ship }}</td>
+            <td class="px-4 py-2.5">{{ r.sc }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="px-5 py-6 text-center text-slate-500">暂无监控房间（群内 @机器人 发送 /绑定 房间号）</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 动态订阅 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+    <div class="px-5 py-3.5 border-b border-slate-800">
+      <h2 class="font-semibold">动态订阅 <span class="text-slate-500 text-sm font-normal">{{ dynamics | length }}</span></h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-5 py-2.5 font-medium">UP主UID</th>
+            <th class="px-4 py-2.5 font-medium">昵称</th>
+            <th class="px-4 py-2.5 font-medium">轮询进程</th>
+            <th class="px-4 py-2.5 font-medium">订阅群数</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in dynamics %}
+          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
+            <td class="px-5 py-2.5 font-mono">{{ d.up_uid }}</td>
+            <td class="px-4 py-2.5">{{ d.name or '-' }}</td>
+            <td class="px-4 py-2.5">
+              {% if d.alive %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">轮询中</span>
+              {% else %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-500/10 text-red-400">未运行</span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-2.5">{{ d.groups }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="px-5 py-6 text-center text-slate-500">暂无订阅（群内 @机器人 发送 /绑定动态 UP主UID）</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 账号池 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+    <div class="px-5 py-3.5 border-b border-slate-800">
+      <h2 class="font-semibold">账号池 <span class="text-slate-500 text-sm font-normal">可用 {{ pool_active }}/{{ pool_total }}</span></h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-5 py-2.5 font-medium">UID</th>
+            <th class="px-4 py-2.5 font-medium">昵称</th>
+            <th class="px-4 py-2.5 font-medium">状态</th>
+            <th class="px-4 py-2.5 font-medium">剩余有效期</th>
+            <th class="px-4 py-2.5 font-medium">使用次数</th>
+            <th class="px-4 py-2.5 font-medium">最近使用</th>
+            <th class="px-4 py-2.5 font-medium">关联房间</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in accounts %}
+          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
+            <td class="px-5 py-2.5 font-mono">{{ a.uid }}</td>
+            <td class="px-4 py-2.5">{{ a.nickname }}</td>
+            <td class="px-4 py-2.5">
+              {% if a.status == 'active' %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">{{ a.status }}</span>
+              {% else %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-500/10 text-red-400">{{ a.status }}</span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-2.5">{{ '-' if a.days_left is none else a.days_left ~ '天' }}</td>
+            <td class="px-4 py-2.5">{{ a.use_count }}</td>
+            <td class="px-4 py-2.5">{{ a.last_used or '-' }}</td>
+            <td class="px-4 py-2.5">{{ a.rooms | join('、') if a.rooms else '-' }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="px-5 py-6 text-center text-slate-500">暂无账号（管理员私聊发送 /登录 扫码添加）</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 最近下播 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+    <div class="px-5 py-3.5 border-b border-slate-800">
+      <h2 class="font-semibold">最近下播记录</h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-5 py-2.5 font-medium">时间</th>
+            <th class="px-4 py-2.5 font-medium">房间</th>
+            <th class="px-4 py-2.5 font-medium">弹幕</th>
+            <th class="px-4 py-2.5 font-medium">礼物(元)</th>
+            <th class="px-4 py-2.5 font-medium">上舰(元)</th>
+            <th class="px-4 py-2.5 font-medium">SC(元)</th>
+            <th class="px-4 py-2.5 font-medium">时长</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in recent %}
+          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
+            <td class="px-5 py-2.5">{{ r.end_time.strftime('%m-%d %H:%M') if r.end_time else '-' }}</td>
+            <td class="px-4 py-2.5 font-mono">{{ r.room_id }}</td>
+            <td class="px-4 py-2.5">{{ r.danmaku_count }}</td>
+            <td class="px-4 py-2.5">{{ r.gold_count }}</td>
+            <td class="px-4 py-2.5">{{ r.ship_count }}</td>
+            <td class="px-4 py-2.5">{{ r.sc_count }}</td>
+            <td class="px-4 py-2.5">{{ ((r.duration or 0) // 3600) }}h{{ ((r.duration or 0) % 3600 // 60) }}m</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="px-5 py-6 text-center text-slate-500">暂无下播记录</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

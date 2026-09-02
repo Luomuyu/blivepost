@@ -103,6 +103,22 @@ class BilibiliAPI:
             logger.warning(f"查询直播间{room_id}状态异常: {e}")
             return None
 
+    def get_user_name(self, uid: int) -> str:
+        """
+        获取用户昵称（用户名片接口，免签名无风控；失败返回空串）
+
+        Args:
+            uid: 用户ID
+
+        Returns:
+            str: 昵称，获取失败为空串
+        """
+        try:
+            return str(self._get_user_info(uid).get("name") or "")
+        except Exception as e:
+            logger.warning(f"查询用户{uid}昵称失败: {e}")
+            return ""
+
     def _get_user_info(self, uid: int) -> dict:
         """
         获取用户信息（用户名片接口）

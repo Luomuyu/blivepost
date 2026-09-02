@@ -28,6 +28,9 @@ logger = get_logger("qqbot")
 class _PushClient(botpy.Client):
     """botpy客户端：负责消息API调用与群/私聊命令事件处理"""
 
+    # 主动关闭标记：stop()置位，bot_connect据此静默取消（不记错误日志）
+    _stopping = False
+
     def __init__(
         self,
         intents,
@@ -42,6 +45,33 @@ class _PushClient(botpy.Client):
         self._command_handler = command_handler
         self._c2c_handler = c2c_handler
         self._contact_handler = contact_handler
+
+    async def bot_connect(self, session) -> None:
+        """
+        覆写botpy的连接入口，实现关闭阶段的静默取消。
+
+        botpy 1.0.1起ws_connect的finally兜底会把任何退出（含取消）的会话
+        强制放回重连队列并告警，bot_connect捕获BaseException后经on_error
+        记录错误并print_exc——主动关闭时这些全是噪音。此处自行管理：
+        - stop()取消（_stopping置位）：静默上抛，不回队不记日志
+        - 非关闭期取消/异常断开：保持原版语义（回队重连），错误经项目logger记录
+        - 预置_requeued=True禁用ws_connect的finally兜底告警（回队由本方法负责）
+        """
+        from botpy.gateway import BotWebSocket
+
+        client = BotWebSocket(session, self._connection)
+        client._requeued = True
+        try:
+            await client.ws_connect()
+        except asyncio.CancelledError:
+            if not self._stopping:
+                self._connection.add(session)
+            raise
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as e:
+            self._connection.add(session)
+            logger.error(f"botpy ws连接异常断开（会话已回队重连）: {e!r}")
 
     async def on_group_add_robot(self, event) -> None:
         """机器人加入群"""
@@ -296,6 +326,8 @@ class QQBotClient:
         # 先取消start任务：botpy的start循环经ensure_future派生ws子任务且不保留
         # 句柄，取消不会传播到子任务；若留给事件循环拆除时强杀，会产出
         # CancelledError回溯、"会话未正常回队"与Unclosed client session噪音
+        if self._client is not None:
+            self._client._stopping = True  # bot_connect据此静默取消
         if self._task is not None:
             self._task.cancel()
             try:

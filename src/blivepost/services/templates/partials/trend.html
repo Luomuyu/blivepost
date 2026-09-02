@@ -1,0 +1,30 @@
+<div id="trend-panel" class="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+    <h2 class="font-semibold">收入趋势 <span class="text-slate-500 text-sm font-normal">{{ label }}</span></h2>
+    <div class="flex flex-wrap items-center gap-1.5 text-xs">
+      {% for key, name in [('d7','近7天'),('d14','近14天'),('d30','近30天'),('this_month','本月'),('last_month','上月'),('12m','近12个月')] %}
+      <button hx-get="/panel/trend?range={{ key }}" hx-target="#trend-panel" hx-swap="outerHTML"
+              class="px-3 py-1.5 rounded-lg transition-colors {{ 'bg-blue-600 text-white' if active == key else 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200' }}">
+        {{ name }}
+      </button>
+      {% endfor %}
+      <input type="month" name="month" value="{{ month_value }}" max="{{ this_month_key }}"
+             hx-get="/panel/trend?range=custom_month" hx-trigger="change" hx-include="this"
+             hx-target="#trend-panel" hx-swap="outerHTML"
+             class="bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1.5 border border-slate-700 hover:bg-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer"
+             title="选择任意自然月">
+    </div>
+  </div>
+  <div class="relative">
+    <div id="trend"></div>
+    <div id="trend-tip"
+         class="hidden absolute pointer-events-none z-10 bg-slate-800/95 border border-slate-700 text-slate-200 text-xs leading-6 px-3 py-2 rounded-lg whitespace-nowrap shadow-lg"></div>
+  </div>
+  <p class="mt-3 text-xs text-slate-500">
+    图例：<span class="text-blue-400">蓝=弹幕</span> · <span class="text-amber-500">橙=礼物(元)</span> ·
+    <span class="text-emerald-400">绿=上舰(元)</span> · <span class="text-red-400">红=SC(元)</span>
+    　悬停/触摸查看各日明细　<a class="text-blue-400 hover:underline" href="/api/history?days=30">JSON</a>
+    {% if mode == 'monthly' %}　（按月汇总视图）{% endif %}
+  </p>
+  <script>renderTrend({{ data | tojson }}, '{{ mode }}');</script>
+</div>

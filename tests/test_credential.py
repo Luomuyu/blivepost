@@ -109,6 +109,10 @@ class D:
         return []
 
     @staticmethod
+    async def get_daily_history_range(start_day, end_day):
+        return []
+
+    @staticmethod
     async def get_recent_live_status(limit=10):
         return []
 
@@ -118,30 +122,38 @@ def _panel(token=""):
                     token=token, bot_client=FakeBot())
 
 
+def _full_collect():
+    return {"now": "t", "bot": {"client_started": True, "token_ready": True,
+            "token_expires_in": 3600},
+            "me": {"id": "9", "username": "bot", "avatar": "", "share_url": ""},
+            "app_id": "100", "db_size_mb": 1.2,
+            "accounts": [], "rooms": [], "dynamics": [], "recent": []}
+
+
 @pytest.mark.asyncio
 async def test_panel_token_required():
     panel = _panel(token="SECRET")
     from aiohttp.test_utils import make_mocked_request
     req = make_mocked_request("GET", "/")
-    resp = await panel._handle_home(req)
+    resp = await panel._handle_index(req)
     assert resp.status == 401
 
 
 @pytest.mark.asyncio
 async def test_panel_token_ok_renders_credentials(monkeypatch):
     panel = _panel(token="SECRET")
-    async def fake_collect():
-        return {"now": "t", "bot": {"client_started": True, "token_ready": True,
-                "token_expires_in": 3600}, "db_size_mb": 1.2, "accounts": [],
-                "rooms": [], "dynamics": [], "recent": []}
-    panel._collect = fake_collect
+    panel._collect = lambda: _full_collect_async()
 
     from aiohttp.test_utils import make_mocked_request
     req = make_mocked_request("GET", "/?token=SECRET")
-    resp = await panel._handle_home(req)
+    resp = await panel._handle_index(req)
     assert resp.status == 200
     body = resp.text
     assert "token剩余" in body and "在线" in body
+
+
+async def _full_collect_async():
+    return _full_collect()
 
 
 @pytest.mark.asyncio
@@ -170,6 +182,64 @@ async def test_get_me_parses_dict_response():
     assert me["id"] == "123"
     assert me["avatar"] == "http://example.com/a.png"
     c._task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_bot_connect_quiet_cancel(monkeypatch):
+    """主动关闭(_stopping)时取消静默上抛不回队；非关闭期取消保持回队重连语义"""
+    import asyncio
+
+    from blivepost.services import qqbot as qm
+
+    requeued = []
+
+    class FakeConn:
+        def add(self, session):
+            requeued.append(session)
+
+    class FakeWS:
+        def __init__(self, session, connection):
+            self.session = session
+            self.connection = connection
+            self._requeued = False
+
+        async def ws_connect(self):
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr("botpy.gateway.BotWebSocket", FakeWS)
+
+    c = object.__new__(qm._PushClient)
+    c._connection = FakeConn()
+    session = {"session_id": "s1"}
+
+    c._stopping = True
+    with pytest.raises(asyncio.CancelledError):
+        await c.bot_connect(session)
+    assert requeued == []  # 关闭阶段：静默取消，不回队
+
+    c._stopping = False
+    with pytest.raises(asyncio.CancelledError):
+        await c.bot_connect(session)  # 非关闭期：取消仍上抛（任务以取消结束），但回队触发重连
+    assert requeued == [session]
+
+
+@pytest.mark.asyncio
+async def test_stop_sets_stopping_flag():
+    """stop()在取消任务前置位_stopping（bot_connect静默取消的前提）"""
+    class FakeInner:
+        _stopping = False
+
+        async def close(self):
+            pass
+
+    c = object.__new__(QQBotClient)
+    client = FakeInner()
+    c._client = client
+    c._task = None
+    c._loop = None
+    await c.stop()
+    assert client._stopping is True
+    assert c._client is None and c._task is None
 
 
 async def fake_collect():

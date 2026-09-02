@@ -992,11 +992,36 @@ class DatabaseService:
             list[dict]: [{"day": "YYYY-MM-DD", "danmaku": n, "gift_gold": f,
                           "ship_gold": f, "sc_total": n}] 按日期升序
         """
-        start = local_now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
-        from datetime import timedelta as _td
+        today = local_now().replace(hour=0, minute=0, second=0, microsecond=0)
+        return await self.get_daily_history_range(
+            (today - timedelta(days=days - 1)).date(), today.date(),
+            room_ids=room_ids)
+
+    async def get_daily_history_range(self, start_day, end_day,
+                                      room_ids: Optional[List[int]] = None) -> List[dict]:
+        """
+        按日聚合的自然日区间历史数据（Web面板趋势选择器用）
+
+        Args:
+            start_day/end_day: 起止日期（date/datetime，含首尾）
+            room_ids: 房间列表（None=全部房间）
+
+        Returns:
+            list[dict]: 同get_daily_history，按日期升序；区间内无数据补零
+        """
+        from datetime import datetime as _dt, date as _date, timedelta as _td
+        if isinstance(start_day, _date) and not isinstance(start_day, _dt):
+            start_day = _dt.combine(start_day, _dt.min.time())
+        if isinstance(end_day, _date) and not isinstance(end_day, _dt):
+            end_day = _dt.combine(end_day, _dt.min.time())
+        start = start_day
+        span_days = (end_day - start_day).days + 1
+        if span_days <= 0:
+            return []
+        end_bound = start + _td(days=span_days)
 
         async def _by_day(model, aggregate, coin_filter=None):
-            conditions = [model.timestamp >= start]
+            conditions = [model.timestamp >= start, model.timestamp < end_bound]
             if coin_filter is not None:
                 conditions.append(coin_filter)
             if room_ids is not None:
@@ -1021,7 +1046,7 @@ class DatabaseService:
             logger.error(f"查询历史趋势失败: {e}")
             return []
 
-        for i in range(days):
+        for i in range(span_days):
             day = (start + _td(days=i)).strftime("%Y-%m-%d")
             history[day] = {
                 "day": day,

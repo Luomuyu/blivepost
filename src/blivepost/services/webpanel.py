@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Web状态面板（只读，aiohttp实现）
+Web状态面板（只读，aiohttp + Jinja2 + HTMX实现）
 
-展示账号池状态、监控房间与进程状态、各房间当日汇总、最近下播记录。
+暗色现代界面：状态卡片、机器人详情、收入趋势（区间选择）、监控房间/
+动态订阅/账号池/下播记录表格。HTMX局部刷新（每30秒自动刷新摘要，趋势
+区间切换无整页刷新）。前端样式经CDN加载Tailwind + HTMX。
 默认监听127.0.0.1（仅本机访问），无鉴权——请勿直接暴露到公网。
 通过Setting.web_panel开关，web_host/web_port配置监听。
 """
 
-import json
 import os
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from aiohttp import web
+from jinja2 import Environment, FileSystemLoader
 
 from ..utils.logger import get_logger
 
@@ -26,127 +29,14 @@ if TYPE_CHECKING:
 
 logger = get_logger("webpanel")
 
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+_env = Environment(
+    loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+    autoescape=True,
+)
 
-# 收入趋势图（原生JS渲染，无外部依赖）：
-# 按容器实际宽度绘制SVG（窗口resize重绘，移动端自适应）；
-# 鼠标悬停/触摸显示该日四项数据浮层；数据由页面内嵌JSON提供
-_TREND_JS = """
-(function(){
-  var el=document.getElementById('trend'), tip=document.getElementById('trend-tip');
-  var data=[];
-  try{ data=JSON.parse(document.getElementById('trend-data').textContent)||[]; }catch(e){}
-  var S=[["danmaku","#4a90d9","弹幕"],["gift_gold","#e67e22","礼物(元)"],
-         ["ship_gold","#2e8b57","上舰(元)"],["sc_total","#c0392b","SC(元)"]];
-  if(!data.length){el.innerHTML='<p style="margin:12px;color:#888">暂无趋势数据</p>';return;}
-  function fmt(v){v=+v||0;return Math.abs(v)>=100?String(Math.round(v)):(Math.round(v*10)/10).toString();}
-  var PL=42, PR=10, step=0, n=0;
-  function draw(){
-    var W=el.clientWidth||600; if(W<260)W=260;
-    var H=240, iw=W-PL-PR, ih=H-36; n=data.length;
-    var peak=1;
-    for(var s=0;s<S.length;s++){
-      var arr=data.map(function(r){return +r[S[s][0]]||0;});
-      S[s][3]=arr;
-      for(var i=0;i<arr.length;i++) if(arr[i]>peak)peak=arr[i];
-    }
-    function X(i){return PL+(n>1?i*iw/(n-1):iw/2);}
-    function Y(v){return 12+ih-(v/peak)*ih;}
-    step=n>1?iw/(n-1):0;
-    var g='';
-    for(var f=0;f<=4;f++){
-      var y=12+ih-ih*f/4;
-      g+='<line x1="'+PL+'" y1="'+y+'" x2="'+(W-PR)+'" y2="'+y+'" stroke="#e8e8e8"/>'+
-         '<text x="'+(PL-5)+'" y="'+(y+3)+'" font-size="10" fill="#999" text-anchor="end">'+fmt(peak*f/4)+'</text>';
-    }
-    var labN=Math.min(n,Math.max(2,Math.floor(W/95)));
-    for(var j=0;j<labN;j++){
-      var i2=labN>1?Math.round(j*(n-1)/(labN-1)):0;
-      g+='<text x="'+X(i2)+'" y="'+(H-6)+'" font-size="10" fill="#999" text-anchor="middle">'+data[i2].day.slice(5)+'</text>';
-    }
-    var sv='<svg width="'+W+'" height="'+H+'" xmlns="http://www.w3.org/2000/svg">'+g;
-    for(var s2=0;s2<S.length;s2++){
-      var pts=S[s2][3].map(function(v,i3){return X(i3).toFixed(1)+','+Y(v).toFixed(1);}).join(' ');
-      sv+='<polyline fill="none" stroke="'+S[s2][1]+'" stroke-width="1.8" points="'+pts+'"/>';
-    }
-    sv+='</svg>';
-    el.innerHTML=sv;
-    var svg=el.querySelector('svg');
-    function pos(e){
-      var cx=(e.touches?e.touches[0].clientX:e.clientX);
-      var r=svg.getBoundingClientRect();
-      var i=step?Math.round((cx-r.left-PL)/step):0;
-      i=Math.max(0,Math.min(n-1,i));
-      var rows='<b>'+data[i].day+'</b>';
-      for(var s3=0;s3<S.length;s3++)
-        rows+='<br><span style="color:'+S[s3][1]+'">●</span> '+S[s3][2]+': '+fmt(S[s3][3][i]);
-      tip.innerHTML=rows; tip.style.display='block';
-      var box=el.parentElement.getBoundingClientRect();
-      var lx=cx-box.left+14;
-      if(lx+150>box.width) lx=cx-box.left-164;
-      if(lx<0) lx=0;
-      tip.style.left=lx+'px'; tip.style.top='10px';
-    }
-    function hide(){tip.style.display='none';}
-    svg.addEventListener('mousemove',pos);
-    svg.addEventListener('mouseleave',hide);
-    svg.addEventListener('touchstart',pos,{passive:true});
-    svg.addEventListener('touchmove',pos,{passive:true});
-    svg.addEventListener('touchend',hide);
-  }
-  var rt=null;
-  window.addEventListener('resize',function(){clearTimeout(rt);rt=setTimeout(draw,200);});
-  draw();
-})();
-"""
-
-_PAGE = """<!DOCTYPE html>
-<html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="30">
-<title>BLivePost 状态面板</title>
-<style>
-body{{font-family:"Microsoft YaHei",sans-serif;margin:24px;background:#f7f8fa;color:#333}}
-h1{{font-size:20px}} h2{{font-size:16px;margin-top:24px;border-left:4px solid #4a90d9;padding-left:8px}}
-table{{border-collapse:collapse;width:100%;background:#fff;font-size:13px}}
-th,td{{border:1px solid #e0e0e0;padding:6px 10px;text-align:left}}
-th{{background:#f0f4f8}}
-.ok{{color:#2e8b57}} .bad{{color:#c0392b}} small{{color:#888}}
-.tbl{{overflow-x:auto;-webkit-overflow-scrolling:touch}}
-.trend-box{{position:relative}}
-#trend{{background:#fff;border:1px solid #e0e0e0}}
-#trend-tip{{position:absolute;pointer-events:none;display:none;background:rgba(40,40,40,.92);
-color:#fff;font-size:12px;line-height:1.6;padding:6px 10px;border-radius:4px;white-space:nowrap;z-index:5}}
-@media (max-width:640px){{
-body{{margin:10px}}
-h1{{font-size:17px}} h2{{font-size:15px;margin-top:18px}}
-table{{font-size:12px}} th,td{{padding:4px 6px}}
-}}
-</style></head><body>
-<h1>BLivePost 状态面板 <small>刷新时间 {now} · 每30秒自动刷新</small></h1>
-<p>机器人凭证：<b>{bot_state}</b>（token剩余 {token_expires_in} 秒）
-　数据库体积：<b>{db_size_mb} MB</b> <small>（永久保留策略，数据不自动删除）</small></p>
-<h2>机器人详情</h2>
-<div class="tbl"><table><tr><th>头像</th><th>用户名</th><th>分享</th></tr>
-{me_row}</table></div>
-<h2>账号池（可用 {active}/{total}）</h2>
-<div class="tbl"><table><tr><th>UID</th><th>昵称</th><th>状态</th><th>剩余有效期</th><th>使用次数</th><th>最近使用</th><th>关联房间</th></tr>
-{accounts}</table></div>
-<h2>收入趋势（近{hist_days}天） <small><a href="/api/history?days={hist_days}">JSON</a> · 悬停/触摸查看各日明细</small></h2>
-<div class="trend-box"><div id="trend"></div><div id="trend-tip"></div></div>
-<p><small>图例：蓝=弹幕 橙=礼物(元) 绿=上舰(元) 红=SC(元)
-JSON: <a href="/api/history?days={hist_days}">/api/history</a></small></p>
-<h2>监控房间（{room_count}）</h2>
-<div class="tbl"><table><tr><th>房间</th><th>进程</th><th>账号</th><th>今日弹幕</th><th>礼物(元)</th><th>上舰(元)</th><th>SC(元)</th></tr>
-{rooms}</table></div>
-<h2>动态订阅（{dyn_count}）</h2>
-<div class="tbl"><table><tr><th>UP主UID</th><th>昵称</th><th>轮询进程</th><th>订阅群数</th></tr>
-{dynamics}</table></div>
-<h2>最近下播记录</h2>
-<div class="tbl"><table><tr><th>时间</th><th>房间</th><th>弹幕</th><th>礼物(元)</th><th>上舰(元)</th><th>SC(元)</th><th>时长</th></tr>
-{live_records}</table></div>
-<script id="trend-data" type="application/json">__TREND_JSON__</script>
-<script>__TREND_JS__</script>
-</body></html>"""
+# 主播昵称缓存：{uid: (过期时刻, 昵称)}，避免每次刷新重复请求名片接口
+_NAME_CACHE_TTL = 6 * 3600
 
 
 class WebPanel:
@@ -174,11 +64,14 @@ class WebPanel:
         self.token = token
         self.bot_client = bot_client
         self._runner: Optional[web.AppRunner] = None
+        self._name_cache: dict = {}
 
     async def start(self) -> None:
         """启动HTTP服务"""
         app = web.Application()
-        app.router.add_get("/", self._handle_home)
+        app.router.add_get("/", self._handle_index)
+        app.router.add_get("/panel/summary", self._handle_summary)
+        app.router.add_get("/panel/trend", self._handle_trend)
         app.router.add_get("/api/status", self._handle_api)
         app.router.add_get("/api/history", self._handle_history)
         self._runner = web.AppRunner(app)
@@ -194,12 +87,27 @@ class WebPanel:
             self._runner = None
 
     def _check_token(self, request) -> bool:
-        """访问令牌校验（未配置token时不鉴权）"""
+        """访问令牌校验（未配置token时不鉴权；支持query/头/cookie三种携带）"""
         if not self.token:
             return True
         provided = (request.query.get("token")
-                    or request.headers.get("X-Web-Token") or "")
+                    or request.headers.get("X-Web-Token")
+                    or request.cookies.get("web_token")
+                    or "")
         return provided == self.token
+
+    def _html_response(self, request, html: str) -> web.Response:
+        """HTML响应；经query/头鉴权成功时下发cookie供HTMX局部请求携带"""
+        resp = web.Response(text=html, content_type="text/html", charset="utf-8")
+        if self.token and (request.query.get("token")
+                           or request.headers.get("X-Web-Token")) == self.token:
+            resp.set_cookie("web_token", self.token, httponly=True, samesite="Lax")
+        return resp
+
+    def _render(self, template: str, **ctx) -> str:
+        return _env.get_template(template).render(**ctx)
+
+    # ========== 数据收集 ==========
 
     async def _collect(self) -> dict:
         """收集面板数据"""
@@ -211,6 +119,7 @@ class WebPanel:
         # 机器人详情（username/avatar/share_url，获取失败缓存为{}下轮重试）
         me = await self.bot_client.get_me() if self.bot_client else None
         me = me or {}
+        app_id = getattr(self.bot_client, "app_id", "") if self.bot_client else ""
 
         # 数据库体积（永久保留策略下的增长监控）
         db_size_mb = 0.0
@@ -218,6 +127,7 @@ class WebPanel:
             getattr(self.db_service, "db_manager", None), "db_path", None)
         if db_path and os.path.exists(db_path):
             db_size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 2)
+
         accounts = []
         for a in self.cookie_pool.accounts:
             rooms = self.monitor_manager.get_account_rooms(a.uid) if self.monitor_manager else []
@@ -240,6 +150,7 @@ class WebPanel:
                 "room_id": rid,
                 "alive": self.monitor_manager.has(rid),
                 "uid": self.monitor_manager.get_cookie_uid(rid),
+                "streamer": await self._streamer_name(rid),
                 "danmaku": s["danmaku_count"],
                 "gold": s["gift_gold"], "ship": s["ship_total"], "sc": s["sc_total"],
             })
@@ -258,12 +169,141 @@ class WebPanel:
             "now": now.strftime("%Y-%m-%d %H:%M:%S"),
             "bot": token_state,
             "me": me,
+            "app_id": app_id,
             "db_size_mb": db_size_mb,
             "accounts": accounts,
             "rooms": rooms,
             "dynamics": dynamics,
             "recent": recent,
         }
+
+    async def _streamer_name(self, room_id: int) -> str:
+        """
+        查询直播间对应主播昵称（绑定关系携带主播uid → 名片接口查昵称，带缓存）
+        """
+        uid = 0
+        if self.binding_store is not None:
+            for group in self.binding_store.get_monitored_groups(room_id):
+                b = self.binding_store.get_binding(group, room_id)
+                if b is not None and b.uid:
+                    uid = b.uid
+                    break
+        if not uid:
+            return ""
+        now = datetime.now().timestamp()
+        cached = self._name_cache.get(uid)
+        if cached and cached[0] > now:
+            return cached[1]
+        from .bilibili import BilibiliAPI
+        import asyncio as _asyncio
+        name = await _asyncio.to_thread(BilibiliAPI().get_user_name, uid)
+        if name:
+            self._name_cache[uid] = (now + _NAME_CACHE_TTL, name)
+        return name
+
+    # ========== 页面与局部渲染 ==========
+
+    async def _summary_context(self) -> dict:
+        data = await self._collect()
+        return {
+            "bot": data["bot"],
+            "me": data["me"],
+            "app_id": data["app_id"],
+            "db_size_mb": data["db_size_mb"],
+            "accounts": data["accounts"],
+            "rooms": data["rooms"],
+            "dynamics": data["dynamics"],
+            "recent": data["recent"],
+            "pool_active": sum(1 for a in data["accounts"] if a["status"] == "active"),
+            "pool_total": len(data["accounts"]),
+        }
+
+    async def _handle_index(self, request):
+        if not self._check_token(request):
+            return web.Response(status=401, text="unauthorized: token required")
+        summary_ctx = await self._summary_context()
+        trend_ctx = await self._trend_context("d30", "")
+        html = self._render("index.html", **summary_ctx, **trend_ctx)
+        return self._html_response(request, html)
+
+    async def _handle_summary(self, request):
+        if not self._check_token(request):
+            return web.Response(status=401, text="unauthorized: token required")
+        html = self._render("partials/summary.html", **await self._summary_context())
+        return self._html_response(request, html)
+
+    async def _handle_trend(self, request):
+        if not self._check_token(request):
+            return web.Response(status=401, text="unauthorized: token required")
+        ctx = await self._trend_context(
+            request.query.get("range", "d30"), request.query.get("month", ""))
+        html = self._render("partials/trend.html", **ctx)
+        return self._html_response(request, html)
+
+    async def _trend_context(self, range_key: str, month_str: str) -> dict:
+        """
+        趋势数据上下文：近N天 / 本月 / 上月 / 指定自然月 / 近12个月（按月汇总）
+        """
+        today = datetime.now().date()
+        rows: list = []
+        mode = "daily"
+        active = "d30"
+        label = "近30天"
+        month_value = today.strftime("%Y-%m")
+
+        if range_key in ("d7", "d14", "d30"):
+            n = int(range_key[1:])
+            active = range_key
+            label = f"近{n}天"
+            rows = await self.db_service.get_daily_history_range(
+                _add_days(today, -(n - 1)), today)
+        elif range_key == "this_month":
+            active = range_key
+            label = f"{today.year}年{today.month}月"
+            rows = await self.db_service.get_daily_history_range(
+                today.replace(day=1), today)
+        elif range_key == "last_month":
+            first_this = today.replace(day=1)
+            last_prev = _add_days(first_this, -1)
+            start = last_prev.replace(day=1)
+            active = range_key
+            label = f"{last_prev.year}年{last_prev.month}月"
+            rows = await self.db_service.get_daily_history_range(start, last_prev)
+        elif range_key == "12m":
+            active = range_key
+            mode = "monthly"
+            label = "近12个月（按月汇总）"
+            first_this = today.replace(day=1)
+            start = _add_days(first_this, -1).replace(day=1)
+            for _ in range(10):
+                start = _add_days(start, -1).replace(day=1)
+            daily = await self.db_service.get_daily_history_range(start, today)
+            rows = _aggregate_monthly(daily)
+        elif range_key == "custom_month" and _parse_month(month_str):
+            y, m = _parse_month(month_str)
+            start = date(y, m, 1)
+            if (y, m) == (today.year, today.month):
+                end = today
+            elif start > today:
+                return await self._trend_context("d30", "")  # 未来月份回落近30天
+            else:
+                next_month = date(y + (m == 12), (m % 12) + 1, 1)
+                end = _add_days(next_month, -1)
+            active = f"month:{month_str}"
+            month_value = month_str
+            label = f"{y}年{m}月"
+            rows = await self.db_service.get_daily_history_range(start, end)
+        else:
+            rows = await self.db_service.get_daily_history_range(
+                _add_days(today, -29), today)
+
+        return {
+            "data": rows, "mode": mode, "active": active, "label": label,
+            "month_value": month_value,
+            "this_month_key": today.strftime("%Y-%m"),
+        }
+
+    # ========== JSON接口 ==========
 
     async def _handle_history(self, request):
         if not self._check_token(request):
@@ -275,70 +315,44 @@ class WebPanel:
         history = await self.db_service.get_daily_history(days=days)
         return web.json_response({"days": days, "history": history})
 
-    async def _handle_home(self, request):
-        if not self._check_token(request):
-            return web.Response(status=401, text="unauthorized: token required")
-        data = await self._collect()
-        rooms = "".join(
-            f"<tr><td>{r['room_id']}</td>"
-            f"<td class=\"{'ok' if r['alive'] else 'bad'}\">{'运行中' if r['alive'] else '未运行'}</td>"
-            f"<td>{r['uid'] or '-'}</td><td>{r['danmaku']}</td>"
-            f"<td>{r['gold']}</td><td>{r['ship']}</td><td>{r['sc']}</td></tr>"
-            for r in data["rooms"])
-        dynamics = "".join(
-            f"<tr><td>{d['up_uid']}</td><td>{d['name'] or '-'}</td>"
-            f"<td class=\"{'ok' if d['alive'] else 'bad'}\">{'轮询中' if d['alive'] else '未运行'}</td>"
-            f"<td>{d['groups']}</td></tr>"
-            for d in data["dynamics"])
-        recent = "".join(
-            f"<tr><td>{r['end_time'].strftime('%m-%d %H:%M') if r.get('end_time') else '-'}</td>"
-            f"<td>{r['room_id']}</td><td>{r['danmaku_count']}</td><td>{r['gold_count']}</td>"
-            f"<td>{r['ship_count']}</td><td>{r['sc_count']}</td>"
-            f"<td>{(r['duration'] or 0) // 3600}h{(r['duration'] or 0) % 3600 // 60}m</td></tr>"
-            for r in data["recent"])
-        accounts = "".join(
-            f"<tr><td>{a['uid']}</td><td>{a['nickname']}</td>"
-            f"<td class=\"{'ok' if a['status'] == 'active' else 'bad'}\">{a['status']}</td>"
-            f"<td>{('-' if a['days_left'] is None else str(a['days_left']) + '天')}</td>"
-            f"<td>{a['use_count']}</td>"
-            f"<td>{a['last_used'] or '-'}</td>"
-            f"<td>{'、'.join(map(str, a['rooms'])) or '-'}</td></tr>"
-            for a in data["accounts"])
-        history = await self.db_service.get_daily_history(days=30)
-        # 内嵌JSON供前端JS绘制趋势图（</转义防提前闭合script标签）
-        trend_json = json.dumps(history, ensure_ascii=False).replace("</", "<\\/")
-        bot = data["bot"]
-        me = data.get("me") or {}
-        if me.get("username"):
-            avatar_html = (f'<img src="{me["avatar"]}" width="48" height="48" '
-                           f'style="border-radius:6px"/>' if me.get("avatar") else "-")
-            share_html = (f'<a href="{me["share_url"]}" target="_blank">'
-                          f'<button style="padding:4px 12px">分享</button></a>'
-                          if me.get("share_url") else "-")
-            me_row = (f"<tr><td>{avatar_html}</td><td>{me['username']}</td>"
-                      f"<td>{share_html}</td></tr>")
-        else:
-            me_row = '<tr><td colspan=3>暂未获取到机器人详情</td></tr>'
-        html = _PAGE.format(
-            now=data["now"],
-            me_row=me_row,
-            bot_ready=bot["token_ready"],
-            bot_state=("在线" if bot["client_started"] else "离线"),
-            token_expires_in=bot["token_expires_in"],
-            db_size_mb=data["db_size_mb"],
-            active=sum(1 for a in data["accounts"] if a["status"] == "active"),
-            total=len(data["accounts"]), accounts=accounts or "<tr><td colspan=7>空</td></tr>",
-            hist_days=30, room_count=len(data["rooms"]), rooms=rooms or "<tr><td colspan=7>无</td></tr>",
-            dyn_count=len(data["dynamics"]),
-            dynamics=dynamics or "<tr><td colspan=4>无</td></tr>",
-            live_records=recent or "<tr><td colspan=7>无</td></tr>",
-        )
-        html = (html.replace("__TREND_JSON__", trend_json)
-                .replace("__TREND_JS__", _TREND_JS))
-        return web.Response(text=html, content_type="text/html", charset="utf-8")
-
     async def _handle_api(self, request):
         if not self._check_token(request):
             return web.Response(status=401, text="unauthorized: token required")
         data = await self._collect()
         return web.json_response(data)
+
+
+def _add_days(d: date, days: int) -> date:
+    from datetime import timedelta
+    return d + timedelta(days=days)
+
+
+def _parse_month(text: str):
+    """解析YYYY-MM，返回(y, m)；非法返回None"""
+    try:
+        parts = text.strip().split("-")
+        if len(parts) != 2:
+            return None
+        y, m = int(parts[0]), int(parts[1])
+        if not (1 <= m <= 12) or not (2000 <= y <= 2100):
+            return None
+        return y, m
+    except (ValueError, AttributeError):
+        return None
+
+
+def _aggregate_monthly(daily: list) -> list:
+    """按日行汇总为自然月行（day为YYYY-MM），DB无关的纯Python聚合"""
+    months: dict = {}
+    for row in daily:
+        key = row["day"][:7]
+        m = months.setdefault(key, {"day": key, "danmaku": 0, "gift_gold": 0.0,
+                                    "ship_gold": 0.0, "sc_total": 0})
+        m["danmaku"] += row.get("danmaku", 0) or 0
+        m["gift_gold"] += row.get("gift_gold", 0) or 0
+        m["ship_gold"] += row.get("ship_gold", 0) or 0
+        m["sc_total"] += row.get("sc_total", 0) or 0
+    for m in months.values():
+        m["gift_gold"] = round(m["gift_gold"], 1)
+        m["ship_gold"] = round(m["ship_gold"], 1)
+    return [months[k] for k in sorted(months)]

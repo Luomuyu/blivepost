@@ -140,6 +140,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 2026-09 第二十九批（审查） | 第六轮审查：修复2个日期边界测试缺陷（导出文件名写死20260902）→159用例首次全绿；三文档整理重建；wheel重构建 |
 | 2026-09 第三十批（真机反馈：stop退出噪音） | botpy的start循环经ensure_future派生ws/心跳子任务且不留句柄，取消start任务不传播——子任务存活到循环拆除被强杀（CancelledError回溯/"会话未正常回队"/Unclosed session噪音）；stop改为先取消start任务、按协程所属模块（botpy.*）清扫余留子任务、最后关http会话；真机stop链路本身已验证正常 |
 | 2026-09 第三十一批（Web面板改进） | **修复机器人详情获取**（get_me按dict解析——botpy的http.request返回dict而非User对象，原按对象属性取值恒为空串）；**30秒自动刷新**（meta refresh）；**趋势图重做**：页面内嵌JSON+原生JS按容器宽度绘制SVG（resize重绘、悬停/触摸显示各日明细浮层），替换服务端定宽SVG；**移动端适配**（viewport、≤640px紧凑样式、表格横向滚动容器）；顺手修复`/api/status`缺失token校验；浏览器实测桌面+390px移动端通过 |
+| 2026-09 第三十二批（真机反馈：stop噪音仍在+WebUI现代化） | **stop噪音根因补全**：qq-botpy-v2 1.0.1起ws_connect的finally兜底对任何退出（含取消）回队告警、bot_connect捕获BaseException经on_error记录——主动取消必然产生噪音日志；`_PushClient`覆写bot_connect：_stopping置位时静默取消不回队，非关闭期保持回队重连语义，预置_requeued禁用finally兜底。**WebUI现代化重构**：Jinja2模板+HTMX局部刷新（摘要每30秒、趋势区间切换）+Tailwind暗色主题（CDN）；机器人详情卡片化（头像+用户名/AppID/分享竖排）；监控房间表新增主播名列（绑定uid→名片接口，带缓存）；收入趋势区间选择器（近7/14/30天、本月、上月、任意自然月、近12个月按月汇总）；新增get_daily_history_range自然日区间查询。依赖+jinja2；浏览器实测桌面+移动端通过 |
 
 各批次过程细节见REVIEW.md（六轮审查记录）与git历史。
 
