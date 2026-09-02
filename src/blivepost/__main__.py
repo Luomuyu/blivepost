@@ -248,7 +248,8 @@ async def main_async(
                 ),
                 c2c_handler=AdminCommandHandler(
                     cookie_pool, settings.admin.openids, bot_client=qqbot,
-                    db_service=db_service, monitor_manager=monitor_manager
+                    db_service=db_service, monitor_manager=monitor_manager,
+                    main_admin_openids=settings.admin.main_openids
                 ),
                 contact_handler=ContactEventHandler(
                     contact_store, binding_store, monitor_manager,

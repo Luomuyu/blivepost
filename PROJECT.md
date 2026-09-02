@@ -182,6 +182,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - ~~botpy日志格式突兀~~ → log_config dictConfig纳管botpy logger：统一项目格式、INFO级别、propagate=False
 - ~~botpy.log写在工作目录根~~ → 文件日志定向到logs/botpy.log（按天轮转保留7天）
 - ~~main_openids单独配置时误报警告~~ → Admin条件修正为openids或main_openids任一配置即视为已配置
+- ~~只配main_openids时/登录报"无权限"~~（AdminCommandHandler仅查openids名单）→ 私聊命令权限改为openids ∪ main_openids并集（`_command_allowed`），main_admin_openids装配传入
 - ~~版本横幅硬编码v1.0.0~~ → 引用__version__（1.1.0）
 
 ### 2026-09-02 第二十批（真机反馈）

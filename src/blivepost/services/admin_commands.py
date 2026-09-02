@@ -56,6 +56,7 @@ class AdminCommandHandler:
         bot_client: Optional["QQBotClient"] = None,
         db_service: Optional["DatabaseService"] = None,
         monitor_manager=None,
+        main_admin_openids: Optional[List[str]] = None,
     ):
         """
         初始化私聊命令处理器
@@ -65,17 +66,23 @@ class AdminCommandHandler:
             admin_openids: 管理员用户openId列表
             bot_client: QQ机器人客户端（发送二维码图片用，可后续设置）
             db_service: 数据库服务（账号删除持久化用）
+            monitor_manager: 监控管理器（/账号关联房间展示用）
+            main_admin_openids: 主管理员openId列表（与admin_openids共同构成命令权限）
         """
         self.cookie_pool = cookie_pool
+        # 私聊命令权限 = Admin.openids ∪ Admin.main_openids
         self.admin_openids = [str(o) for o in admin_openids]
+        self.main_admin_openids = [str(o) for o in (main_admin_openids or [])]
+        self._command_allowed = list(dict.fromkeys(
+            self.admin_openids + self.main_admin_openids))
         self.bot_client = bot_client
         self.db_service = db_service
         self.monitor_manager = monitor_manager
         self._login_task: Optional[asyncio.Task] = None
 
     def is_admin(self, openid: str) -> bool:
-        """判断是否管理员"""
-        return openid in self.admin_openids
+        """判断是否管理员（openids与main_openids名单内均可）"""
+        return openid in self._command_allowed
 
     async def handle(self, message: "C2CMessage") -> None:
         """
