@@ -142,6 +142,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 2026-09 第三十一批（Web面板改进） | **修复机器人详情获取**（get_me按dict解析——botpy的http.request返回dict而非User对象，原按对象属性取值恒为空串）；**30秒自动刷新**（meta refresh）；**趋势图重做**：页面内嵌JSON+原生JS按容器宽度绘制SVG（resize重绘、悬停/触摸显示各日明细浮层），替换服务端定宽SVG；**移动端适配**（viewport、≤640px紧凑样式、表格横向滚动容器）；顺手修复`/api/status`缺失token校验；浏览器实测桌面+390px移动端通过 |
 | 2026-09 第三十二批（真机反馈：stop噪音仍在+WebUI现代化） | **stop噪音根因补全**：qq-botpy-v2 1.0.1起ws_connect的finally兜底对任何退出（含取消）回队告警、bot_connect捕获BaseException经on_error记录——主动取消必然产生噪音日志；`_PushClient`覆写bot_connect：_stopping置位时静默取消不回队，非关闭期保持回队重连语义，预置_requeued禁用finally兜底。**WebUI现代化重构**：Jinja2模板+HTMX局部刷新（摘要每30秒、趋势区间切换）+Tailwind暗色主题（CDN）；机器人详情卡片化（头像+用户名/AppID/分享竖排）；监控房间表新增主播名列（绑定uid→名片接口，带缓存）；收入趋势区间选择器（近7/14/30天、本月、上月、任意自然月、近12个月按月汇总）；新增get_daily_history_range自然日区间查询。依赖+jinja2；浏览器实测桌面+移动端通过 |
 | 2026-09 第三十三批（主播/直播间信息表） | **新增streamer与live_room两张表**（uid/room_id唯一，create_all对旧库自动建表，无需迁移条目）；**绑定时全量落库**：get_status_info_by_uids一次免登录查询同时写两表（uname/face/title/short_id/live_status/分区/封面/关键帧/在线），快照失败退回get_room_info已知字段，均不阻断绑定；**每日0点批量刷新**：StreamerRefresher（manager）按绑定uid分批（50/次）查询并更新快照，启动时表空回填；**WebUI主播名改读数据库**（移除实时名片API与缓存）；**回退bot_connect覆写**（SDK侧将由qq-botpy-v2源码修复，项目侧保留stop()子任务清扫）；依赖钉qq-botpy-v2>=1.0.1 |
+| 2026-09 第三十四批（真机反馈：40034105推送失败） | 真机开播推送返回`40034105 主动消息失败,无权限`——**与消息接收开关无关**：接收开关只控制收@消息，推送属主动消息需平台单独授权（未放量约4条/群/月）。发送路径识别40034105/主动消息拒绝→输出每群每6小时一次的可操作提示（申请主动消息放量），替代逐条ERROR；接收开关事件（群/单聊开启关闭）增加INFO日志便于对照；README补主动消息权限说明 |
 
 各批次过程细节见REVIEW.md（六轮审查记录）与git历史。
 

@@ -189,3 +189,16 @@ async def fake_collect():
                                 "token_expires_in": 3600},
             "db_size_mb": 1.2, "accounts": [], "rooms": [], "dynamics": [],
             "recent": []}
+
+
+def test_note_send_denied_dedup():
+    """40034105识别为主动消息权限拒绝并按群低频提示；非权限错误不命中"""
+    c = object.__new__(QQBotClient)
+    c._deny_warned = {}
+    denied = Exception("[40034105] 主动消息失败, 无权限")
+    assert c._note_send_denied("G1", denied) is True
+    ts = c._deny_warned["G1"]
+    assert c._note_send_denied("G1", denied) is True  # 冷却期内命中但不重复提示
+    assert c._deny_warned["G1"] == ts
+    assert c._note_send_denied("G1", Exception("connect timeout")) is False
+    assert "40034105" not in str(Exception("connect timeout"))

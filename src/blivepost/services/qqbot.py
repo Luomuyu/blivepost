@@ -6,6 +6,7 @@ QQ官方机器人推送客户端（基于botpy）
 import asyncio
 import hashlib
 import os
+import time
 from typing import Any, Iterable, Optional, TYPE_CHECKING
 
 import aiohttp
@@ -147,6 +148,8 @@ class QQBotClient:
         self._client: Optional[_PushClient] = None
         self._task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # 主动消息权限拒绝提示的去重：{group_openid: 上次提示的monotonic时刻}
+        self._deny_warned: dict = {}
 
     @property
     def started(self) -> bool:
@@ -343,6 +346,31 @@ class QQBotClient:
             return frame.f_globals.get("__name__", "") or ""
         return ""
 
+    def _note_send_denied(self, group_openid: str, error: Exception) -> bool:
+        """
+        识别平台主动消息权限拒绝并输出低频可操作提示
+
+        平台限制：主动消息（无msg_id的下发，如开播/结算推送）需要单独
+        授权/放量，未放量机器人约每群每月4条；无权限或额度耗尽返回
+        40034105"主动消息失败, 无权限"。与消息接收开关（收@消息）无关。
+
+        Returns:
+            bool: 是否命中主动消息权限拒绝
+        """
+        text = str(error)
+        if "40034105" not in text and "主动消息" not in text:
+            return False
+        now = time.monotonic()
+        last = self._deny_warned.get(group_openid)
+        if last is None or now - last >= 6 * 3600:
+            self._deny_warned[group_openid] = now
+            logger.warning(
+                f"群{group_openid}主动消息被平台拒绝(40034105)：该群无主动消息权限"
+                "或当月额度已用尽（未放量机器人约4条/群/月）。请到QQ开放平台为机器人"
+                "申请主动消息能力放量；@机器人的指令回复属被动消息不受影响。"
+                "（本提示每6小时输出一次，期间的接口报错为botpy原生日志）")
+        return True
+
     async def send_group_message(self, group_openid: str, content: str) -> bool:
         """
         向单个群发送文本主动消息
@@ -366,7 +394,10 @@ class QQBotClient:
             )
             return True
         except Exception as e:
-            logger.error(f"发送群消息失败: group={group_openid}, error={e}")
+            if self._note_send_denied(group_openid, e):
+                logger.debug(f"发送群消息被平台拒绝: group={group_openid}, error={e}")
+            else:
+                logger.error(f"发送群消息失败: group={group_openid}, error={e}")
             return False
 
     async def send_group_media(self, group_openid: str, image_url: str, content: str = "") -> bool:
@@ -399,7 +430,10 @@ class QQBotClient:
             )
             return True
         except Exception as e:
-            logger.warning(f"发送富媒体消息失败: group={group_openid}, error={e}")
+            if self._note_send_denied(group_openid, e):
+                logger.debug(f"富媒体发送被平台拒绝: group={group_openid}, error={e}")
+            else:
+                logger.warning(f"发送富媒体消息失败: group={group_openid}, error={e}")
             return False
 
     async def broadcast(self, groups: Iterable[str], content: str) -> bool:

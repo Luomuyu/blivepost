@@ -182,10 +182,12 @@ class ContactEventHandler:
         return [b.room_id for b in self.binding_store.get_group_bindings(group_openid)]
 
     async def on_group_receive(self, group_openid: str, receive: int) -> None:
+        logger.info(f"群 {group_openid} {'开启' if receive else '关闭'}了消息接收")
         await self.contact_store.set_group_receive_async(group_openid, receive)
 
     async def set_friend_receive_async(self, openid: str, receive: int) -> None:
         """设置好友单聊消息接收开关（无记录则创建）"""
+        logger.info(f"好友 {openid} {'开启' if receive else '关闭'}了单聊消息接收")
         await self.contact_store.set_friend_receive_async(openid, receive)
 
     async def on_friend_add(self, openid: str, union_openid: str = "") -> None:
