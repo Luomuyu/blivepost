@@ -258,7 +258,8 @@ async def main_async(
         # 启动QQ官方机器人
         if settings.qqbot.app_id:
             logger.info("正在启动QQ官方机器人...")
-            qqbot = QQBotClient(settings.qqbot.app_id, settings.qqbot.app_secret)
+            qqbot = QQBotClient(settings.qqbot.app_id, settings.qqbot.app_secret,
+                                debug=settings.message.debug)
             admin_handler = AdminCommandHandler(
                 cookie_pool, settings.admin.openids, bot_client=qqbot,
                 db_service=db_service, monitor_manager=monitor_manager,

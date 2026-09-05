@@ -202,3 +202,56 @@ def test_note_send_denied_dedup():
     assert c._deny_warned["G1"] == ts
     assert c._note_send_denied("G1", Exception("connect timeout")) is False
     assert "40034105" not in str(Exception("connect timeout"))
+
+
+def test_debug_author_log_gated(monkeypatch, caplog):
+    """debug模式输出消息发送者身份明细；关闭时不输出"""
+    import logging
+
+    from blivepost.services.qqbot import _PushClient
+
+    class FakeAuthor:
+        user_openid = "ou_a"
+        union_openid = "uu_1"
+        username = "测试用户"
+        member_openid = None  # 未携带的字段不输出
+
+    c = object.__new__(_PushClient)
+
+    class Msg:
+        group_openid = "GABC"
+
+    c._debug = True
+    with caplog.at_level(logging.INFO, logger="blivepost.qqbot"):
+        c._debug_log_message("群聊", Msg(), FakeAuthor())
+    text = caplog.text
+    assert "[debug] 收到群聊消息" in text
+    assert "user_openid=ou_a" in text and "union_openid=uu_1" in text
+    assert "username=测试用户" in text
+    assert "group_openid=GABC" in text
+    assert "member_openid" not in text  # None字段不输出
+
+    c._debug = False
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="blivepost.qqbot"):
+        c._debug_log_message("群聊", Msg(), FakeAuthor())
+    assert caplog.text == ""
+
+
+def test_setting_debug_parse():
+    """Setting.debug配置解析：Y/N"""
+    import tempfile
+    from pathlib import Path
+
+    from blivepost.config.settings import Settings
+
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "c.yaml"
+        p.write_text(
+            "Setting:\n  debug: \"Y\"\n", encoding="utf-8")
+        s = Settings.load(str(p))
+        assert s.message.debug is True
+        p.write_text(
+            "Setting:\n  debug: \"N\"\n", encoding="utf-8")
+        s2 = Settings.load(str(p))
+        assert s2.message.debug is False

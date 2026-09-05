@@ -37,12 +37,36 @@ class _PushClient(botpy.Client):
         contact_handler: Optional["ContactEventHandler"] = None,
         log_config: Optional[dict] = None,
         ext_handlers: Any = True,
+        debug: bool = False,
     ):
         log_kwargs = {"log_config": log_config} if log_config else {}
         super().__init__(intents=intents, ext_handlers=ext_handlers, **log_kwargs)
         self._command_handler = command_handler
         self._c2c_handler = c2c_handler
         self._contact_handler = contact_handler
+        self._debug = debug
+
+    @staticmethod
+    def _debug_author_fields(author) -> str:
+        """debug模式用：发送者身份明细（openid各形态/union/昵称等已有值的字段）"""
+        fields = []
+        for attr in ("user_openid", "member_openid", "union_openid",
+                     "union_user_account", "username", "member_role", "id"):
+            value = getattr(author, attr, None)
+            if value is not None:
+                fields.append(f"{attr}={value}")
+        return " ".join(fields)
+
+    def _debug_log_message(self, kind: str, message, author) -> None:
+        """debug模式：输出收到的QQ消息发送者身份明细"""
+        if not self._debug:
+            return
+        extra = ""
+        group_openid = getattr(message, "group_openid", None)
+        if group_openid:
+            extra = f" group_openid={group_openid}"
+        logger.info(f"[debug] 收到{kind}消息 sender: "
+                    f"{self._debug_author_fields(author)}{extra}")
 
     async def on_group_add_robot(self, event) -> None:
         """机器人加入群"""
@@ -90,6 +114,7 @@ class _PushClient(botpy.Client):
 
     async def on_c2c_message_create(self, message: C2CMessage) -> None:
         """私聊消息事件：回填好友union后分发给管理员命令处理器"""
+        self._debug_log_message("私聊", message, message.author)
         if self._contact_handler:
             # 好友记录以单聊user_openid为主键，union_openid仅作回填值
             author = message.author
@@ -109,6 +134,7 @@ class _PushClient(botpy.Client):
 
     async def on_group_at_message_create(self, message: GroupMessage) -> None:
         """群@机器人消息事件：分发给命令处理器并被动回复"""
+        self._debug_log_message("群聊", message, message.author)
         if self._command_handler is None:
             return
         try:
@@ -134,16 +160,18 @@ class QQBotClient:
     在其他线程（如动态监控线程）中调度到主事件循环。
     """
 
-    def __init__(self, app_id: str, app_secret: str):
+    def __init__(self, app_id: str, app_secret: str, debug: bool = False):
         """
         初始化QQ官方机器人客户端
 
         Args:
             app_id: 机器人AppID
             app_secret: 机器人AppSecret
+            debug: debug模式（输出收到消息的发送者身份明细）
         """
         self.app_id = app_id
         self.app_secret = app_secret
+        self.debug = debug
         self._me_cache: Optional[dict] = None
         self._client: Optional[_PushClient] = None
         self._task: Optional[asyncio.Task] = None
@@ -276,6 +304,7 @@ class QQBotClient:
             log_config=log_config,
             # 禁用botpy默认的根目录botpy.log文件handler（logs/botpy.log已接管）
             ext_handlers=False,
+            debug=self.debug,
         )
         self._task = self._loop.create_task(
             self._client.start(self.app_id, self.app_secret),

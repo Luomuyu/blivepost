@@ -55,6 +55,8 @@ class MessageSettings:
     data_retention_days: int = 0
     db_size_warn_mb: int = 500
     ignore_cmds: List[str] = field(default_factory=list)
+    # debug模式：输出QQ消息发送者身份明细（openid各形态/union_openid/昵称等）
+    debug: bool = False
 
 
 @dataclass
@@ -189,6 +191,7 @@ class Settings:
                 data_retention_days=int(setting_data.get("data_retention_days", 0)),
                 db_size_warn_mb=int(setting_data.get("db_size_warn_mb", 500)),
                 ignore_cmds=setting_data.get("ignore_cmds", []),
+                debug=setting_data.get("debug", "N") == "Y",
             ),
             redis=RedisConfig(
                 host=redis_data.get("host", "localhost"),
@@ -256,6 +259,7 @@ Setting: # 消息推送设置
   data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)
   db_size_warn_mb: 500 # 数据库体积预警阈值MB (超过时私聊提醒管理员, 0=不提醒)
   ignore_cmds: [] # 忽略的未知命令列表 (不打印日志)
+  debug: "N" # debug模式 (输出QQ消息发送者身份明细: openid/union_openid等)
 
 Redis: # Redis配置 (可选)
   host: "localhost"
