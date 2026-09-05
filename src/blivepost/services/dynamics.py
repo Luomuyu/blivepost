@@ -13,6 +13,8 @@ import json
 import multiprocessing
 import os
 import random
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -246,13 +248,75 @@ def _read_live_state(up_uid: int, path: Optional[Path] = None) -> Optional[dict]
         return None
 
 
+def _dynamics_dir(dynamics_dir=None) -> Path:
+    """已见动态子库目录（默认数据目录下dynamics/，实例可指定）"""
+    return Path(dynamics_dir) if dynamics_dir else Path("data") / "dynamics"
+
+
+def _seen_db_path(up_uid: int, dynamics_dir=None) -> Path:
+    return _dynamics_dir(dynamics_dir) / f"up_{up_uid}.db"
+
+
+def _init_seen_db(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=5)
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dynamic_seen ("
+            "dynamic_id TEXT PRIMARY KEY, up_uid INTEGER, "
+            "summary TEXT DEFAULT '', created_at TEXT)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_seen_dynamic_ids(up_uid: int, dynamics_dir=None) -> set:
+    """加载该UP主已推送/已记录的动态ID集合（持久于每UP独立子库）"""
+    path = _seen_db_path(up_uid, dynamics_dir)
+    if not path.exists():
+        return set()
+    try:
+        _init_seen_db(path)
+        conn = sqlite3.connect(path, timeout=5)
+        try:
+            return {row[0] for row in conn.execute("SELECT dynamic_id FROM dynamic_seen")}
+        finally:
+            conn.close()
+    except Exception:
+        return set()
+
+
+def save_seen_dynamic_ids(up_uid: int, ids, dynamics_dir=None) -> None:
+    """记录动态ID（INSERT OR IGNORE，防止发布后删除的旧动态再次触发）"""
+    path = _seen_db_path(up_uid, dynamics_dir)
+    try:
+        _init_seen_db(path)
+        conn = sqlite3.connect(path, timeout=5)
+        try:
+            conn.executemany(
+                "INSERT OR IGNORE INTO dynamic_seen(dynamic_id, up_uid, created_at) "
+                "VALUES(?, ?, ?)",
+                [(i, up_uid, datetime.now().isoformat(timespec="seconds")) for i in ids],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
 def _dynamic_process_main(up_uid: int, push_queue, stop_event,
-                          sessdata: str = "", state_path=None) -> None:
+                          sessdata: str = "", state_path=None,
+                          dynamics_dir=None) -> None:
     """动态轮询子进程入口（spawn）"""
     from ..utils.logger import Logger
 
     Logger().setup(name="blivepost", console=True)
-    last_seen = ""
+    # 已见动态列表持久于每UP独立sqlite子库：按ID判重，发布后删除的
+    # 旧动态/进程重启都不会再触发推送（替代旧last_seen比较逻辑）
+    seen = load_seen_dynamic_ids(up_uid, dynamics_dir)
+    baseline = not seen  # 空库首轮：仅记录基线不推送（防升级/首启刷屏）
     up_live = False
     logger = get_logger("dynamic")
 
@@ -273,17 +337,21 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
             continue
 
         info = _poll_once(up_uid, sessdata)
-        if info and info["dynamic_id"] and info["dynamic_id"] != last_seen:
-            is_new = bool(last_seen) and info["dynamic_id"] > last_seen
-            last_seen = info["dynamic_id"]
-            if is_new:
-                logger.info(f"UP主 {up_uid} 发布新动态 {info['dynamic_id']}")
-                try:
-                    push_queue.put(
-                        {"type": "dynamic", "up_uid": up_uid, **info}, timeout=5
-                    )
-                except Exception as e:
-                    logger.error(f"动态上报写入队列失败: {e}")
+        if info and info["dynamic_id"]:
+            did = info["dynamic_id"]
+            if did not in seen:
+                seen.add(did)
+                save_seen_dynamic_ids(up_uid, [did], dynamics_dir)
+                if baseline:
+                    baseline = False  # 首条仅作基线，不推送
+                else:
+                    logger.info(f"UP主 {up_uid} 发布新动态 {did}")
+                    try:
+                        push_queue.put(
+                            {"type": "dynamic", "up_uid": up_uid, **info}, timeout=5
+                        )
+                    except Exception as e:
+                        logger.error(f"动态上报写入队列失败: {e}")
         # 随机间隔轮询
         stop_event.wait(random.randint(POLL_MIN, POLL_MAX))
 
@@ -297,7 +365,7 @@ class DynamicManager:
     """
 
     def __init__(self, settings: Settings, push_queue, cookie_pool=None,
-                 enabled: bool = False, state_path=None):
+                 enabled: bool = False, state_path=None, dynamics_dir=None):
         """
         初始化动态管理器
 
@@ -313,6 +381,7 @@ class DynamicManager:
         self.cookie_pool = cookie_pool
         self.enabled = enabled
         self.state_path = state_path
+        self.dynamics_dir = dynamics_dir
 
         self._ctx = multiprocessing.get_context("spawn")
         self._ups: Dict[int, Any] = {}
@@ -349,7 +418,8 @@ class DynamicManager:
             stop_event = self._ctx.Event()
             proc = self._ctx.Process(
                 target=_dynamic_process_main,
-                args=(uid, self.push_queue, stop_event, sessdata, self.state_path),
+                args=(uid, self.push_queue, stop_event, sessdata, self.state_path,
+                      self.dynamics_dir),
                 name=f"dynamic-{uid}",
             )
             proc.start()

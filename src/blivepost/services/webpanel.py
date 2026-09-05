@@ -9,7 +9,6 @@ Web状态面板（只读，aiohttp + Jinja2 + HTMX实现）
 通过Setting.web_panel开关，web_host/web_port配置监听。
 """
 
-import os
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -117,12 +116,12 @@ class WebPanel:
         me = me or {}
         app_id = getattr(self.bot_client, "app_id", "") if self.bot_client else ""
 
-        # 数据库体积（永久保留策略下的增长监控）
+        # 数据库体积（主库+全部房间子库+动态子库；永久保留策略下的增长监控）
         db_size_mb = 0.0
-        db_path = getattr(self.db_service, "db_path", None) or getattr(
-            getattr(self.db_service, "db_manager", None), "db_path", None)
-        if db_path and os.path.exists(db_path):
-            db_size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 2)
+        try:
+            db_size_mb = await self.db_service.get_storage_size_mb()
+        except Exception as e:
+            logger.warning(f"统计存储体积失败: {e}")
 
         accounts = []
         for a in self.cookie_pool.accounts:

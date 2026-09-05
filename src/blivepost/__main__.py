@@ -198,6 +198,10 @@ async def main_async(
         db_manager = DatabaseManager(settings.database)
         await db_manager.initialize()
         db_service = DatabaseService(db_manager)
+        # 旧库事件数据迁移：主库遗留的事件表按房间搬入独立sqlite子库
+        moved = await db_service.migrate_legacy_events()
+        if moved:
+            logger.info(f"事件数据已迁移至房间子库（{moved}行）")
         logger.info("数据库初始化成功")
 
         # 加载群绑定、Cookie账号池与联系人
@@ -250,9 +254,11 @@ async def main_async(
 
         # 动态轮询管理器（与监控共用跨进程队列；直播状态文件放数据库目录，实例私有）
         state_path = Path(settings.database.sqlite_path).parent / "dynamic_live_state.json"
+        dynamics_dir = Path(settings.database.sqlite_path).parent / "dynamics"
         dynamic_manager = DynamicManager(
             settings, monitor_manager.push_queue, cookie_pool=cookie_pool,
             enabled=settings.message.dynamic_monitor, state_path=state_path,
+            dynamics_dir=dynamics_dir,
         )
 
         # 启动QQ官方机器人

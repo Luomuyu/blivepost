@@ -4,8 +4,10 @@
 """
 
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
 
@@ -15,8 +17,10 @@ from .models import (
     AnchorRecord, RedPocketRecord, GuardAchievementRecord,
     SystemEventRecord, RoomChangeRecord, LiveStatusRecord, EventType, local_now,
     GroupBindingRecord, CookieAccountRecord, DynamicBindingRecord,
-    FriendRecord, GroupRecord, StreamerRecord, LiveRoomRecord
+    FriendRecord, GroupRecord, StreamerRecord, LiveRoomRecord,
+    RoomDbRecord
 )
+from .room_store import RoomDbRegistry
 from ..utils.logger import get_logger
 
 
@@ -38,6 +42,71 @@ class DatabaseService:
             db_manager: 数据库管理器
         """
         self.db_manager = db_manager
+        # 直播间事件子库注册表（惰性：依赖主库初始化后的db_path）
+        self._registry: Optional[RoomDbRegistry] = None
+
+    # ========== 直播间子库路由 ==========
+
+    def _ensure_registry(self) -> RoomDbRegistry:
+        if self._registry is None:
+            db_path = getattr(self.db_manager, "db_path", None)
+            if db_path:
+                # 按主库文件名隔离子库目录（同目录多主库互不串库）
+                base = Path(db_path).parent / "rooms" / Path(db_path).stem
+            else:
+                base = Path("data") / "rooms"
+            self._registry = RoomDbRegistry(base)
+        return self._registry
+
+    async def _room_db_name(self, room_id: int) -> str:
+        """主库room_db映射：查子库文件名，无则登记默认名"""
+        default = f"room_{int(room_id)}.db"
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(
+                    select(RoomDbRecord.db_name).where(RoomDbRecord.room_id == room_id))
+                name = res.scalar_one_or_none()
+                if name:
+                    return name
+                session.add(RoomDbRecord(room_id=int(room_id), db_name=default))
+                await session.commit()
+        except Exception as e:
+            logger.warning(f"登记房间子库映射失败(room={room_id}): {e}")
+        return default
+
+    async def _room_manager(self, room_id: int):
+        """事件数据目标子库（查映射→加载/创建子库）"""
+        name = await self._room_db_name(room_id)
+        return await self._ensure_registry().get(name)
+
+    @asynccontextmanager
+    async def _event_session(self, room_id):
+        """事件表会话上下文（路由到直播间子库）"""
+        manager = await self._room_manager(room_id)
+        async with manager.get_session() as session:
+            yield session
+
+    @staticmethod
+    def _zero_summary(day_start: datetime) -> dict:
+        """全零汇总（空房间列表等场景，不触库）"""
+        return {
+            "day": day_start.strftime("%Y-%m-%d"),
+            "danmaku_count": 0, "gift_gold": 0.0, "gift_count": 0,
+            "ship_total": 0.0, "ship_count": 0, "sc_total": 0,
+            "sc_count": 0, "red_pocket": 0,
+        }
+
+    async def _all_room_managers(self) -> list:
+        """全部房间子库（已加载的 + 主库映射登记过的）"""
+        registry = self._ensure_registry()
+        names = set()
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(RoomDbRecord.db_name))
+                names = {row[0] for row in res.all()}
+        except Exception as e:
+            logger.warning(f"读取房间子库映射失败: {e}")
+        return [await registry.get(n) for n in sorted(names)]
 
     async def save_danmaku(
         self,
@@ -64,7 +133,7 @@ class DatabaseService:
             medal_level: 勋章等级
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = DanmakuRecord(
                     room_id=room_id,
                     uid=uid,
@@ -105,7 +174,7 @@ class DatabaseService:
             coin_type: 瓜子类型
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = GiftRecord(
                     room_id=room_id,
                     uid=uid,
@@ -143,7 +212,7 @@ class DatabaseService:
             background_color: 背景色
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = SuperChatRecord(
                     room_id=room_id,
                     uid=uid,
@@ -180,7 +249,7 @@ class DatabaseService:
             num: 数量
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = GuardRecord(
                     room_id=room_id,
                     uid=uid,
@@ -216,7 +285,7 @@ class DatabaseService:
             require_value: 要求值
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = AnchorRecord(
                     room_id=room_id,
                     award_name=award_name,
@@ -247,7 +316,7 @@ class DatabaseService:
             total_price: 总价值
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = RedPocketRecord(
                     room_id=room_id,
                     sender_uid=sender_uid,
@@ -274,7 +343,7 @@ class DatabaseService:
             content: 成就内容
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = GuardAchievementRecord(
                     room_id=room_id,
                     achieve_level=achieve_level,
@@ -304,7 +373,7 @@ class DatabaseService:
             msg: 消息内容
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = SystemEventRecord(
                     room_id=room_id,
                     event_type=event_type,
@@ -338,7 +407,7 @@ class DatabaseService:
             area_name: 分区名
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = RoomChangeRecord(
                     room_id=room_id,
                     title=title,
@@ -367,7 +436,7 @@ class DatabaseService:
             cover: 封面
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = LiveStatusRecord(
                     room_id=room_id,
                     status="live_start",
@@ -397,7 +466,7 @@ class DatabaseService:
             cover: 封面
         """
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 record = LiveStatusRecord(
                     room_id=room_id,
                     status="live_end",
@@ -578,6 +647,24 @@ class DatabaseService:
                 ship_total(元), ship_count, sc_total(元), sc_count, red_pocket(电池)
             }
         """
+        # 兼容多房间列表传参：拆分单房子库查询后合并
+        if isinstance(room_id, (list, tuple)):
+            rooms = list(room_id)
+            if not rooms:
+                day = day or local_now()
+                return self._zero_summary(
+                    day.replace(hour=0, minute=0, second=0, microsecond=0))
+            summaries = [await self.get_daily_summary(r, day=day, _window=_window)
+                         for r in rooms]
+            merged = summaries[0]
+            for other in summaries[1:]:
+                for k, v in other.items():
+                    if k == "day":
+                        continue
+                    merged[k] = round(merged[k] + v, 1) if isinstance(merged[k], float) \
+                        else merged[k] + v
+            return merged
+
         if _window is not None:
             day_start, day_end = _window
         else:
@@ -609,7 +696,7 @@ class DatabaseService:
             ).scalar_subquery()
 
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 res = await session.execute(
                     select(
                         _scalar(DanmakuRecord, func.count()).label("danmaku_count"),
@@ -685,7 +772,7 @@ class DatabaseService:
         day_end = day_start + timedelta(days=1)
 
         try:
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 res = await session.execute(
                     select(SuperChatRecord.uname, SuperChatRecord.price,
                            SuperChatRecord.message)
@@ -852,7 +939,7 @@ class DatabaseService:
         day_end = day_start + timedelta(days=1)
 
         async def _fetch(model, columns):
-            async with self.db_manager.get_session() as session:
+            async with self._event_session(room_id) as session:
                 res = await session.execute(
                     select(*[getattr(model, c) for c in columns]).where(
                         model.room_id == room_id,
@@ -956,25 +1043,29 @@ class DatabaseService:
             list[dict]: 下播记录列表
         """
         try:
-            async with self.db_manager.get_session() as session:
-                result = await session.execute(
-                    select(LiveStatusRecord).where(
-                        LiveStatusRecord.status == "live_end"
-                    ).order_by(LiveStatusRecord.timestamp.desc()).limit(limit)
-                )
-                return [
-                    {
-                        "room_id": rec.room_id,
-                        "title": rec.title,
-                        "danmaku_count": rec.danmaku_count,
-                        "gold_count": rec.gold_count,
-                        "ship_count": rec.ship_count,
-                        "sc_count": rec.sc_count,
-                        "duration": rec.duration,
-                        "end_time": rec.end_time,
-                    }
-                    for rec in result.scalars().all()
-                ]
+            merged: List[dict] = []
+            for manager in await self._all_room_managers():
+                async with manager.get_session() as session:
+                    result = await session.execute(
+                        select(LiveStatusRecord).where(
+                            LiveStatusRecord.status == "live_end"
+                        ).order_by(LiveStatusRecord.timestamp.desc()).limit(limit)
+                    )
+                    merged.extend(
+                        {
+                            "room_id": rec.room_id,
+                            "title": rec.title,
+                            "danmaku_count": rec.danmaku_count,
+                            "gold_count": rec.gold_count,
+                            "ship_count": rec.ship_count,
+                            "sc_count": rec.sc_count,
+                            "duration": rec.duration,
+                            "end_time": rec.end_time,
+                        }
+                        for rec in result.scalars().all()
+                    )
+            merged.sort(key=lambda d: d["end_time"] or datetime.min, reverse=True)
+            return merged[:limit]
         except Exception as e:
             logger.error(f"查询下播记录失败: {e}")
             return []
@@ -1020,13 +1111,16 @@ class DatabaseService:
             return []
         end_bound = start + _td(days=span_days)
 
-        async def _by_day(model, aggregate, coin_filter=None):
+        if room_ids:
+            managers = [await self._room_manager(r) for r in room_ids]
+        else:
+            managers = await self._all_room_managers()
+
+        async def _by_day(manager, model, aggregate, coin_filter=None):
             conditions = [model.timestamp >= start, model.timestamp < end_bound]
             if coin_filter is not None:
                 conditions.append(coin_filter)
-            if room_ids is not None:
-                conditions.append(model.room_id.in_(room_ids))
-            async with self.db_manager.get_session() as session:
+            async with manager.get_session() as session:
                 res = await session.execute(
                     select(
                         func.date(model.timestamp).label("day"),
@@ -1035,26 +1129,30 @@ class DatabaseService:
                 )
                 return {str(r.day): int(r[1] or 0) for r in res.all()}
 
-        history: Dict[str, dict] = {}
+        history: Dict[str, dict] = {
+            (start + _td(days=i)).strftime("%Y-%m-%d"):
+                {"day": (start + _td(days=i)).strftime("%Y-%m-%d"),
+                 "danmaku": 0, "gift_gold": 0.0, "ship_gold": 0.0, "sc_total": 0}
+            for i in range(span_days)
+        }
         try:
-            danmaku = await _by_day(DanmakuRecord, func.count())
-            gift = await _by_day(GiftRecord, func.sum(GiftRecord.total_price),
-                                 GiftRecord.coin_type == "gold")
-            ship = await _by_day(GuardRecord, func.sum(GuardRecord.price * GuardRecord.num))
-            sc = await _by_day(SuperChatRecord, func.sum(SuperChatRecord.price))
+            for manager in managers:
+                danmaku = await _by_day(manager, DanmakuRecord, func.count())
+                gift = await _by_day(manager, GiftRecord,
+                                     func.sum(GiftRecord.total_price),
+                                     GiftRecord.coin_type == "gold")
+                ship = await _by_day(manager, GuardRecord,
+                                     func.sum(GuardRecord.price * GuardRecord.num))
+                sc = await _by_day(manager, SuperChatRecord, func.sum(SuperChatRecord.price))
+                for day, row in history.items():
+                    row["danmaku"] += danmaku.get(day, 0)
+                    row["gift_gold"] = round(row["gift_gold"] + gift.get(day, 0) / 1000, 1)
+                    row["ship_gold"] = round(row["ship_gold"] + ship.get(day, 0) / 1000, 1)
+                    row["sc_total"] += sc.get(day, 0)
         except Exception as e:
             logger.error(f"查询历史趋势失败: {e}")
             return []
 
-        for i in range(span_days):
-            day = (start + _td(days=i)).strftime("%Y-%m-%d")
-            history[day] = {
-                "day": day,
-                "danmaku": danmaku.get(day, 0),
-                "gift_gold": round(gift.get(day, 0) / 1000, 1),
-                "ship_gold": round(ship.get(day, 0) / 1000, 1),
-                "sc_total": sc.get(day, 0),
-            }
         return [history[day] for day in sorted(history)]
 
     # ========== 好友与群记录 ==========
@@ -1287,23 +1385,32 @@ class DatabaseService:
         Returns:
             list[(表名, 行数)]，按行数降序
         """
-        tables = [
+        main_tables: List[Tuple[str, Any]] = [
+            ("群绑定", GroupBindingRecord), ("Cookie账号", CookieAccountRecord),
+            ("动态订阅", DynamicBindingRecord),
+        ]
+        event_tables: List[Tuple[str, Any]] = [
             ("弹幕", DanmakuRecord), ("礼物", GiftRecord),
             ("SC", SuperChatRecord), ("舰长", GuardRecord),
             ("天选", AnchorRecord), ("红包", RedPocketRecord),
             ("大航海成就", GuardAchievementRecord), ("系统事件", SystemEventRecord),
             ("房间变更", RoomChangeRecord), ("开播下播", LiveStatusRecord),
-            ("群绑定", GroupBindingRecord), ("Cookie账号", CookieAccountRecord),
-            ("动态订阅", DynamicBindingRecord),
         ]
-        result: List[Tuple[str, int]] = []
+        counts: Dict[str, int] = {}
         try:
             async with self.db_manager.get_session() as session:
-                for name, model in tables:
+                for name, model in main_tables:
                     res = await session.execute(select(func.count()).select_from(model))
-                    result.append((name, int(res.scalar() or 0)))
+                    counts[name] = int(res.scalar() or 0)
+            # 事件表行数跨全部房间子库合计
+            for manager in await self._all_room_managers():
+                async with manager.get_session() as session:
+                    for name, model in event_tables:
+                        res = await session.execute(select(func.count()).select_from(model))
+                        counts[name] = counts.get(name, 0) + int(res.scalar() or 0)
         except Exception as e:
             logger.error(f"统计表行数失败: {e}")
+        result: List[Tuple[str, int]] = list(counts.items())
         return sorted(result, key=lambda x: x[1], reverse=True)
 
     @staticmethod
@@ -1313,3 +1420,69 @@ class DatabaseService:
         if path and os.path.exists(path):
             return round(os.path.getsize(path) / (1024 * 1024), 2)
         return None
+
+    async def get_storage_size_mb(self) -> float:
+        """全部存储体积合计MB（主库+全部房间子库+动态子库目录）"""
+        total = 0.0
+        main_path = getattr(self.db_manager, "db_path", None)
+        if main_path and os.path.exists(main_path):
+            total += os.path.getsize(main_path)
+        registry = self._ensure_registry()
+        files = set(registry.existing_db_files())
+        for d in (registry.base_dir.parent / "dynamics", Path("data") / "dynamics"):
+            if d.is_dir():
+                files.update(d.rglob("*.db"))
+        total += sum(f.stat().st_size for f in files if f.exists())
+        return round(total / (1024 * 1024), 2)
+
+    async def migrate_legacy_events(self) -> int:
+        """
+        旧库事件数据迁移：主库中遗留的事件表数据按房间搬入子库（启动时调用）
+
+        搬移=复制到房间子库+删除主库对应行（数据不丢失，仅更换存放位置）；
+        幂等：主库事件表清空后自动跳过。
+
+        Returns:
+            int: 搬移总行数
+        """
+        moved_total = 0
+        legacy_models: Tuple[Any, ...] = (
+            DanmakuRecord, GiftRecord, SuperChatRecord, GuardRecord,
+            AnchorRecord, RedPocketRecord, GuardAchievementRecord,
+            SystemEventRecord, RoomChangeRecord, LiveStatusRecord)
+        for model in legacy_models:
+            try:
+                moved_total += await self._migrate_legacy_table(model)
+            except Exception as e:
+                logger.warning(f"迁移{model.__tablename__}跳过: {e}")
+        if moved_total:
+            logger.info(f"旧库事件数据迁移完成：共{moved_total}行转入房间子库")
+        return moved_total
+
+    async def _migrate_legacy_table(self, model) -> int:
+        """单张事件表的分块搬移（查500行→写子库→删主库，循环至清空）"""
+        moved = 0
+        table = model.__table__
+        cols = [c.name for c in table.columns]
+        while True:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(model).limit(500))
+                rows = res.scalars().all()
+            if not rows:
+                break
+            by_room: Dict[int, list] = {}
+            for r in rows:
+                data = {c: getattr(r, c) for c in cols}
+                by_room.setdefault(r.room_id, []).append(data)
+            for room_id, items in by_room.items():
+                manager = await self._room_manager(room_id)
+                async with manager.get_session() as session:
+                    session.add_all([model(**d) for d in items])
+                    await session.commit()
+            async with self.db_manager.get_session() as session:
+                ids = [r.id for r in rows]
+                await session.execute(table.delete().where(table.c.id.in_(ids)))
+                await session.commit()
+            moved += len(rows)
+            logger.info(f"迁移{table.name}: 已搬移{moved}行")
+        return moved

@@ -54,7 +54,18 @@ def local_now() -> datetime:
 
 
 class Base(DeclarativeBase):
-    """SQLAlchemy基类"""
+    """主数据库基类（配置选择的库：绑定/账号池/好友/订阅/主播/直播间映射等）"""
+    pass
+
+
+class EventBase(DeclarativeBase):
+    """
+    直播间事件子数据库基类（sqlite专用，不受config数据库类型控制）
+
+    弹幕/礼物/舰长/SC/天选/红包/大航海成就/系统事件/房间变更/开播下播
+    等直播间接收的事件数据，按直播间拆分为独立sqlite子库（见
+    database/room_store.py）。
+    """
     pass
 
 
@@ -67,7 +78,7 @@ class EventType(enum.Enum):
     ADMIN_REVOKE = "admin_revoke"  # 撤销房管
 
 
-class DanmakuRecord(Base):
+class DanmakuRecord(EventBase):
     """弹幕记录表"""
     __tablename__ = "danmaku"
     
@@ -87,7 +98,7 @@ class DanmakuRecord(Base):
     )
 
 
-class GiftRecord(Base):
+class GiftRecord(EventBase):
     """礼物记录表"""
     __tablename__ = "gift"
     
@@ -108,7 +119,7 @@ class GiftRecord(Base):
     )
 
 
-class SuperChatRecord(Base):
+class SuperChatRecord(EventBase):
     """醒目留言(SC)记录表"""
     __tablename__ = "super_chat"
     
@@ -126,7 +137,7 @@ class SuperChatRecord(Base):
     )
 
 
-class GuardRecord(Base):
+class GuardRecord(EventBase):
     """舰长记录表"""
     __tablename__ = "guard"
     
@@ -145,7 +156,7 @@ class GuardRecord(Base):
     )
 
 
-class AnchorRecord(Base):
+class AnchorRecord(EventBase):
     """天选记录表"""
     __tablename__ = "anchor"
     
@@ -163,7 +174,7 @@ class AnchorRecord(Base):
     )
 
 
-class RedPocketRecord(Base):
+class RedPocketRecord(EventBase):
     """红包记录表"""
     __tablename__ = "red_pocket"
     
@@ -179,7 +190,7 @@ class RedPocketRecord(Base):
     )
 
 
-class GuardAchievementRecord(Base):
+class GuardAchievementRecord(EventBase):
     """大航海成就记录表"""
     __tablename__ = "guard_achievement"
     
@@ -194,7 +205,7 @@ class GuardAchievementRecord(Base):
     )
 
 
-class SystemEventRecord(Base):
+class SystemEventRecord(EventBase):
     """系统事件记录表(被切断、被警告、被禁言、设为房管、撤销房管)"""
     __tablename__ = "system_event"
     
@@ -211,7 +222,7 @@ class SystemEventRecord(Base):
     )
 
 
-class RoomChangeRecord(Base):
+class RoomChangeRecord(EventBase):
     """房间信息变更记录表"""
     __tablename__ = "room_change"
     
@@ -299,6 +310,25 @@ class GroupRecord(Base):
         DateTime, default=local_now, onupdate=local_now, comment="更新时间")
 
 
+class RoomDbRecord(Base):
+    """直播间子数据库映射表（主库仅记录直播间对应的子库文件名）"""
+    __tablename__ = "room_db"
+
+    room_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, comment="直播间长号")
+    db_name: Mapped[str] = mapped_column(String(100), unique=True, comment="子库文件名(rooms/目录下)")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="创建时间")
+
+
+class DynamicSeenRecord(EventBase):
+    """已见动态记录表（动态列表持久化：发布后删除的旧动态不再触发推送）"""
+    __tablename__ = "dynamic_seen"
+
+    dynamic_id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="动态ID")
+    up_uid: Mapped[int] = mapped_column(BigInteger, index=True, comment="UP主UID")
+    summary: Mapped[str] = mapped_column(String(200), default="", comment="动态内容摘要")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="记录时间")
+
+
 class DynamicBindingRecord(Base):
     """动态订阅记录表(群openid与B站UP主的绑定关系)"""
     __tablename__ = "dynamic_binding"
@@ -348,7 +378,7 @@ class LiveRoomRecord(Base):
         DateTime, default=local_now, onupdate=local_now, comment="更新时间")
 
 
-class LiveStatusRecord(Base):
+class LiveStatusRecord(EventBase):
     """开播/下播记录表"""
     __tablename__ = "live_status"
     
