@@ -400,13 +400,16 @@ class QQBotClient:
                 "（本提示每6小时输出一次，期间的接口报错为botpy原生日志）")
         return True
 
-    async def send_group_message(self, group_openid: str, content: str) -> bool:
+    async def send_group_message(self, group_openid: str, content: str,
+                                 keyboard: Optional[dict] = None) -> bool:
         """
         向单个群发送文本主动消息
 
         Args:
             group_openid: 群openid
             content: 文本内容
+            keyboard: 按钮keyboard结构（可选；发送失败自动去按钮重发，
+                保证推送必达——按钮需平台单独授权）
 
         Returns:
             bool: 是否发送成功
@@ -414,13 +417,24 @@ class QQBotClient:
         if not self.started or self._client is None:
             logger.warning("botpy客户端未运行，消息发送失败")
             return False
+        client = self._client
 
-        try:
-            await self._client.api.post_group_message(
+        async def _send(kb):
+            await client.api.post_group_message(
                 group_openid=group_openid,
                 msg_type=0,
                 content=content,
+                keyboard=kb,
             )
+
+        try:
+            try:
+                await _send(keyboard)
+            except Exception as e:
+                if keyboard is None:
+                    raise
+                logger.warning(f"带按钮消息发送失败，去按钮重发: {e}")
+                await _send(None)
             return True
         except Exception as e:
             if self._note_send_denied(group_openid, e):
@@ -429,7 +443,8 @@ class QQBotClient:
                 logger.error(f"发送群消息失败: group={group_openid}, error={e}")
             return False
 
-    async def send_group_media(self, group_openid: str, image_url: str, content: str = "") -> bool:
+    async def send_group_media(self, group_openid: str, image_url: str, content: str = "",
+                               keyboard: Optional[dict] = None) -> bool:
         """
         向单个群发送图片富媒体消息
 
@@ -437,6 +452,7 @@ class QQBotClient:
             group_openid: 群openid
             image_url: 图片URL（png/jpg）
             content: 附带文本
+            keyboard: 按钮keyboard结构（可选；发送失败自动去按钮重发）
 
         Returns:
             bool: 是否发送成功（失败时调用方可回退文本）
@@ -444,19 +460,30 @@ class QQBotClient:
         if not self.started or self._client is None:
             logger.warning("botpy客户端未运行，富媒体消息发送失败")
             return False
+        client = self._client
 
-        try:
-            media = await self._client.api.post_group_file(
+        async def _send(kb):
+            media = await client.api.post_group_file(
                 group_openid=group_openid,
                 file_type=1,
                 url=image_url,
             )
-            await self._client.api.post_group_message(
+            await client.api.post_group_message(
                 group_openid=group_openid,
                 msg_type=7,
                 content=content or "",
                 media=media,
+                keyboard=kb,
             )
+
+        try:
+            try:
+                await _send(keyboard)
+            except Exception as e:
+                if keyboard is None:
+                    raise
+                logger.warning(f"带按钮富媒体发送失败，去按钮重发: {e}")
+                await _send(None)
             return True
         except Exception as e:
             if self._note_send_denied(group_openid, e):
@@ -465,25 +492,28 @@ class QQBotClient:
                 logger.warning(f"发送富媒体消息失败: group={group_openid}, error={e}")
             return False
 
-    async def broadcast(self, groups: Iterable[str], content: str) -> bool:
+    async def broadcast(self, groups: Iterable[str], content: str,
+                        keyboard: Optional[dict] = None) -> bool:
         """
         向所有目标群发送同一消息
 
         Args:
             groups: 群openid列表
             content: 文本内容
+            keyboard: 按钮keyboard结构（可选）
 
         Returns:
             bool: 是否全部发送成功
         """
         success = True
         for group in groups:
-            if not await self.send_group_message(group, content):
+            if not await self.send_group_message(group, content, keyboard=keyboard):
                 success = False
             await asyncio.sleep(0.5)  # 避免发送过快
         return success
 
-    async def _broadcast_media(self, groups: Iterable[str], image_url: str, content: str) -> bool:
+    async def _broadcast_media(self, groups: Iterable[str], image_url: str, content: str,
+                               keyboard: Optional[dict] = None) -> bool:
         """
         向所有目标群发送富媒体消息（单群失败回退为文本）
 
@@ -491,27 +521,30 @@ class QQBotClient:
             groups: 群openid列表
             image_url: 图片URL
             content: 文本内容
+            keyboard: 按钮keyboard结构（可选，回退文本时同样携带）
 
         Returns:
             bool: 是否全部发送成功
         """
         success = True
         for group in groups:
-            sent = await self.send_group_media(group, image_url, content)
+            sent = await self.send_group_media(group, image_url, content, keyboard=keyboard)
             if not sent:
-                sent = await self.send_group_message(group, content)
+                sent = await self.send_group_message(group, content, keyboard=keyboard)
             if not sent:
                 success = False
             await asyncio.sleep(0.5)  # 避免发送过快
         return success
 
-    def push(self, content: str, groups: Iterable[str]) -> bool:
+    def push(self, content: str, groups: Iterable[str],
+             keyboard: Optional[dict] = None) -> bool:
         """
         线程安全的推送入口（同步，立即返回）
 
         Args:
             content: 文本内容
             groups: 群openid列表
+            keyboard: 按钮keyboard结构（可选）
 
         Returns:
             bool: 是否成功调度发送任务
@@ -520,7 +553,7 @@ class QQBotClient:
             logger.error("QQ官方机器人未启动，消息发送失败")
             return False
 
-        coro = self.broadcast(groups, content)
+        coro = self.broadcast(groups, content, keyboard=keyboard)
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -532,7 +565,8 @@ class QQBotClient:
             asyncio.run_coroutine_threadsafe(coro, self._loop)
         return True
 
-    def push_media(self, image_url: str, content: str, groups: Iterable[str]) -> bool:
+    def push_media(self, image_url: str, content: str, groups: Iterable[str],
+                   keyboard: Optional[dict] = None) -> bool:
         """
         线程安全的富媒体推送入口（同步，立即返回；单群失败自动回退文本）
 
@@ -540,6 +574,7 @@ class QQBotClient:
             image_url: 图片URL
             content: 文本内容
             groups: 群openid列表
+            keyboard: 按钮keyboard结构（可选，回退文本时同样携带）
 
         Returns:
             bool: 是否成功调度发送任务
@@ -548,7 +583,7 @@ class QQBotClient:
             logger.error("QQ官方机器人未启动，富媒体消息发送失败")
             return False
 
-        coro = self._broadcast_media(groups, image_url, content)
+        coro = self._broadcast_media(groups, image_url, content, keyboard=keyboard)
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:

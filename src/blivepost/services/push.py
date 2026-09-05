@@ -3,6 +3,7 @@
 消息推送服务（通过QQ官方机器人botpy主动推送）
 """
 
+import inspect
 import re
 from datetime import datetime
 from typing import Any, List, Optional
@@ -18,6 +19,50 @@ logger = get_logger("push")
 _CQ_IMAGE_RE = re.compile(r"\[CQ:image,[^\]]*?file=([^\],]+)[^\]]*\]")
 # 其余CQ码：直接移除（官方机器人不支持@全体成员等CQ功能）
 _CQ_RE = re.compile(r"\[CQ:[^\]]+\]")
+
+
+def _supports_kwarg(func, name: str) -> bool:
+    """机器人客户端方法是否支持某关键字参数（自定义bot鸭子类型兼容）"""
+    try:
+        return name in inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def live_enter_keyboard(room_id) -> dict:
+    """
+    开播推送的「进入直播间」按钮keyboard
+
+    线框样式按钮、所有人可点击，跳转bilibili直播协议链接
+    （唤起B站客户端进入对应直播间）。
+
+    Args:
+        room_id: 完整直播间房间号
+
+    Returns:
+        dict: QQ官方keyboard结构
+    """
+    return {
+        "content": {
+            "rows": [{
+                "buttons": [{
+                    "id": "enter_live_room",
+                    "render_data": {
+                        "label": "进入直播间",
+                        "visited_color": "#00AEEC",  # 点击后B站蓝
+                        "style": 0,  # 0=线框样式（1为填充样式）
+                    },
+                    "action": {
+                        "type": 0,  # 0=链接跳转
+                        "permission": {"type": 2},  # 2=所有人可点击
+                        "data": f"bilibili://live/{room_id}",
+                        "clicked_data": "正在进入直播间…",
+                        "at_bot_show": False,
+                    },
+                }]
+            }]
+        }
+    }
 
 
 def convert_cq_message(message: str) -> str:
@@ -96,13 +141,14 @@ class PushService:
             return []
         return self.binding_store.get_monitored_groups(rid)
 
-    def send_message(self, message: str, room_id=None) -> bool:
+    def send_message(self, message: str, room_id=None, keyboard: Optional[dict] = None) -> bool:
         """
         发送消息到目标群
 
         Args:
             message: 消息内容（可含CQ码，会自动转换为纯文本）
             room_id: 直播间ID（按绑定关系路由）
+            keyboard: 按钮keyboard结构（可选，需机器人支持）
 
         Returns:
             bool: 是否成功调度发送
@@ -128,9 +174,12 @@ class PushService:
             logger.warning("消息内容为空，跳过发送")
             return False
 
+        if _supports_kwarg(self.bot_client.push, "keyboard"):
+            return self.bot_client.push(content, groups, keyboard=keyboard)
         return self.bot_client.push(content, groups)
 
-    def push_media_message(self, image_url: str, content: str, room_id=None) -> bool:
+    def push_media_message(self, image_url: str, content: str, room_id=None,
+                           keyboard: Optional[dict] = None) -> bool:
         """
         发送图片富媒体消息（不支持时回退为文本+URL）
 
@@ -138,6 +187,7 @@ class PushService:
             image_url: 图片URL
             content: 文本内容
             room_id: 直播间ID（按绑定关系路由）
+            keyboard: 按钮keyboard结构（可选，回退文本时同样携带）
 
         Returns:
             bool: 是否成功调度发送
@@ -156,8 +206,12 @@ class PushService:
                 return False
 
         if hasattr(self.bot_client, "push_media"):
+            if _supports_kwarg(self.bot_client.push_media, "keyboard"):
+                return self.bot_client.push_media(image_url, content, groups,
+                                                  keyboard=keyboard)
             return self.bot_client.push_media(image_url, content, groups)
-        return self.send_message(f"{content}\n{image_url}", room_id=room_id)
+        return self.send_message(f"{content}\n{image_url}", room_id=room_id,
+                                 keyboard=keyboard)
 
     def _live_start_text(self, room_info: LiveRoomInfo) -> str:
         """开播消息文本（优先使用自定义模板）"""
@@ -221,7 +275,7 @@ class PushService:
 
     def push_live_start(self, room_info: LiveRoomInfo) -> bool:
         """
-        推送开播消息（有封面时优先富媒体，回退文本）
+        推送开播消息（有封面时优先富媒体，回退文本；携带「进入直播间」按钮）
 
         Args:
             room_info: 直播间信息
@@ -229,13 +283,14 @@ class PushService:
         Returns:
             bool: 是否发送成功
         """
+        keyboard = live_enter_keyboard(room_info.room_id)
         cover = self._live_start_image(room_info)
         if cover and self.bot_client is not None:
             return self.push_media_message(cover, self._live_start_text(room_info),
-                                           room_id=room_info.room_id)
+                                           room_id=room_info.room_id, keyboard=keyboard)
         message = self._live_start_text(room_info) + f"\n封面：{cover}" if cover \
             else self._live_start_text(room_info)
-        return self.send_message(message, room_id=room_info.room_id)
+        return self.send_message(message, room_id=room_info.room_id, keyboard=keyboard)
 
     def push_live_end(
         self,

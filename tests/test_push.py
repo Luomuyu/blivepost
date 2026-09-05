@@ -143,3 +143,76 @@ async def test_push_live_start_media_with_fallback(tmp_path):
     assert len(bot3.media_calls) == 0
     assert len(bot3.calls) == 1
     await db.close()
+
+
+# ==================== 开播推送按钮 ====================
+
+
+def test_live_enter_keyboard_structure():
+    from blivepost.services.push import live_enter_keyboard
+    kb = live_enter_keyboard(9646546)
+    btn = kb["content"]["rows"][0]["buttons"][0]
+    assert btn["render_data"]["label"] == "进入直播间"
+    assert btn["render_data"]["style"] == 0  # 线框样式
+    assert btn["action"]["permission"]["type"] == 2  # 所有人可点击
+    assert btn["action"]["type"] == 0  # 链接跳转
+    assert btn["action"]["data"] == "bilibili://live/9646546"
+
+
+class KeyboardBot:
+    """支持keyboard参数的机器人（记录收到的keyboard）"""
+
+    def __init__(self, media=False):
+        self.kb_calls = []
+        self.media_kb_calls = []
+        self.support_media = media
+
+    def push(self, content, groups, keyboard=None):
+        self.kb_calls.append(keyboard)
+        return True
+
+    def push_media(self, image_url, content, groups, keyboard=None):
+        self.media_kb_calls.append(keyboard)
+        return True
+
+
+async def test_push_live_start_passes_keyboard(tmp_path):
+    """开播推送把进入直播间按钮传给机器人（富媒体路径）"""
+    from blivepost.database import DatabaseManager, DatabaseService
+
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    store = BindingStore(DatabaseService(db))
+    await store.bind("G1", 9646546, 1)
+    await store.set_monitored("G1", 9646546, True)
+    bot = KeyboardBot(media=True)
+    ps = PushService(settings)
+    ps.binding_store = store
+    ps.bot_client = bot
+    assert ps.push_live_start(make_info(room_id=9646546)) is True
+    assert len(bot.media_kb_calls) == 1
+    btn = bot.media_kb_calls[0]["content"]["rows"][0]["buttons"][0]
+    assert btn["action"]["data"] == "bilibili://live/9646546"
+    await db.close()
+
+
+async def test_push_keyboard_custom_bot_compat(tmp_path):
+    """不支持keyboard参数的自定义bot仍正常工作（旧签名回退）"""
+    from blivepost.database import DatabaseManager, DatabaseService
+
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    store = BindingStore(DatabaseService(db))
+    await store.bind("G1", 23058, 1)
+    await store.set_monitored("G1", 23058, True)
+    bot = FakeBot()  # 旧签名：push(content, groups)
+    ps = PushService(settings)
+    ps.binding_store = store
+    ps.bot_client = bot
+    assert ps.send_message("hello", room_id=23058, keyboard={"content": {"rows": []}}) is True
+    assert bot.calls and bot.calls[0][1] == ["G1"]
+    await db.close()

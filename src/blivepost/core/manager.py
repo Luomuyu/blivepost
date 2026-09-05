@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 from ..config.settings import Settings
 from ..models.live import LiveRoomInfo, LiveStats, TempData
 from ..services.bilibili import BilibiliAPI
-from ..services.push import PushService, convert_cq_message
+from ..services.push import PushService, convert_cq_message, live_enter_keyboard
 from ..utils.logger import get_logger
 from ..vendor.importer import import_blivedm
 from ..vendor.patch import apply_patch
@@ -84,13 +84,15 @@ class QueuePushService(PushService):
         self._queue = queue
         self.room_id = room_id
 
-    def send_message(self, message: str, room_id=None) -> bool:
-        return self._forward(message, media=None)
+    def send_message(self, message: str, room_id=None,
+                     keyboard: Optional[dict] = None) -> bool:
+        return self._forward(message, media=None, keyboard=keyboard)
 
     def push_live_start(self, room_info: LiveRoomInfo) -> bool:
         return self._forward(
             self._live_start_text(room_info),
-            media=self._live_start_image(room_info)
+            media=self._live_start_image(room_info),
+            keyboard=live_enter_keyboard(room_info.room_id)
         )
 
     def push_live_end(self, room_info: LiveRoomInfo, stats: LiveStats) -> bool:
@@ -111,14 +113,16 @@ class QueuePushService(PushService):
             logger.error(f"凭证失效上报写入队列失败: {e}")
             return False
 
-    def _forward(self, message: str, media: Optional[str]) -> bool:
+    def _forward(self, message: str, media: Optional[str],
+                 keyboard: Optional[dict] = None) -> bool:
         content = convert_cq_message(message)
         if not content:
             logger.warning("消息内容为空，跳过发送")
             return False
         try:
             self._queue.put(
-                {"type": "push", "room_id": self.room_id, "content": content, "media": media},
+                {"type": "push", "room_id": self.room_id, "content": content,
+                 "media": media, "keyboard": keyboard},
                 timeout=5
             )
             return True
@@ -351,10 +355,13 @@ class PushQueueConsumer:
             room_id = item.get("room_id")
             media = item.get("media")
             content = item.get("content", "")
+            keyboard = item.get("keyboard")
             if media:
-                self.push_service.push_media_message(media, content, room_id=room_id)
+                self.push_service.push_media_message(media, content, room_id=room_id,
+                                                     keyboard=keyboard)
             else:
-                self.push_service.send_message(content, room_id=room_id)
+                self.push_service.send_message(content, room_id=room_id,
+                                               keyboard=keyboard)
 
         elif kind == "not_login":
             await self._handle_not_login(item.get("room_id"))
