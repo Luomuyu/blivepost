@@ -31,10 +31,16 @@ def _supports_kwarg(func, name: str) -> bool:
 
 def live_enter_keyboard(room_id) -> dict:
     """
-    开播推送的「进入直播间」按钮keyboard
+    开播推送的「进入直播间」按钮keyboard（对齐官方v2群消息接口文档）
 
-    线框样式按钮、所有人可点击，跳转bilibili直播协议链接
-    （唤起B站客户端进入对应直播间）。
+    蓝色线框按钮、所有人可点击，type=0跳转按钮，data为bilibili直播
+    协议链接（唤起B站客户端进入对应直播间）。
+
+    字段依据官方文档（v2_groups_group_openid_messages.post）：
+      - render_data.style: 0=灰色线框 1=蓝色线框 3=白底红字 4=蓝底白字
+      - render_data.visited_label: 点击后按钮文字（无visited_color字段）
+      - action.permission.type: 2=所有人
+      - action.type: 0=跳转按钮（http或协议链接）
 
     Args:
         room_id: 完整直播间房间号
@@ -49,15 +55,14 @@ def live_enter_keyboard(room_id) -> dict:
                     "id": "enter_live_room",
                     "render_data": {
                         "label": "进入直播间",
-                        "visited_color": "#00AEEC",  # 点击后B站蓝
-                        "style": 0,  # 0=线框样式（1为填充样式）
+                        "visited_label": "跳转中…",
+                        "style": 1,  # 1=蓝色线框
                     },
                     "action": {
-                        "type": 0,  # 0=链接跳转
+                        "type": 0,  # 0=跳转按钮
                         "permission": {"type": 2},  # 2=所有人可点击
                         "data": f"bilibili://live/{room_id}",
-                        "clicked_data": "正在进入直播间…",
-                        "at_bot_show": False,
+                        "unsupport_tips": "当前QQ版本过低，无法跳转直播间",
                     },
                 }]
             }]

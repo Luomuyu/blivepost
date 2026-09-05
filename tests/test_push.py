@@ -149,14 +149,21 @@ async def test_push_live_start_media_with_fallback(tmp_path):
 
 
 def test_live_enter_keyboard_structure():
+    """按钮结构对齐官方v2群消息接口文档"""
     from blivepost.services.push import live_enter_keyboard
     kb = live_enter_keyboard(9646546)
     btn = kb["content"]["rows"][0]["buttons"][0]
     assert btn["render_data"]["label"] == "进入直播间"
-    assert btn["render_data"]["style"] == 0  # 线框样式
+    assert btn["render_data"]["visited_label"] == "跳转中…"
+    assert btn["render_data"]["style"] == 1  # 蓝色线框（官方style取值：0灰/1蓝线框）
     assert btn["action"]["permission"]["type"] == 2  # 所有人可点击
-    assert btn["action"]["type"] == 0  # 链接跳转
+    assert btn["action"]["type"] == 0  # 跳转按钮
     assert btn["action"]["data"] == "bilibili://live/9646546"
+    assert "unsupport_tips" in btn["action"]
+    # 非本文档字段不出现（clicked_data/at_bot_show来自其他版本文档）
+    assert "clicked_data" not in btn["action"]
+    assert "at_bot_show" not in btn["action"]
+    assert "visited_color" not in btn["render_data"]
 
 
 class KeyboardBot:
