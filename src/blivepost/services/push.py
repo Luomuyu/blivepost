@@ -33,8 +33,9 @@ def live_enter_keyboard(room_id) -> dict:
     """
     开播推送的「进入直播间」按钮keyboard（对齐官方v2群消息接口文档）
 
-    蓝色线框按钮、所有人可点击，type=0跳转按钮，data为bilibili直播
-    协议链接（唤起B站客户端进入对应直播间）。
+    蓝色线框按钮、所有人可点击，type=0跳转按钮，data为B站直播间
+    https链接。按钮仅Markdown消息（msg_type=2）下渲染，见
+    push_live_start_from_parts的降级链路。
 
     字段依据官方文档（v2_groups_group_openid_messages.post）：
       - render_data.style: 0=灰色线框 1=蓝色线框 3=白底红字 4=蓝底白字
@@ -61,7 +62,7 @@ def live_enter_keyboard(room_id) -> dict:
                     "action": {
                         "type": 0,  # 0=跳转按钮
                         "permission": {"type": 2},  # 2=所有人可点击
-                        "data": f"bilibili://live/{room_id}",
+                        "data": f"https://live.bilibili.com/{room_id}",
                         "unsupport_tips": "当前QQ版本过低，无法跳转直播间",
                     },
                 }]
@@ -218,6 +219,74 @@ class PushService:
         return self.send_message(f"{content}\n{image_url}", room_id=room_id,
                                  keyboard=keyboard)
 
+    def send_markdown_message(self, content: str, room_id=None,
+                              keyboard: Optional[dict] = None) -> bool:
+        """发送Markdown消息（msg_type=2，按钮仅在此消息类型下渲染）"""
+        if self.bot_client is None:
+            logger.error("未配置QQ官方机器人客户端，消息发送失败")
+            return False
+
+        groups = self._resolve_groups(room_id)
+        if not groups:
+            logger.warning(f"直播间{room_id}无监控中的绑定群，跳过发送")
+            return False
+        if self.contact_store is not None:
+            groups = self.contact_store.filter_receivable_groups(groups)
+            if not groups:
+                return False
+
+        md = getattr(self.bot_client, "push_markdown", None)
+        if md is None or not _supports_kwarg(md, "keyboard"):
+            return False  # 机器人不支持Markdown推送 → 调用方走富媒体/文本链路
+        return md(content, groups, keyboard=keyboard)
+
+    def push_live_start_from_parts(self, content: str, media: Optional[str],
+                                   room_id: Optional[int],
+                                   keyboard: Optional[dict]) -> bool:
+        """
+        开播推送（部件版，本地与子进程队列共用）
+
+        按钮仅在Markdown消息（msg_type=2，官方示例搭配）下渲染：
+        优先Markdown+按钮，失败自动降级富媒体（保封面，不带按钮），
+        再降级文本（含封面URL）。
+        """
+        if self.bot_client is None:
+            logger.error("未配置QQ官方机器人客户端，消息发送失败")
+            return False
+
+        groups = self._resolve_groups(room_id)
+        if not groups:
+            logger.warning(f"直播间{room_id}无监控中的绑定群，跳过发送")
+            return False
+        if self.contact_store is not None:
+            groups = self.contact_store.filter_receivable_groups(groups)
+            if not groups:
+                logger.info(f"直播间{room_id}的目标群均未开启消息接收，跳过发送")
+                return False
+
+        # 1) 官方bot：完整降级链在bot层内部（Markdown+按钮→富媒体→文本，
+        #    降级决策依赖真实发送结果，调度入口的True仅代表任务已调度）
+        ls = getattr(self.bot_client, "push_live_start", None)
+        if ls is not None and _supports_kwarg(ls, "keyboard"):
+            return ls(content, media, groups, keyboard=keyboard)
+
+        # 2) 自定义bot鸭子类型：Markdown+按钮（可选）→ 富媒体 → 文本
+        md = getattr(self.bot_client, "push_markdown", None)
+        if md is not None and _supports_kwarg(md, "keyboard"):
+            try:
+                if md(content, groups, keyboard=keyboard):
+                    return True
+                logger.warning("Markdown开播推送未成功，降级富媒体/文本")
+            except Exception as e:
+                logger.warning(f"Markdown开播推送异常({e})，降级富媒体/文本")
+
+        if media and hasattr(self.bot_client, "push_media"):
+            if self.bot_client.push_media(media, content, groups):
+                return True
+
+        text = content + f"\n封面：{media}" if media else content
+        return self.bot_client.push(text, groups)
+
     def _live_start_text(self, room_info: LiveRoomInfo) -> str:
         """开播消息文本（优先使用自定义模板）"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -288,14 +357,12 @@ class PushService:
         Returns:
             bool: 是否发送成功
         """
-        keyboard = live_enter_keyboard(room_info.room_id)
-        cover = self._live_start_image(room_info)
-        if cover and self.bot_client is not None:
-            return self.push_media_message(cover, self._live_start_text(room_info),
-                                           room_id=room_info.room_id, keyboard=keyboard)
-        message = self._live_start_text(room_info) + f"\n封面：{cover}" if cover \
-            else self._live_start_text(room_info)
-        return self.send_message(message, room_id=room_info.room_id, keyboard=keyboard)
+        return self.push_live_start_from_parts(
+            content=self._live_start_text(room_info),
+            media=self._live_start_image(room_info),
+            room_id=room_info.room_id,
+            keyboard=live_enter_keyboard(room_info.room_id),
+        )
 
     def push_live_end(
         self,

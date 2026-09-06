@@ -158,7 +158,7 @@ def test_live_enter_keyboard_structure():
     assert btn["render_data"]["style"] == 1  # 蓝色线框（官方style取值：0灰/1蓝线框）
     assert btn["action"]["permission"]["type"] == 2  # 所有人可点击
     assert btn["action"]["type"] == 0  # 跳转按钮
-    assert btn["action"]["data"] == "bilibili://live/9646546"
+    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
     assert "unsupport_tips" in btn["action"]
     # 非本文档字段不出现（clicked_data/at_bot_show来自其他版本文档）
     assert "clicked_data" not in btn["action"]
@@ -183,8 +183,38 @@ class KeyboardBot:
         return True
 
 
-async def test_push_live_start_passes_keyboard(tmp_path):
-    """开播推送把进入直播间按钮传给机器人（富媒体路径）"""
+class LiveStartBot:
+    """官方bot形态：push_live_start完整降级链（记录入参）"""
+
+    def __init__(self):
+        self.calls = []
+
+    def push_live_start(self, content, media, groups, keyboard=None):
+        self.calls.append({"content": content, "media": media,
+                           "groups": list(groups), "keyboard": keyboard})
+        return True
+
+
+class MarkdownBot:
+    """仅支持Markdown推送的自定义bot（无push_live_start）"""
+
+    def __init__(self):
+        self.md_calls = []
+        self.media_calls = []
+
+    def push_markdown(self, content, groups, keyboard=None):
+        self.md_calls.append(keyboard)
+        return True
+
+    def push_media(self, image_url, content, groups):
+        self.media_calls.append((image_url, content))
+        return True
+
+    def push(self, content, groups):
+        return True
+
+
+async def _live_start_env(tmp_path, bot):
     from blivepost.database import DatabaseManager, DatabaseService
 
     settings = Settings()
@@ -194,14 +224,44 @@ async def test_push_live_start_passes_keyboard(tmp_path):
     store = BindingStore(DatabaseService(db))
     await store.bind("G1", 9646546, 1)
     await store.set_monitored("G1", 9646546, True)
-    bot = KeyboardBot(media=True)
     ps = PushService(settings)
     ps.binding_store = store
     ps.bot_client = bot
+    return ps, db
+
+
+async def test_push_live_start_official_bot_uses_ladder(tmp_path):
+    """官方bot：开播推送走push_live_start完整降级链并携带按钮（https链接）"""
+    bot = LiveStartBot()
+    ps, db = await _live_start_env(tmp_path, bot)
+    assert ps.push_live_start(make_info(room_id=9646546)) is True
+    call = bot.calls[0]
+    btn = call["keyboard"]["content"]["rows"][0]["buttons"][0]
+    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
+    assert btn["render_data"]["style"] == 1  # 蓝色线框
+    await db.close()
+
+
+async def test_push_live_start_markdown_bot(tmp_path):
+    """自定义bot支持push_markdown：按钮经Markdown链路传递"""
+    bot = MarkdownBot()
+    ps, db = await _live_start_env(tmp_path, bot)
+    assert ps.push_live_start(make_info(room_id=9646546)) is True
+    assert len(bot.md_calls) == 1
+    btn = bot.md_calls[0]["content"]["rows"][0]["buttons"][0]
+    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
+    assert bot.media_calls == []  # Markdown成功不降级富媒体
+    await db.close()
+
+
+async def test_push_live_start_keyboard_bot_falls_back_media(tmp_path):
+    """bot无push_live_start/push_markdown：降级富媒体（按钮依赖Markdown，
+    由bot层降级链处理，push层不把keyboard传给富媒体）"""
+    bot = KeyboardBot(media=True)
+    ps, db = await _live_start_env(tmp_path, bot)
     assert ps.push_live_start(make_info(room_id=9646546)) is True
     assert len(bot.media_kb_calls) == 1
-    btn = bot.media_kb_calls[0]["content"]["rows"][0]["buttons"][0]
-    assert btn["action"]["data"] == "bilibili://live/9646546"
+    assert bot.media_kb_calls[0] is None  # 富媒体路径不带按钮
     await db.close()
 
 

@@ -89,11 +89,19 @@ class QueuePushService(PushService):
         return self._forward(message, media=None, keyboard=keyboard)
 
     def push_live_start(self, room_info: LiveRoomInfo) -> bool:
-        return self._forward(
-            self._live_start_text(room_info),
-            media=self._live_start_image(room_info),
-            keyboard=live_enter_keyboard(room_info.room_id)
-        )
+        """开播推送经队列转发（部件+按钮），主进程侧执行完整降级链"""
+        try:
+            self._queue.put(
+                {"type": "push_live_start", "room_id": self.room_id,
+                 "content": self._live_start_text(room_info),
+                 "media": self._live_start_image(room_info),
+                 "keyboard": live_enter_keyboard(room_info.room_id)},
+                timeout=5
+            )
+            return True
+        except Exception as e:
+            logger.error(f"开播推送写入队列失败: {e}")
+            return False
 
     def push_live_end(self, room_info: LiveRoomInfo, stats: LiveStats) -> bool:
         return self._forward(
@@ -351,7 +359,16 @@ class PushQueueConsumer:
         """处理单条队列消息"""
         kind = item.get("type")
 
-        if kind == "push":
+        if kind == "push_live_start":
+            # 开播推送：主进程侧执行 Markdown+按钮→富媒体→文本 降级链
+            self.push_service.push_live_start_from_parts(
+                content=item.get("content", ""),
+                media=item.get("media"),
+                room_id=item.get("room_id"),
+                keyboard=item.get("keyboard"),
+            )
+
+        elif kind == "push":
             room_id = item.get("room_id")
             media = item.get("media")
             content = item.get("content", "")
