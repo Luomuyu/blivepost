@@ -90,3 +90,12 @@ def test_dynamic_seen_roundtrip(tmp_path):
     save_seen_dynamic_ids(7, ["d1"], d)  # 重复记录忽略
     assert load_seen_dynamic_ids(7, d) == {"d1", "d2"}
     assert load_seen_dynamic_ids(8, d) == set()  # UP间隔离
+
+
+@pytest.mark.asyncio
+async def test_migrate_fresh_db_silent_skip(tmp_path):
+    """新装库（主库无事件表）：迁移静默返回0，不产生告警/异常"""
+    svc, db = await _make_svc(tmp_path, "fresh")
+    moved = await svc.migrate_legacy_events()
+    assert moved == 0
+    await db.close()

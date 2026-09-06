@@ -9,7 +9,7 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import (
     AsyncSession, AsyncEngine, create_async_engine, async_sessionmaker
 )
-from sqlalchemy import text
+from sqlalchemy import inspect as sa_inspect, text
 
 from ..config.settings import DatabaseConfig
 from ..utils.logger import get_logger
@@ -113,6 +113,14 @@ class DatabaseManager:
         
         logger.info("数据库初始化完成")
     
+    async def has_table(self, table: str) -> bool:
+        """探测表是否存在（旧库迁移前检查用）"""
+        if self._engine is None:
+            return False
+        async with self._engine.connect() as conn:
+            return await conn.run_sync(
+                lambda c: sa_inspect(c).has_table(table))
+
     async def close(self) -> None:
         """关闭数据库连接"""
         if self._engine is not None:

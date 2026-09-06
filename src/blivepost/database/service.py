@@ -1461,6 +1461,9 @@ class DatabaseService:
 
     async def _migrate_legacy_table(self, model) -> int:
         """单张事件表的分块搬移（查500行→写子库→删主库，循环至清空）"""
+        # 新装库主库本就没有事件表（子库架构后create_all不再建入主库），静默跳过
+        if not await self.db_manager.has_table(model.__tablename__):
+            return 0
         moved = 0
         table = model.__table__
         cols = [c.name for c in table.columns]
