@@ -223,3 +223,78 @@ async def test_push_keyboard_custom_bot_compat(tmp_path):
     assert ps.send_message("hello", room_id=23058, keyboard={"content": {"rows": []}}) is True
     assert bot.calls and bot.calls[0][1] == ["G1"]
     await db.close()
+
+
+# ==================== 心跳失败看门狗 ====================
+
+
+def test_heartbeat_watchdog_stops_client_after_threshold():
+    """连续心跳失败达阈值→stop()客户端（join返回→watcher重建）；成功则计数清零"""
+    import asyncio
+    import sys
+
+    from pathlib import Path
+
+    import pytest
+
+    vendor_blivedm = Path(__file__).resolve().parents[1] / "_vendor" / "blivedm"
+    if not vendor_blivedm.exists():
+        pytest.skip("vendor blivedm未下载（运行时自动下载）")
+    if str(vendor_blivedm.parent) not in sys.path:
+        sys.path.insert(0, str(vendor_blivedm.parent))
+
+    from blivepost.vendor import patch as vendor_patch
+
+    vendor_patch.apply_patch()  # 幂等
+    import blivedm.clients.ws_base as ws_base
+
+    assert getattr(ws_base.WebSocketClientBase, "_heartbeat_watchdog_patched", False)
+
+    class FakeWS:
+        closed = False
+
+        async def send_bytes(self, data):
+            raise ConnectionResetError("Cannot write to closing transport")
+
+    class FakeClient:
+        room_id = 1
+        _websocket = FakeWS()
+        _heartbeat_fail_count = 0
+        stopped = False
+
+        def _make_packet(self, data, op):
+            return b""
+
+        def stop(self):
+            self.stopped = True
+
+    fake = FakeClient()
+    hb = ws_base.WebSocketClientBase._send_heartbeat
+
+    async def run():
+        await hb(fake)  # 第1次失败
+        assert fake.stopped is False and fake._heartbeat_fail_count == 1
+        await hb(fake)  # 第2次失败
+        assert fake.stopped is False and fake._heartbeat_fail_count == 2
+        await hb(fake)  # 第3次失败 → 达阈值
+        assert fake.stopped is True and fake._websocket is None
+
+    asyncio.run(run())
+
+    # 成功后计数清零
+    class OkClient(FakeClient):
+        class _WS:
+            closed = False
+
+            async def send_bytes(self, data):
+                return None
+
+    ok = OkClient()
+    ok._websocket = ok._WS()
+
+    async def run_ok():
+        await hb(ok)
+        await hb(ok)
+
+    asyncio.run(run_ok())
+    assert ok._heartbeat_fail_count == 0 and ok.stopped is False

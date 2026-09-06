@@ -6,6 +6,8 @@ blivedm补丁 - 添加自定义消息处理
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+import aiohttp
+
 from .importer import import_blivedm
 from . import models as vendor_models
 from ..utils.logger import get_logger
@@ -290,5 +292,59 @@ def apply_patch(ignore_cmds: Optional[list] = None) -> None:
     for cmd in CMD_CALLBACK_DICT_DEL:
         if cmd in blivedm.handlers.BaseHandler._CMD_CALLBACK_DICT:
             del blivedm.handlers.BaseHandler._CMD_CALLBACK_DICT[cmd]
-    
+
+    _apply_heartbeat_watchdog(blivedm)
+
     logger.info("blivedm补丁已应用")
+
+
+# 连续心跳失败阈值：blivedm心跳间隔30秒，3次约90秒判定连接僵死
+HEARTBEAT_FAIL_EXIT = 3
+
+
+def _apply_heartbeat_watchdog(blivedm) -> None:
+    """
+    心跳失败看门狗补丁
+
+    blivedm的_send_heartbeat对连接异常只记WARNING且定时器永远重排——
+    传输层已死时进程存活、join()不返回，监控静默失效。此补丁统计连续
+    失败次数，达阈值后stop()客户端：join()返回→子进程结束→主进程
+    watcher自动重建监控。
+    """
+    import blivedm.clients.ws_base as ws_base
+
+    ws_cls = ws_base.WebSocketClientBase
+    if getattr(ws_cls, "_heartbeat_watchdog_patched", False):
+        return
+
+    async def _patched_send_heartbeat(self):
+        if self._websocket is None or self._websocket.closed:
+            return
+        try:
+            await self._websocket.send_bytes(
+                self._make_packet({}, ws_base.Operation.HEARTBEAT))
+            self._heartbeat_fail_count = 0
+        except (ConnectionResetError, aiohttp.ClientConnectionError) as e:
+            self._heartbeat_fail_count = getattr(self, "_heartbeat_fail_count", 0) + 1
+            logger.warning(
+                'room=%s _send_heartbeat() failed (%d/%d): %r',
+                self.room_id, self._heartbeat_fail_count, HEARTBEAT_FAIL_EXIT, e)
+            if self._heartbeat_fail_count >= HEARTBEAT_FAIL_EXIT:
+                self._heartbeat_fail_count = 0
+                logger.warning(
+                    'room=%s 连续%d次心跳失败，弹幕连接已失效，'
+                    '停止客户端以触发监控自动重建',
+                    self.room_id, HEARTBEAT_FAIL_EXIT)
+                # 置空websocket终止心跳定时器重排，stop()取消网络任务
+                # 使join()返回，子进程随之结束
+                self._websocket = None
+                try:
+                    self.stop()
+                except Exception:
+                    logger.exception('room=%s 心跳看门狗停止客户端失败', self.room_id)
+        except Exception:  # noqa
+            logger.exception('room=%s _send_heartbeat() failed:', self.room_id)
+
+    ws_cls._send_heartbeat = _patched_send_heartbeat
+    ws_cls._heartbeat_watchdog_patched = True
+    logger.info("心跳失败看门狗已启用（连续%d次失败自动重建监控）", HEARTBEAT_FAIL_EXIT)
