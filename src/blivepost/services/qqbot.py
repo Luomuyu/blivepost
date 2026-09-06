@@ -492,59 +492,44 @@ class QQBotClient:
                 logger.warning(f"发送富媒体消息失败: group={group_openid}, error={e}")
             return False
 
-    async def broadcast(self, groups: Iterable[str], content: str,
-                        keyboard: Optional[dict] = None) -> bool:
+    async def _broadcast_message(self, groups: Iterable[str], content: str,
+                                 media: Optional[str] = None,
+                                 keyboard: Optional[dict] = None) -> bool:
         """
-        向所有目标群发送同一消息
+        消息推送降级链（单群）：Markdown(嵌图/按钮) → 富媒体 → 文本
 
-        Args:
-            groups: 群openid列表
-            content: 文本内容
-            keyboard: 按钮keyboard结构（可选）
-
-        Returns:
-            bool: 是否全部发送成功
+        所有推送统一Markdown优先（原生markdown群聊对所有机器人开放、
+        免申请；按钮仅Markdown下渲染）。有图时经原生图片语法嵌入，
+        Markdown失败自动降级富媒体保封面，再降级纯文本。
         """
+        from .push import live_markdown_content
+
         success = True
         for group in groups:
-            if not await self.send_group_message(group, content, keyboard=keyboard):
-                success = False
-            await asyncio.sleep(0.5)  # 避免发送过快
-        return success
-
-    async def _broadcast_media(self, groups: Iterable[str], image_url: str, content: str,
-                               keyboard: Optional[dict] = None) -> bool:
-        """
-        向所有目标群发送富媒体消息（单群失败回退为文本）
-
-        Args:
-            groups: 群openid列表
-            image_url: 图片URL
-            content: 文本内容
-            keyboard: 按钮keyboard结构（可选，回退文本时同样携带）
-
-        Returns:
-            bool: 是否全部发送成功
-        """
-        success = True
-        for group in groups:
-            sent = await self.send_group_media(group, image_url, content, keyboard=keyboard)
+            sent = await self.send_group_markdown(
+                group, live_markdown_content(content, media), keyboard=keyboard)
+            if not sent and media:
+                sent = await self.send_group_media(group, media, content)
             if not sent:
-                sent = await self.send_group_message(group, content, keyboard=keyboard)
+                sent = await self.send_group_message(group, content)
             if not sent:
                 success = False
             await asyncio.sleep(0.5)  # 避免发送过快
         return success
 
     def push(self, content: str, groups: Iterable[str],
-             keyboard: Optional[dict] = None) -> bool:
+             keyboard: Optional[dict] = None,
+             media: Optional[str] = None) -> bool:
         """
-        线程安全的推送入口（同步，立即返回）
+        线程安全的统一推送入口（同步，立即返回）
+
+        Markdown(嵌图/按钮)优先 → 富媒体 → 文本。
 
         Args:
             content: 文本内容
             groups: 群openid列表
-            keyboard: 按钮keyboard结构（可选）
+            keyboard: 按钮keyboard结构（可选，仅开播推送传入）
+            media: 图片URL（可选，Markdown嵌图/富媒体共用）
 
         Returns:
             bool: 是否成功调度发送任务
@@ -553,7 +538,7 @@ class QQBotClient:
             logger.error("QQ官方机器人未启动，消息发送失败")
             return False
 
-        coro = self.broadcast(groups, content, keyboard=keyboard)
+        coro = self._broadcast_message(groups, content, media=media, keyboard=keyboard)
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -567,86 +552,13 @@ class QQBotClient:
 
     def push_media(self, image_url: str, content: str, groups: Iterable[str],
                    keyboard: Optional[dict] = None) -> bool:
-        """
-        线程安全的富媒体推送入口（同步，立即返回；单群失败自动回退文本）
+        """富媒体推送兼容入口（等同push携带media）"""
+        return self.push(content, groups, keyboard=keyboard, media=image_url)
 
-        Args:
-            image_url: 图片URL
-            content: 文本内容
-            groups: 群openid列表
-            keyboard: 按钮keyboard结构（可选，回退文本时同样携带）
-
-        Returns:
-            bool: 是否成功调度发送任务
-        """
-        if self._loop is None or not self.started:
-            logger.error("QQ官方机器人未启动，富媒体消息发送失败")
-            return False
-
-        coro = self._broadcast_media(groups, image_url, content, keyboard=keyboard)
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-
-        if current_loop is self._loop:
-            asyncio.create_task(coro)
-        else:
-            asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return True
-
-    def push_live_start(self, content: str, media: Optional[str],
-                        groups: Iterable[str], keyboard: Optional[dict] = None) -> bool:
-        """
-        线程安全的开播推送入口（同步，立即返回）
-
-        按钮仅在Markdown消息（msg_type=2）下渲染（官方示例搭配），
-        降级链：Markdown+按钮 → 富媒体（保封面，不带按钮）→ 文本。
-
-        Args:
-            content: 文本内容
-            media: 封面图片URL（可None）
-            groups: 群openid列表
-            keyboard: 按钮keyboard结构（可选）
-
-        Returns:
-            bool: 是否成功调度发送任务
-        """
-        if self._loop is None or not self.started:
-            logger.error("QQ官方机器人未启动，开播推送失败")
-            return False
-
-        coro = self._broadcast_live_start(groups, content, media, keyboard)
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-
-        if current_loop is self._loop:
-            asyncio.create_task(coro)
-        else:
-            asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return True
-
-    async def _broadcast_live_start(self, groups: Iterable[str], content: str,
-                                    media: Optional[str],
-                                    keyboard: Optional[dict] = None) -> bool:
-        """开播推送降级链（单群）：Markdown(封面图+按钮) → 富媒体 → 文本"""
-        from .push import live_markdown_content
-
-        success = True
-        for group in groups:
-            sent = await self.send_group_markdown(
-                group, live_markdown_content(content, media), keyboard=keyboard)
-            if not sent and media:
-                sent = await self.send_group_media(group, media, content)
-            if not sent:
-                text = content + f"\n封面：{media}" if media else content
-                sent = await self.send_group_message(group, text)
-            if not sent:
-                success = False
-            await asyncio.sleep(0.5)  # 避免发送过快
-        return success
+    def broadcast(self, groups: Iterable[str], content: str,
+                  keyboard: Optional[dict] = None) -> bool:
+        """文本广播兼容入口（内部走markdown优先降级链）"""
+        return self.push(content, groups, keyboard=keyboard)
 
     async def send_group_markdown(self, group_openid: str, content: str,
                                   keyboard: Optional[dict] = None) -> bool:

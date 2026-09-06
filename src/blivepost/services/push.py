@@ -62,7 +62,7 @@ def live_enter_keyboard(room_id) -> dict:
                     "action": {
                         "type": 0,  # 0=跳转按钮
                         "permission": {"type": 2},  # 2=所有人可点击
-                        "data": f"https://live.bilibili.com/{room_id}",
+                        "data": f"bilibili://live/{room_id}",
                         "unsupport_tips": "当前QQ版本过低，无法跳转直播间",
                     },
                 }]
@@ -192,6 +192,10 @@ class PushService:
             logger.warning("消息内容为空，跳过发送")
             return False
 
+        # 官方bot：统一走Markdown优先降级链（无图时markdown失败降级文本）
+        pm = getattr(self.bot_client, "push_message", None)
+        if pm is not None and _supports_kwarg(pm, "keyboard"):
+            return pm(content, groups, keyboard=keyboard)
         if _supports_kwarg(self.bot_client.push, "keyboard"):
             return self.bot_client.push(content, groups, keyboard=keyboard)
         return self.bot_client.push(content, groups)
@@ -223,6 +227,10 @@ class PushService:
             if not groups:
                 return False
 
+        # 官方bot：统一走Markdown优先降级链（markdown嵌图→富媒体→文本）
+        pm = getattr(self.bot_client, "push_message", None)
+        if pm is not None and _supports_kwarg(pm, "keyboard"):
+            return pm(content, groups, keyboard=keyboard, media=image_url)
         if hasattr(self.bot_client, "push_media"):
             if _supports_kwarg(self.bot_client.push_media, "keyboard"):
                 return self.bot_client.push_media(image_url, content, groups,
@@ -276,11 +284,11 @@ class PushService:
                 logger.info(f"直播间{room_id}的目标群均未开启消息接收，跳过发送")
                 return False
 
-        # 1) 官方bot：完整降级链在bot层内部（Markdown+按钮→富媒体→文本，
+        # 1) 官方bot：完整降级链在bot层内部（Markdown嵌图+按钮→富媒体→文本，
         #    降级决策依赖真实发送结果，调度入口的True仅代表任务已调度）
-        ls = getattr(self.bot_client, "push_live_start", None)
-        if ls is not None and _supports_kwarg(ls, "keyboard"):
-            return ls(content, media, groups, keyboard=keyboard)
+        pm = getattr(self.bot_client, "push_message", None)
+        if pm is not None and _supports_kwarg(pm, "keyboard"):
+            return pm(content, groups, keyboard=keyboard, media=media)
 
         # 2) 自定义bot鸭子类型：Markdown封面图+按钮（可选）→ 富媒体 → 文本
         md = getattr(self.bot_client, "push_markdown", None)

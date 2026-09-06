@@ -158,7 +158,7 @@ def test_live_enter_keyboard_structure():
     assert btn["render_data"]["style"] == 1  # 蓝色线框（官方style取值：0灰/1蓝线框）
     assert btn["action"]["permission"]["type"] == 2  # 所有人可点击
     assert btn["action"]["type"] == 0  # 跳转按钮
-    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
+    assert btn["action"]["data"] == "bilibili://live/9646546"
     assert "unsupport_tips" in btn["action"]
     # 非本文档字段不出现（clicked_data/at_bot_show来自其他版本文档）
     assert "clicked_data" not in btn["action"]
@@ -183,20 +183,20 @@ class KeyboardBot:
         return True
 
 
-class LiveStartBot:
-    """官方bot形态：push_live_start完整降级链（记录入参）"""
+class PushMessageBot:
+    """官方bot形态：push_message统一入口（Markdown优先降级链在bot层）"""
 
     def __init__(self):
         self.calls = []
 
-    def push_live_start(self, content, media, groups, keyboard=None):
+    def push_message(self, content, groups, keyboard=None, media=None):
         self.calls.append({"content": content, "media": media,
                            "groups": list(groups), "keyboard": keyboard})
         return True
 
 
 class MarkdownBot:
-    """仅支持Markdown推送的自定义bot（无push_live_start）"""
+    """仅支持Markdown推送的自定义bot（无push_message）"""
 
     def __init__(self):
         self.md_calls = []
@@ -231,14 +231,15 @@ async def _live_start_env(tmp_path, bot):
 
 
 async def test_push_live_start_official_bot_uses_ladder(tmp_path):
-    """官方bot：开播推送走push_live_start完整降级链并携带按钮（https链接）"""
-    bot = LiveStartBot()
+    """官方bot：开播推送走push_message统一入口并携带按钮（协议链接）"""
+    bot = PushMessageBot()
     ps, db = await _live_start_env(tmp_path, bot)
     assert ps.push_live_start(make_info(room_id=9646546)) is True
     call = bot.calls[0]
     btn = call["keyboard"]["content"]["rows"][0]["buttons"][0]
-    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
+    assert btn["action"]["data"] == "bilibili://live/9646546"
     assert btn["render_data"]["style"] == 1  # 蓝色线框
+    assert call["media"] == "http://cover.jpg"  # 封面交由bot层嵌Markdown
     await db.close()
 
 
@@ -250,7 +251,7 @@ async def test_push_live_start_markdown_bot(tmp_path):
     assert len(bot.md_calls) == 1
     md_content, kb = bot.md_calls[0]
     btn = kb["content"]["rows"][0]["buttons"][0]
-    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
+    assert btn["action"]["data"] == "bilibili://live/9646546"
     # 原生图片语法嵌封面（官方文档：![文字 #宽px #高px](URL)）
     assert "![封面 #640px #360px](http://cover.jpg)" in md_content
     assert bot.media_calls == []  # Markdown成功不降级富媒体
