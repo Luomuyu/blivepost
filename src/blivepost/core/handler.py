@@ -4,6 +4,7 @@
 """
 
 import asyncio
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..config.settings import Settings, MessageSettings
@@ -12,6 +13,20 @@ from ..models.live import LiveStats, TempData
 from ..services.push import PushService
 from ..utils.logger import get_logger
 from ..vendor.importer import import_blivedm
+
+
+def _parse_live_time(text: str) -> Optional[datetime]:
+    """
+    解析REST接口的开播时间（"YYYY-MM-DD HH:mm:ss"）
+
+    未开播等场景返回"0000-00-00 00:00:00"或空值，解析失败返回None。
+    """
+    if not text or text.startswith("0000"):
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return None
 
 
 if TYPE_CHECKING:
@@ -253,8 +268,9 @@ class BaseEventHandler:
 
         logger.info("直播开始")
         self.is_live = True
-        self.stats.start_time = local_now()
+        # 先清零统计再记开播时间（reset会将start_time置None，顺序颠倒会0时长）
         self.stats.reset()
+        self.stats.start_time = local_now()
         self.temp_data = TempData()
 
         # 开播推送与落库（异步调度，同步API请求在线程中执行，不阻塞事件循环）
@@ -265,6 +281,12 @@ class BaseEventHandler:
         try:
             room_info = await self._get_room_info()
             if room_info:
+                # 开播时间回填：轮询/校正检测到的开播往往晚于实际开播，
+                # 用REST接口的开播时间校正（取更早值，时长才准确）
+                parsed = _parse_live_time(getattr(room_info, "live_time", ""))
+                if parsed and (self.stats.start_time is None
+                               or parsed < self.stats.start_time):
+                    self.stats.start_time = parsed
                 self.push_service.push_live_start(room_info)
                 if self.db_service:
                     self._async_save(

@@ -2,14 +2,23 @@
   <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
     <h2 class="font-semibold">收入趋势 <span class="text-slate-500 text-sm font-normal">{{ label }}</span></h2>
     <div class="flex flex-wrap items-center gap-1.5 text-xs">
+      <select name="room" aria-label="选择直播间"
+              hx-get="/panel/trend?range={{ active }}&month={{ month_value }}"
+              hx-trigger="change" hx-target="#trend-panel" hx-swap="outerHTML" hx-include="this"
+              class="bg-slate-800 text-slate-300 rounded-lg px-2 py-1.5 border border-slate-700 hover:bg-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer">
+        <option value="">全部直播间</option>
+        {% for r in room_options %}
+        <option value="{{ r }}" {% if r|string == room_id|string %}selected{% endif %}>直播间 {{ r }}</option>
+        {% endfor %}
+      </select>
       {% for key, name in [('d7','近7天'),('d14','近14天'),('d30','近30天'),('this_month','本月'),('last_month','上月'),('12m','近12个月')] %}
-      <button hx-get="/panel/trend?range={{ key }}" hx-target="#trend-panel" hx-swap="outerHTML"
+      <button hx-get="/panel/trend?range={{ key }}&room={{ room_id }}" hx-target="#trend-panel" hx-swap="outerHTML"
               class="px-3 py-1.5 rounded-lg transition-colors {{ 'bg-blue-600 text-white' if active == key else 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200' }}">
         {{ name }}
       </button>
       {% endfor %}
       <input type="month" name="month" value="{{ month_value }}" max="{{ this_month_key }}"
-             hx-get="/panel/trend?range=custom_month" hx-trigger="change" hx-include="this"
+             hx-get="/panel/trend?range=custom_month&room={{ room_id }}" hx-trigger="change" hx-include="this"
              hx-target="#trend-panel" hx-swap="outerHTML"
              class="bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1.5 border border-slate-700 hover:bg-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer"
              title="选择任意自然月">

@@ -109,11 +109,15 @@ class D:
         return []
 
     @staticmethod
-    async def get_daily_history_range(start_day, end_day):
+    async def get_daily_history_range(start_day, end_day, room_ids=None):
         return []
 
     @staticmethod
     async def get_recent_live_status(limit=10):
+        return []
+
+    @staticmethod
+    async def list_room_ids():
         return []
 
 

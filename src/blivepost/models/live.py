@@ -17,7 +17,8 @@ class LiveRoomInfo:
     cover: str
     room_id: int
     online: str
-    
+    live_time: str = ""  # 开播时间（"YYYY-MM-DD HH:mm:ss"，未开播为空/零值）
+
     def __post_init__(self):
         """确保数据类型正确"""
         self.uid = int(self.uid) if self.uid else 0

@@ -79,6 +79,7 @@ class BilibiliAPI:
             cover=info.get("user_cover", "") or info.get("keyframe", ""),
             room_id=info.get("room_id", 0),
             online=f'{info.get("online", 0)}人看过',
+            live_time=info.get("live_time", "") or "",
         )
 
     def get_live_status(self, room_id) -> Optional[bool]:

@@ -101,9 +101,10 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
         @staticmethod
         async def get_daily_history(days=30): return []
         @staticmethod
-        async def get_daily_history_range(start_day, end_day): return []
+        async def get_daily_history_range(start_day, end_day, room_ids=None): return []
         @staticmethod
         async def get_recent_live_status(limit=10): return []
+        async def list_room_ids(): return []
     panel.db_service = D()
 
     async def fake_collect():
@@ -386,3 +387,49 @@ async def test_streamer_refresher_batch(tmp_path, monkeypatch):
     assert await svc.streamer_count() == 2
     assert await svc.get_streamer_name(7) == "u7"
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_trend_room_selector(tmp_path):
+    """趋势房间选择：room参数过滤数据源，label标注房间，下拉回显选中项"""
+    panel = _make_panel()
+    sample = [{"day": "2026-09-06", "danmaku": 5, "gift_gold": 1.0,
+               "ship_gold": 0, "sc_total": 0}]
+
+    class D:
+        @staticmethod
+        async def get_daily_history_range(start_day, end_day, room_ids=None):
+            D.requested_rooms = room_ids
+            return sample
+
+        @staticmethod
+        async def get_recent_live_status(limit=10): return []
+        @staticmethod
+        async def list_room_ids(): return [100, 9646546]
+
+    panel.db_service = D()
+
+    async def fake_collect():
+        return dict(_FULL_COLLECT)
+    panel._collect = fake_collect
+
+    class Req:
+        query = {"range": "d30", "room": "9646546"}
+        headers = {}
+        cookies = {}
+    resp = await panel._handle_trend(Req())
+    assert resp.status == 200
+    body = resp.text
+    assert "房间9646546" in body  # label标注
+    assert D.requested_rooms == [9646546]  # 数据查询按房间过滤
+    assert '>直播间 9646546</option>' in body and 'selected' in body  # 下拉回显
+    assert '>全部直播间</option>' in body
+
+    # 不带room参数=全部直播间总和
+    class ReqAll:
+        query = {"range": "d30"}
+        headers = {}
+        cookies = {}
+    resp2 = await panel._handle_trend(ReqAll())
+    assert resp2.status == 200
+    assert D.requested_rooms is None  # None=跨全部房间子库扇出

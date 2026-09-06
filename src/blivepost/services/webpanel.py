@@ -219,14 +219,21 @@ class WebPanel:
     async def _handle_trend(self, request):
         if not self._check_token(request):
             return web.Response(status=401, text="unauthorized: token required")
+        room_raw = (request.query.get("room") or "").strip()
+        room_id = int(room_raw) if room_raw.isdigit() else None
         ctx = await self._trend_context(
-            request.query.get("range", "d30"), request.query.get("month", ""))
+            request.query.get("range", "d30"), request.query.get("month", ""),
+            room_id=room_id)
         html = self._render("partials/trend.html", **ctx)
         return self._html_response(request, html)
 
-    async def _trend_context(self, range_key: str, month_str: str) -> dict:
+    async def _trend_context(self, range_key: str, month_str: str,
+                             room_id: Optional[int] = None) -> dict:
         """
         趋势数据上下文：近N天 / 本月 / 上月 / 指定自然月 / 近12个月（按月汇总）
+
+        Args:
+            room_id: 指定直播间（None=全部直播间总和）
         """
         today = datetime.now().date()
         rows: list = []
@@ -234,25 +241,27 @@ class WebPanel:
         active = "d30"
         label = "近30天"
         month_value = today.strftime("%Y-%m")
+        room_ids = [room_id] if room_id else None
 
         if range_key in ("d7", "d14", "d30"):
             n = int(range_key[1:])
             active = range_key
             label = f"近{n}天"
             rows = await self.db_service.get_daily_history_range(
-                _add_days(today, -(n - 1)), today)
+                _add_days(today, -(n - 1)), today, room_ids=room_ids)
         elif range_key == "this_month":
             active = range_key
             label = f"{today.year}年{today.month}月"
             rows = await self.db_service.get_daily_history_range(
-                today.replace(day=1), today)
+                today.replace(day=1), today, room_ids=room_ids)
         elif range_key == "last_month":
             first_this = today.replace(day=1)
             last_prev = _add_days(first_this, -1)
             start = last_prev.replace(day=1)
             active = range_key
             label = f"{last_prev.year}年{last_prev.month}月"
-            rows = await self.db_service.get_daily_history_range(start, last_prev)
+            rows = await self.db_service.get_daily_history_range(
+                start, last_prev, room_ids=room_ids)
         elif range_key == "12m":
             active = range_key
             mode = "monthly"
@@ -261,9 +270,10 @@ class WebPanel:
             start = _add_days(first_this, -1).replace(day=1)
             for _ in range(10):
                 start = _add_days(start, -1).replace(day=1)
-            daily = await self.db_service.get_daily_history_range(start, today)
+            daily = await self.db_service.get_daily_history_range(
+                start, today, room_ids=room_ids)
             rows = _aggregate_monthly(daily)
-        elif range_key == "custom_month" and _parse_month(month_str):
+        elif (range_key == "custom_month" or range_key.startswith("month:"))                 and _parse_month(month_str):
             y, m = _parse_month(month_str)
             start = date(y, m, 1)
             if (y, m) == (today.year, today.month):
@@ -276,15 +286,32 @@ class WebPanel:
             active = f"month:{month_str}"
             month_value = month_str
             label = f"{y}年{m}月"
-            rows = await self.db_service.get_daily_history_range(start, end)
+            rows = await self.db_service.get_daily_history_range(
+                start, end, room_ids=room_ids)
         else:
             rows = await self.db_service.get_daily_history_range(
-                _add_days(today, -29), today)
+                _add_days(today, -29), today, room_ids=room_ids)
+
+        if room_id:
+            label += f" · 房间{room_id}"
+
+        room_options = set()
+        if self.binding_store is not None:
+            try:
+                room_options.update(self.binding_store.get_monitored_room_ids())
+            except Exception:
+                pass
+        try:
+            room_options.update(await self.db_service.list_room_ids())
+        except Exception:
+            pass
 
         return {
             "data": rows, "mode": mode, "active": active, "label": label,
             "month_value": month_value,
             "this_month_key": today.strftime("%Y-%m"),
+            "room_id": room_id or "",
+            "room_options": sorted(room_options),
         }
 
     # ========== JSON接口 ==========

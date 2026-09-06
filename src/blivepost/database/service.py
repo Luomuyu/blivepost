@@ -1344,6 +1344,16 @@ class DatabaseService:
             logger.error(f"查询主播昵称失败(uid={uid}): {e}")
             return ""
 
+    async def list_room_ids(self) -> List[int]:
+        """全部已知的直播间ID（子库映射登记过的，升序；趋势房间选择用）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(RoomDbRecord.room_id))
+                return sorted(int(r[0]) for r in res.all())
+        except Exception as e:
+            logger.error(f"查询房间列表失败: {e}")
+            return []
+
     async def streamer_count(self) -> int:
         """主播表行数（启动回填判断用）"""
         try:

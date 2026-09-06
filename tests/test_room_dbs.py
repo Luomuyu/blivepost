@@ -99,3 +99,28 @@ async def test_migrate_fresh_db_silent_skip(tmp_path):
     moved = await svc.migrate_legacy_events()
     assert moved == 0
     await db.close()
+
+
+def test_parse_live_time():
+    """REST开播时间解析：合法值/零值/空值"""
+    from datetime import datetime
+
+    from blivepost.core.handler import _parse_live_time
+    assert _parse_live_time("2026-09-06 20:00:00") == datetime(2026, 9, 6, 20, 0, 0)
+    assert _parse_live_time("0000-00-00 00:00:00") is None
+    assert _parse_live_time("") is None
+    assert _parse_live_time("bad") is None
+
+
+def test_live_stats_duration_guard_and_reset():
+    """reset清start_time后时长为0（守卫不抛异常）；设值后正常计时"""
+    from datetime import datetime, timedelta
+
+    from blivepost.models.live import LiveStats
+    stats = LiveStats()
+    assert stats.duration_seconds == 0  # start_time为None时守卫返回0
+    stats.reset()
+    stats.start_time = datetime.now() - timedelta(hours=2)
+    assert 7199 <= stats.duration_seconds <= 7201
+    stats.end_time = stats.start_time + timedelta(hours=2)
+    assert stats.duration_seconds == 7200
