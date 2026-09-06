@@ -203,7 +203,7 @@ class MarkdownBot:
         self.media_calls = []
 
     def push_markdown(self, content, groups, keyboard=None):
-        self.md_calls.append(keyboard)
+        self.md_calls.append((content, keyboard))
         return True
 
     def push_media(self, image_url, content, groups):
@@ -243,13 +243,16 @@ async def test_push_live_start_official_bot_uses_ladder(tmp_path):
 
 
 async def test_push_live_start_markdown_bot(tmp_path):
-    """自定义bot支持push_markdown：按钮经Markdown链路传递"""
+    """自定义bot支持push_markdown：按钮经Markdown链路传递，封面嵌图免模板"""
     bot = MarkdownBot()
     ps, db = await _live_start_env(tmp_path, bot)
     assert ps.push_live_start(make_info(room_id=9646546)) is True
     assert len(bot.md_calls) == 1
-    btn = bot.md_calls[0]["content"]["rows"][0]["buttons"][0]
+    md_content, kb = bot.md_calls[0]
+    btn = kb["content"]["rows"][0]["buttons"][0]
     assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
+    # 原生图片语法嵌封面（官方文档：![文字 #宽px #高px](URL)）
+    assert "![封面 #640px #360px](http://cover.jpg)" in md_content
     assert bot.media_calls == []  # Markdown成功不降级富媒体
     await db.close()
 

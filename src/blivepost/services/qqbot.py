@@ -631,10 +631,13 @@ class QQBotClient:
     async def _broadcast_live_start(self, groups: Iterable[str], content: str,
                                     media: Optional[str],
                                     keyboard: Optional[dict] = None) -> bool:
-        """开播推送降级链（单群）：Markdown+按钮 → 富媒体 → 文本"""
+        """开播推送降级链（单群）：Markdown(封面图+按钮) → 富媒体 → 文本"""
+        from .push import live_markdown_content
+
         success = True
         for group in groups:
-            sent = await self.send_group_markdown(group, content, keyboard=keyboard)
+            sent = await self.send_group_markdown(
+                group, live_markdown_content(content, media), keyboard=keyboard)
             if not sent and media:
                 sent = await self.send_group_media(group, media, content)
             if not sent:

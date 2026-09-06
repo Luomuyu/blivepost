@@ -71,6 +71,18 @@ def live_enter_keyboard(room_id) -> dict:
     }
 
 
+def live_markdown_content(content: str, media: Optional[str]) -> str:
+    """
+    Markdown开播正文：文字+原生图片语法嵌入封面（免模板，免申请）
+
+    图片语法按官方文档：![替代文字 #宽px #高px](图片URL)，
+    URL需公网可访问（平台下载转存）。
+    """
+    if not media:
+        return content
+    return f"{content}\n\n![封面 #640px #360px]({media})"
+
+
 def convert_cq_message(message: str) -> str:
     """
     将CQ码消息转换为官方机器人可发送的纯文本
@@ -270,11 +282,12 @@ class PushService:
         if ls is not None and _supports_kwarg(ls, "keyboard"):
             return ls(content, media, groups, keyboard=keyboard)
 
-        # 2) 自定义bot鸭子类型：Markdown+按钮（可选）→ 富媒体 → 文本
+        # 2) 自定义bot鸭子类型：Markdown封面图+按钮（可选）→ 富媒体 → 文本
         md = getattr(self.bot_client, "push_markdown", None)
         if md is not None and _supports_kwarg(md, "keyboard"):
             try:
-                if md(content, groups, keyboard=keyboard):
+                if md(live_markdown_content(content, media),
+                      groups, keyboard=keyboard):
                     return True
                 logger.warning("Markdown开播推送未成功，降级富媒体/文本")
             except Exception as e:
