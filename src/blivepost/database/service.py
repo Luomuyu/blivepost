@@ -3,6 +3,7 @@
 数据库存储服务
 """
 
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -1237,6 +1238,85 @@ class DatabaseService:
                 await session.commit()
         except Exception as e:
             logger.error(f"保存群记录失败: {e}")
+
+    # ========== 群信息快照（群基本信息接口） ==========
+
+    async def update_group_info(self, group_openid: str, info: dict) -> None:
+        """
+        写入群基本信息快照（get_group_info返回结构）
+
+        任意查询数据项为空时填入NULL（不写空串）；group_tags为
+        字符串数组，序列化为JSON文本存储。
+        """
+        def _clean(value) -> Optional[str]:
+            if value is None:
+                return None
+            text = str(value).strip()
+            return text or None
+
+        tags_raw = info.get("group_tags")
+        tag_list = ([str(t).strip() for t in tags_raw if str(t).strip()]
+                    if isinstance(tags_raw, list) else [])
+        member_raw = info.get("group_member_num")
+        try:
+            member_count = int(member_raw) if member_raw is not None else None
+        except (TypeError, ValueError):
+            member_count = None
+
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(GroupRecord).where(
+                        GroupRecord.group_openid == group_openid))
+                record = result.scalar_one_or_none()
+                if record is None:
+                    session.add(GroupRecord(
+                        group_openid=group_openid,
+                        group_name=_clean(info.get("group_name")) or "",
+                        group_desc=_clean(info.get("group_finger_memo")),
+                        category=_clean(info.get("group_class_text")),
+                        tags=(json.dumps(tag_list, ensure_ascii=False)
+                              if tag_list else None),
+                        member_count=member_count,
+                    ))
+                else:
+                    name_clean = _clean(info.get("group_name"))
+                    if name_clean:
+                        record.group_name = name_clean
+                    record.group_desc = _clean(info.get("group_finger_memo"))
+                    record.category = _clean(info.get("group_class_text"))
+                    record.tags = (json.dumps(tag_list, ensure_ascii=False)
+                                   if tag_list else None)
+                    record.member_count = member_count
+                await session.commit()
+        except Exception as e:
+            logger.error(f"更新群信息失败({group_openid}): {e}")
+
+    async def list_group_openids(self) -> List[str]:
+        """bot_group表全部群openid"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(GroupRecord.group_openid))
+                return [str(r[0]) for r in res.all()]
+        except Exception as e:
+            logger.error(f"查询群openid列表失败: {e}")
+            return []
+
+    async def list_groups_missing_info(self) -> List[str]:
+        """群信息存在空值（任一新字段为NULL）的群openid列表"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(
+                    select(GroupRecord.group_openid).where(
+                        GroupRecord.group_desc.is_(None)
+                        | GroupRecord.category.is_(None)
+                        | GroupRecord.tags.is_(None)
+                        | GroupRecord.member_count.is_(None)
+                    ))
+                return [str(r[0]) for r in res.all()]
+        except Exception as e:
+            logger.error(f"查询缺失群信息的群失败: {e}")
+            return []
 
     # ========== 主播与直播间信息快照 ==========
 

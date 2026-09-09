@@ -14,7 +14,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .core.manager import MonitorManager, PushQueueConsumer, CookieMaintainer, StreamerRefresher
+from .core.manager import (MonitorManager, PushQueueConsumer, CookieMaintainer,
+                           StreamerRefresher, GroupInfoRefresher)
 from .database import DatabaseManager, DatabaseService
 from .services.admin_commands import AdminCommandHandler
 from .services.bilibili import BilibiliAPI
@@ -188,6 +189,7 @@ async def main_async(
     web_panel = None
     admin_handler = None
     streamer_refresher = None
+    group_refresher = None
 
     try:
         # 加载配置（文件不存在时自动生成默认配置）
@@ -356,6 +358,12 @@ async def main_async(
         streamer_refresher.start()
         await streamer_refresher.backfill_if_empty()
 
+        # 群信息每日0点刷新（bot_group表简介/分类/标签/成员数）；
+        # 启动时存在空值立即回填
+        group_refresher = GroupInfoRefresher(db_service, bot_client=qqbot)
+        group_refresher.start()
+        await group_refresher.backfill_missing()
+
         # 恢复上次运行中处于监控状态的房间与动态订阅
         await monitor_manager.restore(binding_store.get_monitored_room_ids())
         dynamic_ups = binding_store.get_dynamic_up_uids() \
@@ -433,6 +441,13 @@ async def main_async(
         try:
             if streamer_refresher:
                 await streamer_refresher.stop()
+        except Exception:
+            pass
+
+        # 停止群信息每日刷新
+        try:
+            if group_refresher:
+                await group_refresher.stop()
         except Exception:
             pass
 

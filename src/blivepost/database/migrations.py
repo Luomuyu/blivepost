@@ -24,6 +24,11 @@ MIGRATIONS: List[Tuple[int, str, str, List[str]]] = [
      ["ALTER TABLE cookie_account ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0"]),
     (3, "friend.union_openid", "friend",
      ["ALTER TABLE friend ADD COLUMN union_openid VARCHAR(64)"]),
+    (4, "bot_group.群信息四列(简介/分类/标签/成员数)", "bot_group",
+     ["ALTER TABLE bot_group ADD COLUMN group_desc TEXT",
+      "ALTER TABLE bot_group ADD COLUMN category VARCHAR(100)",
+      "ALTER TABLE bot_group ADD COLUMN tags TEXT",
+      "ALTER TABLE bot_group ADD COLUMN member_count INTEGER"]),
 ]
 
 SCHEMA_VERSION_TABLE = "schema_version"

@@ -124,3 +124,119 @@ def test_live_stats_duration_guard_and_reset():
     assert 7199 <= stats.duration_seconds <= 7201
     stats.end_time = stats.start_time + timedelta(hours=2)
     assert stats.duration_seconds == 7200
+
+
+# ==================== 群信息快照（bot_group四列） ====================
+
+
+async def test_group_info_update_null_semantics(tmp_path):
+    """群信息更新：有值写入、查询项为空填NULL、tags序列化为JSON"""
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+
+    await svc.update_group_info("G1", {
+        "group_name": "测试群",
+        "group_finger_memo": "简介文本",
+        "group_class_text": "游戏",
+        "group_tags": ["手游", "公会"],
+        "group_member_num": 42,
+    })
+    missing = await svc.list_groups_missing_info()
+    assert missing == []  # 全量信息无空值
+
+    # 部分字段为空 → NULL
+    await svc.update_group_info("G2", {
+        "group_name": "残缺群",
+        "group_finger_memo": "",
+        "group_tags": [],
+    })
+    missing = await svc.list_groups_missing_info()
+    assert "G2" in missing and "G1" not in missing
+
+    # 落库值核对（tags序列化/成员数NULL）
+    from sqlalchemy import select as _select
+    from blivepost.database.models import GroupRecord
+    async with db.get_session() as session:
+        rows = {r.group_openid: r for r in
+                (await session.execute(_select(GroupRecord))).scalars()}
+    assert rows["G1"].tags == '["手游", "公会"]'
+    assert rows["G1"].member_count == 42
+    assert rows["G2"].group_desc is None and rows["G2"].tags is None
+    assert rows["G2"].member_count is None
+    await db.close()
+
+
+async def test_group_info_refresher(tmp_path):
+    """群信息每日刷新：逐群查询更新；bot未启动时安全返回0"""
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    await svc.save_group("G1")
+    await svc.save_group("G2")
+
+    class FakeBot:
+        def __init__(self):
+            self.asked = []
+
+        async def get_group_info(self, openid):
+            self.asked.append(openid)
+            if openid == "G1":
+                return {"group_name": "群一", "group_finger_memo": "desc1",
+                        "group_class_text": "分类", "group_tags": ["t1"],
+                        "group_member_num": 10}
+            return None  # 查询失败 → 不更新（保持NULL）
+
+    from blivepost.core.manager import GroupInfoRefresher
+    bot = FakeBot()
+    refresher = GroupInfoRefresher(svc, bot_client=bot)
+    assert await refresher.refresh_once() == 1
+    assert bot.asked == ["G1", "G2"]
+    assert await svc.get_streamer_name if False else True
+    missing = await svc.list_groups_missing_info()
+    assert missing == ["G2"]  # 查询失败的群保持NULL待下轮回填
+
+    # 空表/无bot安全
+    empty_refresher = GroupInfoRefresher(svc, bot_client=None)
+    assert await empty_refresher.refresh_once() == 0
+    await db.close()
+
+
+async def test_migration_v4_adds_group_info_columns():
+    """旧bot_group表（无群信息四列）经迁移v4补齐，新列可写NULL"""
+    import os
+    import sqlite3
+    import tempfile
+
+    db_path = os.path.join(tempfile.mkdtemp(), "legacy.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE bot_group (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "group_openid TEXT UNIQUE, group_name TEXT DEFAULT '', "
+        "del_flag INTEGER DEFAULT 0, msg_receive INTEGER DEFAULT 1)"
+    )
+    conn.execute("INSERT INTO bot_group (group_openid, group_name) VALUES ('G9', '旧群')")
+    conn.commit()
+    conn.close()
+
+    settings = Settings()
+    settings.database.sqlite_path = db_path
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+
+    conn = sqlite3.connect(db_path)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(bot_group)")}
+    conn.close()
+    assert {"group_desc", "category", "tags", "member_count"} <= cols
+
+    svc = DatabaseService(db)
+    await svc.update_group_info("G9", {"group_name": "旧群",
+                                       "group_member_num": 3})
+    # 部分字段更新后其余仍为NULL → 仍视为缺失，待下次完整查询回填
+    missing = await svc.list_groups_missing_info()
+    assert missing == ["G9"]
+    await db.close()

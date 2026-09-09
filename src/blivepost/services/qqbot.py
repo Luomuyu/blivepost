@@ -591,6 +591,26 @@ class QQBotClient:
             logger.warning(f"发送Markdown消息失败: group={group_openid}, error={e}")
             return False
 
+    async def get_group_info(self, group_openid: str) -> Optional[dict]:
+        """
+        获取群基本信息（GET /v2/groups/{group_openid}/info，白名单接口）
+
+        Args:
+            group_openid: 群openid
+
+        Returns:
+            Optional[dict]: {group_name, group_finger_memo(简介),
+            group_class_text(分类), group_tags(标签数组),
+            group_member_num(成员数)}，失败None
+        """
+        if not self.started or self._client is None:
+            return None
+        try:
+            return await self._client.api.get_group_info(group_openid)
+        except Exception as e:
+            logger.warning(f"获取群信息失败: group={group_openid}, error={e}")
+            return None
+
     async def send_c2c_message(self, openid: str, content: str,
                                msg_id: Optional[str] = None,
                                msg_seq: int = 1) -> bool:

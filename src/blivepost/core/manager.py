@@ -1144,3 +1144,88 @@ class StreamerRefresher:
                     logger.info(f"主播表为空，已回填{count}个绑定主播")
         except Exception as e:
             logger.warning(f"主播信息回填失败: {e}")
+
+
+class GroupInfoRefresher:
+    """
+    群信息每日刷新（主进程）
+
+    经群基本信息接口（白名单，30QPM）检查并更新bot_group表的
+    简介/分类/标签/成员数；查询数据项为空时落NULL。
+    """
+
+    CALL_INTERVAL = 2  # 单次调用间隔（秒），30QPM限流
+
+    def __init__(self, db_service, bot_client=None):
+        self.db_service = db_service
+        self.bot_client = bot_client
+        self._task: Optional[asyncio.Task] = None
+
+    def start(self) -> None:
+        """启动每日刷新循环（需在事件循环内调用）"""
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self.run(), name="group-info-refresher")
+            logger.info("群信息每日刷新任务已启动（每日0点）")
+
+    async def stop(self) -> None:
+        """停止刷新循环"""
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._task = None
+
+    @staticmethod
+    def _seconds_until_midnight() -> int:
+        """距下一个0点的秒数（本地时区，+30秒错峰）"""
+        now = datetime.now()
+        next_mid = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=30, microsecond=0)
+        return max(int((next_mid - now).total_seconds()), 1)
+
+    async def run(self) -> None:
+        """每日0点刷新主循环"""
+        while True:
+            await asyncio.sleep(self._seconds_until_midnight())
+            try:
+                count = await self.refresh_once()
+                logger.info(f"每日群信息刷新完成：{count}个群")
+            except Exception as e:
+                logger.error(f"每日群信息刷新失败: {e}")
+
+    async def refresh_once(self, openids: Optional[List[str]] = None) -> int:
+        """
+        执行一轮群信息刷新（逐群查询，限流间隔）
+
+        Args:
+            openids: 指定群列表（None=bot_group表全部群）
+
+        Returns:
+            int: 成功更新的群数量
+        """
+        if self.bot_client is None:
+            return 0
+        targets = openids if openids is not None \
+            else await self.db_service.list_group_openids()
+        updated = 0
+        for openid in targets:
+            info = await self.bot_client.get_group_info(openid)
+            if info:
+                await self.db_service.update_group_info(openid, info)
+                updated += 1
+            await asyncio.sleep(self.CALL_INTERVAL)
+        return updated
+
+    async def backfill_missing(self) -> int:
+        """存在信息空值的群立即查询更新（启动时调用）"""
+        try:
+            missing = await self.db_service.list_groups_missing_info()
+        except Exception as e:
+            logger.warning(f"查询缺失群信息的群失败: {e}")
+            return 0
+        if not missing:
+            return 0
+        logger.info(f"{len(missing)}个群信息存在空值，立即回填")
+        return await self.refresh_once(missing)
