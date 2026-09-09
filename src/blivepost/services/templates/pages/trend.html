@@ -1,4 +1,5 @@
 <div id="page">
+  {% include 'partials/nav.html' %}
   <div class="flex items-center justify-between mb-4">
     <h1 class="text-base font-semibold text-slate-300">收入趋势</h1>
     <button hx-get="/trend" hx-target="#page" hx-swap="outerHTML"

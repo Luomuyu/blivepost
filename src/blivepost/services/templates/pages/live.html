@@ -1,75 +1,186 @@
-<div id="page" hx-get="/live" hx-trigger="every 30s" hx-target="this" hx-swap="outerHTML">
+<div id="page" hx-get="/live" hx-trigger="every 30s" hx-target="#page" hx-swap="outerHTML">
+  {% include 'partials/nav.html' %}
   <div class="flex items-center justify-between mb-4">
-    <h1 class="text-base font-semibold text-slate-300">直播监控 <span class="text-slate-500 text-sm font-normal">{{ rooms | length }}个房间</span></h1>
-    <button hx-get="/live" hx-target="#page" hx-swap="outerHTML"
-            class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs hover:bg-slate-700">手动刷新</button>
+    <h1 class="text-base font-semibold text-slate-300">直播监控 <span class="text-slate-500 text-sm font-normal">{{ rooms | length }}个直播间</span></h1>
+    <div class="flex items-center gap-2">
+      <button hx-get="/live" hx-target="#page" hx-swap="outerHTML"
+              class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs hover:bg-slate-700">手动刷新</button>
+      <button onclick="enterAddMode()"
+              class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">添加</button>
+      <button id="btn-del" onclick="enterDeleteMode()"
+              class="px-3 py-1.5 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-xs font-medium">删除</button>
+      <button id="btn-del-cancel" onclick="cancelDeleteMode()"
+              class="hidden px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs">取消</button>
+      <button id="btn-del-confirm" hx-post="/web/room/delete" hx-include="input.del-check:checked"
+              hx-confirm="确定删除勾选的直播间？将解除全部群绑定并停止推送（历史数据保留）"
+              hx-target="#page" hx-swap="outerHTML" disabled
+              class="hidden px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium opacity-40 cursor-not-allowed" onclick="return false">
+        确认删除
+      </button>
+    </div>
   </div>
 
-  <!-- 操作表单 -->
-  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-5">
-    <form id="live-actions" class="flex flex-wrap items-end gap-3 text-sm">
-      <div>
-        <label class="block text-xs text-slate-500 mb-1">群</label>
-        <select name="group_openid" class="bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 min-w-[13rem]">
-          {% for g in group_options %}
-          <option value="{{ g[0] }}">{{ g[1] or g[0] }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div>
-        <label class="block text-xs text-slate-500 mb-1">直播间房间号</label>
-        <input name="room_id" placeholder="房间号" required
-               class="bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 w-32">
-      </div>
-      <button hx-post="/web/bind" hx-include="#live-actions"
-              class="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">绑定</button>
-      <button hx-post="/web/monitor" hx-include="#live-actions"
-              class="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium">监控</button>
-      <button hx-post="/web/unmonitor" hx-include="#live-actions"
-              class="px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium">取消监控</button>
-      <button hx-post="/web/unbind" hx-include="#live-actions"
-              class="px-3 py-2 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-xs font-medium">解绑</button>
-    </form>
-    <p class="text-xs text-slate-500 mt-2">绑定=记录群与房间关系；监控=开始推送并维持子进程；取消监控后无其他监控群时进程自动停止。</p>
-  </div>
-
-  <!-- 房间表 -->
+  <!-- 上半段：全部已绑定直播间 -->
   <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
           <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-3 py-2.5 w-8 del-col hidden"></th>
             <th class="px-5 py-2.5 font-medium">房间</th>
             <th class="px-4 py-2.5 font-medium">主播</th>
-            <th class="px-4 py-2.5 font-medium">进程</th>
-            <th class="px-4 py-2.5 font-medium">今日弹幕</th>
-            <th class="px-4 py-2.5 font-medium">礼物(元)</th>
-            <th class="px-4 py-2.5 font-medium">上舰(元)</th>
-            <th class="px-4 py-2.5 font-medium">SC(元)</th>
+            <th class="px-4 py-2.5 font-medium">推送群</th>
+            <th class="px-4 py-2.5 font-medium">状态</th>
           </tr>
         </thead>
         <tbody>
           {% for r in rooms %}
-          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
+          <tr class="border-t border-slate-800 room-row hover:bg-slate-800/40 cursor-pointer"
+              data-room="{{ r.room_id }}" data-groups='{{ r.push_groups | tojson }}'>
+            <td class="del-col hidden px-3 py-2.5" onclick="event.stopPropagation()">
+              <input type="checkbox" name="room_id" value="{{ r.room_id }}" class="del-check accent-red-500">
+            </td>
             <td class="px-5 py-2.5 font-mono">{{ r.room_id }}</td>
             <td class="px-4 py-2.5">{{ r.streamer or '-' }}</td>
+            <td class="px-4 py-2.5 text-xs">{{ r.push_groups | join('、') if r.push_groups else '-' }}</td>
             <td class="px-4 py-2.5">
-              {% if r.alive %}
-              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">运行中</span>
+              {% if r.monitored %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">监控中</span>
               {% else %}
-              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-red-500/10 text-red-400">未运行</span>
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-slate-600/30 text-slate-400">未监控</span>
               {% endif %}
             </td>
-            <td class="px-4 py-2.5">{{ r.danmaku }}</td>
-            <td class="px-4 py-2.5">{{ r.gold }}</td>
-            <td class="px-4 py-2.5">{{ r.ship }}</td>
-            <td class="px-4 py-2.5">{{ r.sc }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="7" class="px-5 py-6 text-center text-slate-500">暂无监控房间（选择群并绑定房间号）</td></tr>
+          <tr><td colspan="5" class="px-5 py-6 text-center text-slate-500">暂无直播间，点击右上角「添加」</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 下半段：直播间与群绑定状态 -->
+  <h2 class="font-semibold text-sm text-slate-300 mt-6 mb-3">群绑定状态</h2>
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-5 py-2.5 font-medium">群</th>
+            <th class="px-4 py-2.5 font-medium">直播间</th>
+            <th class="px-4 py-2.5 font-medium">推送状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in bindings %}
+          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
+            <td class="px-5 py-2.5 font-mono text-xs">{{ b.group_openid }}</td>
+            <td class="px-4 py-2.5 font-mono">{{ b.room_id }}</td>
+            <td class="px-4 py-2.5">
+              {% if b.monitored %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">推送中</span>
+              {% else %}
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-slate-600/30 text-slate-400">已停止</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="3" class="px-5 py-6 text-center text-slate-500">暂无绑定（点击直播间行选择推送群）</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
 </div>
+
+<!-- 添加直播间弹窗 -->
+<dialog id="add-dialog" class="bg-slate-900 text-slate-200 border border-slate-700 rounded-2xl p-5 backdrop:bg-black/60">
+  <form hx-post="/web/room/add" hx-target="#page" hx-swap="outerHTML"
+        onsubmit="document.getElementById('add-dialog').close()">
+    <h2 class="font-semibold text-sm mb-3">添加直播间</h2>
+    <label class="block text-xs text-slate-500 mb-1">直播间房间号（短号/长号均可）</label>
+    <input name="room_id" required placeholder="例如 9646546"
+           class="w-full bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500">
+    <p class="text-xs text-slate-500 mt-2">添加后点击直播间行选择推送群（有推送群才会启动监控）</p>
+    <div class="flex justify-end gap-2 mt-4">
+      <button type="button" onclick="document.getElementById('add-dialog').close()"
+              class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs">取消</button>
+      <button type="submit" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">添加</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 推送群选择弹窗 -->
+<dialog id="push-dialog" class="bg-slate-900 text-slate-200 border border-slate-700 rounded-2xl p-5 backdrop:bg-black/60 min-w-[20rem]">
+  <form hx-post="/web/room/push" hx-target="#page" hx-swap="outerHTML"
+        onsubmit="document.getElementById('push-dialog').close()">
+    <input type="hidden" name="room_id" id="push-room-id">
+    <h2 class="font-semibold text-sm mb-1">选择推送群</h2>
+    <p class="text-xs text-slate-500 mb-3">直播间 <span id="push-room-label" class="font-mono"></span> ·
+      保存后有推送群则启用监控，无则停止</p>
+    <div class="space-y-1.5 max-h-60 overflow-y-auto">
+      {% for g in group_options %}
+      <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+        <input type="checkbox" name="groups" value="{{ g[0] }}" class="accent-blue-500">
+        <span class="text-sm">{{ g[1] or g[0] }}</span>
+        <span class="text-xs text-slate-500 font-mono ml-auto">{{ g[0] }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button type="button" onclick="document.getElementById('push-dialog').close()"
+              class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs">取消</button>
+      <button type="submit" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+/* 行点击（非删除模式）→ 打开推送群选择弹窗 */
+document.querySelectorAll('.room-row').forEach(row => {
+  row.addEventListener('click', () => {
+    if (document.body.classList.contains('delete-mode')) return;
+    openPush(parseInt(row.dataset.room, 10), JSON.parse(row.dataset.groups || '[]'));
+  });
+});
+
+/* 删除模式：勾选直播间→确认删除；取消退出；删除按钮在未勾选时禁用 */
+function enterDeleteMode(){
+  document.body.classList.add('delete-mode');
+  document.querySelectorAll('.del-col, .del-check').forEach(el => el.classList.remove('hidden'));
+  document.getElementById('btn-del').classList.add('hidden');
+  document.getElementById('btn-del-cancel').classList.remove('hidden');
+  const confirm = document.getElementById('btn-del-confirm');
+  confirm.classList.remove('hidden');
+  updateDelConfirm();
+}
+function cancelDeleteMode(){
+  document.body.classList.remove('delete-mode');
+  document.querySelectorAll('.del-col, .del-check').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.del-check').forEach(el => el.checked = false);
+  document.getElementById('btn-del').classList.remove('hidden');
+  document.getElementById('btn-del-cancel').classList.add('hidden');
+  updateDelConfirm();
+}
+function updateDelConfirm(){
+  const any = [...document.querySelectorAll('.del-check')].some(c => c.checked);
+  const btn = document.getElementById('btn-del-confirm');
+  btn.disabled = !any;
+  btn.classList.toggle('opacity-40', !any);
+  btn.classList.toggle('cursor-not-allowed', !any);
+}
+document.addEventListener('change', e => {
+  if (e.target.classList && e.target.classList.contains('del-check')) updateDelConfirm();
+});
+function enterAddMode(){
+  document.getElementById('add-dialog').showModal();
+}
+function openPush(roomId, groups){
+  document.getElementById('push-room-id').value = roomId;
+  document.getElementById('push-room-label').textContent = roomId;
+  document.querySelectorAll('#push-dialog input[name=groups]').forEach(cb => {
+    cb.checked = groups.includes(cb.value);
+  });
+  document.getElementById('push-dialog').showModal();
+}
+</script>

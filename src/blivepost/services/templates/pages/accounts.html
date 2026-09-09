@@ -1,4 +1,5 @@
-<div id="page" hx-get="/accounts" hx-trigger="every 30s" hx-target="this" hx-swap="outerHTML">
+<div id="page" hx-get="/accounts" hx-trigger="every 30s" hx-target="#page" hx-swap="outerHTML">
+  {% include 'partials/nav.html' %}
   <div class="flex items-center justify-between mb-4">
     <h1 class="text-base font-semibold text-slate-300">账号池 <span class="text-slate-500 text-sm font-normal">可用 {{ pool_active }}/{{ pool_total }}</span></h1>
     <button hx-get="/accounts" hx-target="#page" hx-swap="outerHTML"

@@ -199,11 +199,11 @@ async def test_group_permission_whitelist(perm_env):
     ch = CommandHandler(store, FakeManager2(), group_admin_openids=["ADMIN_X"])
 
     # 非白名单：控制指令拒绝并提示openid
-    r = await ch.handle(FakeMsg("/绑定 23058", "G", sender="RANDOM"))
+    r = await ch.handle(FakeMsg("/监控 23058", "G", sender="RANDOM"))
     assert "无权限" in r and "RANDOM" in r and "Admin.openids" in r
     # 白名单内：放行
-    r = await ch.handle(FakeMsg("/绑定 23058", "G", sender="ADMIN_X"))
-    assert "绑定成功" in r
+    r = await ch.handle(FakeMsg("/监控 23058", "G", sender="ADMIN_X"))
+    assert "已开始监控" in r
     # 查询指令不受限
     r = await ch.handle(FakeMsg("/收入 23058", "G", sender="RANDOM"))
     assert "统计功能不可用" in r  # db未传，走到业务逻辑说明权限放行
@@ -212,8 +212,8 @@ async def test_group_permission_whitelist(perm_env):
 async def test_group_permission_empty_allows_all(perm_env):
     db, store = perm_env
     ch = CommandHandler(store, FakeManager2(), group_admin_openids=[])
-    r = await ch.handle(FakeMsg("/绑定 23058", "G", sender="ANYONE"))
-    assert "绑定成功" in r
+    r = await ch.handle(FakeMsg("/监控 23058", "G", sender="ANYONE"))
+    assert "已开始监控" in r
 
 
 # ==================== 日期参数查询 ====================

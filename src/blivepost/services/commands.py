@@ -51,10 +51,9 @@ def _parse_date(text: str):
 
 HELP_TEXT = (
     "支持的指令：\n"
-    "/绑定 房间号 - 绑定本群与直播间\n"
-    "/监控 房间号 - 开始监控并推送该直播间\n"
-    "/取消监控 房间号 - 取消监控推送\n"
-    "/解绑 房间号 - 解除本群与直播间的绑定"
+    "/监控 房间号 - 监控该直播间并推送到本群\n"
+    "/取消监控 房间号 - 取消向本群的推送\n"
+    "提示：直播间的添加/删除请在Web面板操作"
 )
 
 
@@ -124,7 +123,7 @@ class CommandHandler:
         logger.info(f"收到群命令: {cmd} {room_id} (group={group_openid})")
 
         sender = extract_sender(message.author)
-        control_cmds = ("绑定", "监控", "取消监控", "解绑", "绑定动态", "取消动态")
+        control_cmds = ("监控", "取消监控", "绑定动态", "取消动态")
         if cmd in control_cmds and not self._group_allowed(sender):
             return (
                 "无权限：仅机器人管理员可执行控制指令（查询指令不受限）\n"
@@ -132,9 +131,7 @@ class CommandHandler:
             )
 
         try:
-            if cmd == "绑定":
-                return await self._bind(group_openid, room_id)
-            elif cmd == "绑定动态":
+            if cmd == "绑定动态":
                 return await self._bind_dynamic(group_openid, room_id)
             elif cmd == "取消动态":
                 return await self._unbind_dynamic(group_openid, room_id)
@@ -145,10 +142,8 @@ class CommandHandler:
                 return await self._sc_board(group_openid, room_id, day=query_day)
             elif cmd == "监控":
                 return await self._monitor(group_openid, room_id)
-            elif cmd == "取消监控":
+            else:  # 取消监控
                 return await self._unmonitor(group_openid, room_id)
-            else:  # 解绑
-                return await self._unbind(group_openid, room_id)
         except Exception as e:
             logger.error(f"执行命令 {cmd} {room_id} 失败: {e}")
             return f"命令执行失败：{e}"
@@ -158,47 +153,6 @@ class CommandHandler:
         if not self.group_admin_openids:
             return True
         return bool(sender) and sender in self.group_admin_openids
-
-    async def _resolve_room_id(self, group_openid: str, room_id: int) -> Optional[int]:
-        """
-        解析绑定时使用的房间号
-
-        优先精确匹配；未命中时通过API归一化房间号（短号转长号）再查一次。
-
-        Args:
-            group_openid: 群openid
-            room_id: 用户输入的房间号
-
-        Returns:
-            Optional[int]: 绑定记录中的房间号，未找到绑定返回None
-        """
-        if self.binding_store.get_binding(group_openid, room_id) is not None:
-            return room_id
-
-        try:
-            room_info = await self.monitor_manager.get_room_info(room_id)
-        except Exception:
-            return None
-        real_id = int(room_info.room_id)
-        if real_id != room_id and self.binding_store.get_binding(group_openid, real_id) is not None:
-            return real_id
-        return None
-
-    async def _bind(self, group_openid: str, room_id: int) -> str:
-        """绑定群与直播间，记录主播uid并落库主播/直播间信息（房间号归一化为真实房间号）"""
-        room_info = await self.monitor_manager.get_room_info(room_id)
-        real_id = int(room_info.room_id) or room_id
-        await self.binding_store.bind(group_openid, real_id, room_info.uid)
-        await self._save_binding_snapshot(real_id, room_info)
-
-        reply = (
-            f"绑定成功：本群 <-> 直播间{real_id}\n"
-            f"主播：{room_info.name}（UID:{room_info.uid}）"
-        )
-        if real_id != room_id:
-            reply += f"\n（房间号已归一化，输入的{room_id}为短号）"
-        reply += f"\n发送 /监控 {real_id} 开始推送"
-        return reply
 
     async def _save_binding_snapshot(self, real_id: int, room_info) -> None:
         """绑定信息入库：get_status_info_by_uids全量快照写streamer/live_room两表；
@@ -225,50 +179,34 @@ class CommandHandler:
             logger.warning(f"绑定信息入库失败(房间{real_id}): {e}")
 
     async def _monitor(self, group_openid: str, room_id: int) -> str:
-        """开始监控推送（每个房间仅创建一个监控任务，已存在则忽略）"""
-        bound_id = await self._resolve_room_id(group_openid, room_id)
-        if bound_id is None:
-            return f"本群尚未绑定直播间{room_id}，请先发送 /绑定 {room_id}"
+        """
+        监控直播间：登记房间（直播间注册表）并添加本群为推送目标，
+        启动监控子进程（房间号归一化为真实房间号）
+        """
+        room_info = await self.monitor_manager.get_room_info(room_id)
+        real_id = int(room_info.room_id) or room_id
+        await self._save_binding_snapshot(real_id, room_info)
+        await self.binding_store.bind(group_openid, real_id, room_info.uid)
+        await self.binding_store.set_monitored(group_openid, real_id, True)
+        await self.monitor_manager.ensure(real_id)
 
-        created, room_info = await self.monitor_manager.ensure(bound_id)
-        await self.binding_store.set_monitored(group_openid, bound_id, True)
-
-        if created:
-            name = room_info.name if room_info else "未知"
-            return f"已开始监控直播间{bound_id}（主播：{name}），推送将发送到本群"
-        return f"直播间{bound_id}已在监控中，本群推送已开启"
+        reply = f"已开始监控直播间{real_id}（主播：{room_info.name}），推送将发送到本群"
+        if real_id != room_id:
+            reply += f"\n（房间号已归一化，输入的{room_id}为短号）"
+        return reply
 
     async def _unmonitor(self, group_openid: str, room_id: int) -> str:
-        """取消监控推送（无其他监控中的群时停止监控任务）"""
-        bound_id = await self._resolve_room_id(group_openid, room_id)
-        if bound_id is None:
-            return f"本群尚未绑定直播间{room_id}"
+        """取消推送：移除本群推送目标（无其他推送群时停止监控子进程）"""
+        room_info = await self.monitor_manager.get_room_info(room_id)
+        real_id = int(room_info.room_id) or room_id
 
-        await self.binding_store.set_monitored(group_openid, bound_id, False)
-
+        await self.binding_store.unbind(group_openid, real_id)
         extra = ""
-        if not self.binding_store.get_monitored_groups(bound_id):
-            stopped = await self.monitor_manager.remove(bound_id)
+        if not self.binding_store.get_monitored_groups(real_id):
+            stopped = await self.monitor_manager.remove(real_id)
             if stopped:
-                extra = "\n该直播间已无监控中的群，监控已停止"
-        return f"已取消监控直播间{bound_id}，不再向本群推送{extra}"
-
-    async def _unbind(self, group_openid: str, room_id: int) -> str:
-        """解除绑定（无其他监控中的群时停止监控任务）"""
-        bound_id = await self._resolve_room_id(group_openid, room_id)
-        if bound_id is None:
-            return f"本群与直播间{room_id}不存在绑定关系"
-
-        removed = await self.binding_store.unbind(group_openid, bound_id)
-        if not removed:
-            return f"本群与直播间{room_id}不存在绑定关系"
-
-        extra = ""
-        if not self.binding_store.get_monitored_groups(bound_id):
-            stopped = await self.monitor_manager.remove(bound_id)
-            if stopped:
-                extra = "\n该直播间已无监控中的群，监控已停止"
-        return f"已解除本群与直播间{bound_id}的绑定{extra}"
+                extra = "\n该直播间已无推送群，监控已停止"
+        return f"已取消监控直播间{real_id}，不再向本群推送{extra}"
 
     async def _status(self, group_openid: str) -> str:
         """查询本群监控中的直播间及其监控任务状态"""
@@ -287,12 +225,12 @@ class CommandHandler:
         return "\n".join(lines)
 
     async def _my_bindings(self, group_openid: str) -> str:
-        """查询本群全部绑定关系"""
+        """查询本群推送的直播间列表"""
         bindings = self.binding_store.get_group_bindings(group_openid)
         if not bindings:
-            return "本群尚未绑定任何直播间，发送 /帮助 查看指令"
+            return "本群当前没有推送中的直播间，发送 /帮助 查看指令"
 
-        lines = ["本群的绑定列表："]
+        lines = ["本群推送的直播间："]
         for b in bindings:
             mon = "监控中" if b.monitored else "未监控"
             lines.append(f"· 房间{b.room_id}（主播UID:{b.uid}）- {mon}")

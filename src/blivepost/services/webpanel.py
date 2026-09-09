@@ -90,10 +90,9 @@ class WebPanel:
         app.router.add_get("/api/status", self._handle_api)
         app.router.add_get("/api/history", self._handle_history)
         # 写操作
-        app.router.add_post("/web/bind", self._action_bind)
-        app.router.add_post("/web/monitor", self._action_monitor)
-        app.router.add_post("/web/unmonitor", self._action_unmonitor)
-        app.router.add_post("/web/unbind", self._action_unbind)
+        app.router.add_post("/web/room/add", self._action_room_add)
+        app.router.add_post("/web/room/push", self._action_room_push)
+        app.router.add_post("/web/room/delete", self._action_room_delete)
         app.router.add_post("/web/dynamic/bind", self._action_dynamic_bind)
         app.router.add_post("/web/dynamic/unbind", self._action_dynamic_unbind)
         app.router.add_post("/web/account/refresh", self._action_account_refresh)
@@ -224,17 +223,17 @@ class WebPanel:
 
     def _make_page_handler(self, key: str):
         """生成页面GET处理器（HTMX请求返回内容片段，普通请求返回完整布局）"""
+        nav = [(path, key_, title) for key_, (path, title) in self.PAGES.items()]
+
         async def _handler(request):
             if not self._check_token(request):
                 return web.Response(status=401, text="unauthorized: token required")
             ctx = await self._page_context(key)
+            ctx.update(page=key, nav=nav)
             if request.headers.get("HX-Request"):
                 html = self._render(f"pages/{key}.html", **ctx)
             else:
-                nav = [(path, key_, title)
-                       for key_, (path, title) in self.PAGES.items()]
-                html = self._render("base.html", page=key, page_template=f"pages/{key}.html",
-                                    nav=nav, **ctx)
+                html = self._render("base.html", page_template=f"pages/{key}.html", **ctx)
             return self._html_response(request, html)
         _handler.__name__ = f"page_{key}"
         return _handler
@@ -253,7 +252,24 @@ class WebPanel:
         if key in ("live", "dynamics", "groups"):
             ctx["group_options"] = [(g.group_openid, g.group_name)
                                     for g in await self.db_service.load_groups()]
+        if key == "groups":
             ctx["groups"] = await self.db_service.load_groups()
+        if key == "live":
+            # 上半段：直播间注册表（推送群/监控状态），下半段：群绑定关系
+            live_rooms = []
+            for rec in await self.db_service.list_rooms():
+                push_groups = self.binding_store.get_monitored_groups(rec.room_id)                     if self.binding_store else []
+                live_rooms.append({
+                    "room_id": rec.room_id,
+                    "streamer": await self.db_service.get_streamer_name(rec.uid)
+                                if rec.uid else "",
+                    "push_groups": push_groups,
+                    "monitored": bool(push_groups),
+                    "alive": bool(push_groups) and self.monitor_manager is not None
+                             and self.monitor_manager.has(rec.room_id),
+                })
+            ctx["rooms"] = live_rooms
+            ctx["bindings"] = await self.db_service.list_bindings()
         if key == "trend":
             ctx.update(await self._trend_context("d30", ""))
         return ctx
@@ -283,73 +299,73 @@ class WebPanel:
         except (TypeError, ValueError):
             return None
 
-    async def _action_bind(self, request):
+    async def _action_room_add(self, request):
+        """添加直播间：归一化房间号并登记注册表（不启动监控）"""
         form = await self._read_action(request)
         if form is None:
             return web.Response(status=401, text="unauthorized: token required")
-        group = str(form.get("group_openid", ""))
         room_id = self._form_room(form)
-        if not group or room_id is None:
+        if room_id is None:
             return self._action_response()
         try:
             room_info = await self.monitor_manager.get_room_info(room_id)
             real_id = int(room_info.room_id) or room_id
-            await self.binding_store.bind(group, real_id, room_info.uid)
-            logger.info(f"面板绑定：群{group} <-> 直播间{real_id}")
+            if self.db_service is not None:
+                await self.db_service.save_live_room_info(
+                    real_id, uid=room_info.uid, title=room_info.title,
+                    cover=room_info.cover)
+                if room_info.uid:
+                    await self.db_service.save_streamer_info(
+                        room_info.uid, uname=room_info.name, room_id=real_id)
+            logger.info(f"面板添加直播间：{real_id}（主播：{room_info.name}）")
         except Exception as e:
-            logger.error(f"面板绑定失败(群{group} 房间{room_id}): {e}")
+            logger.error(f"面板添加直播间失败({room_id}): {e}")
         return self._action_response()
 
-    async def _action_monitor(self, request):
+    async def _action_room_push(self, request):
+        """同步直播间推送群：保存后有推送群则启用监控，无则停止"""
         form = await self._read_action(request)
         if form is None:
             return web.Response(status=401, text="unauthorized: token required")
-        group = str(form.get("group_openid", ""))
         room_id = self._form_room(form)
-        if not group or room_id is None:
+        if room_id is None:
             return self._action_response()
+        target = {str(g) for g in form.getall("groups", []) if str(g)}
         try:
-            binding = self.binding_store.get_binding(group, room_id)
-            bound_id = binding.room_id if binding else room_id
-            await self.monitor_manager.ensure(bound_id)
-            await self.binding_store.set_monitored(group, bound_id, True)
-            logger.info(f"面板开启监控：群{group} 直播间{bound_id}")
-        except Exception as e:
-            logger.error(f"面板开启监控失败(群{group} 房间{room_id}): {e}")
-        return self._action_response()
-
-    async def _action_unmonitor(self, request):
-        form = await self._read_action(request)
-        if form is None:
-            return web.Response(status=401, text="unauthorized: token required")
-        group = str(form.get("group_openid", ""))
-        room_id = self._form_room(form)
-        if not group or room_id is None:
-            return self._action_response()
-        try:
-            await self.binding_store.set_monitored(group, room_id, False)
-            if not self.binding_store.get_monitored_groups(room_id):
+            current = set(self.binding_store.get_monitored_groups(room_id))                 if self.binding_store else set()
+            uid = await self.db_service.get_room_uid(room_id)                 if self.db_service else 0
+            for g in target - current:
+                await self.binding_store.bind(g, room_id, uid)
+                await self.binding_store.set_monitored(g, room_id, True)
+            for g in current - target:
+                await self.binding_store.unbind(g, room_id)
+            if target:
+                await self.monitor_manager.ensure(room_id)
+            elif self.monitor_manager is not None:
                 await self.monitor_manager.remove(room_id)
-            logger.info(f"面板取消监控：群{group} 直播间{room_id}")
+            logger.info(f"面板同步推送群：房间{room_id} → {sorted(target)}")
         except Exception as e:
-            logger.error(f"面板取消监控失败(群{group} 房间{room_id}): {e}")
+            logger.error(f"面板同步推送群失败(房间{room_id}): {e}")
         return self._action_response()
 
-    async def _action_unbind(self, request):
+    async def _action_room_delete(self, request):
+        """删除直播间：解除全部群绑定、停止监控、移除注册（子库数据保留）"""
         form = await self._read_action(request)
         if form is None:
             return web.Response(status=401, text="unauthorized: token required")
-        group = str(form.get("group_openid", ""))
-        room_id = self._form_room(form)
-        if not group or room_id is None:
-            return self._action_response()
-        try:
-            await self.binding_store.unbind(group, room_id)
-            if not self.binding_store.get_monitored_groups(room_id):
-                await self.monitor_manager.remove(room_id)
-            logger.info(f"面板解绑：群{group} 直播间{room_id}")
-        except Exception as e:
-            logger.error(f"面板解绑失败(群{group} 房间{room_id}): {e}")
+        room_ids = [int(v) for v in form.getall("room_id", []) if str(v).isdigit()]
+        for rid in room_ids:
+            try:
+                if self.binding_store is not None:
+                    for g in self.binding_store.get_monitored_groups(rid):
+                        await self.binding_store.unbind(g, rid)
+                if self.monitor_manager is not None:
+                    await self.monitor_manager.remove(rid)
+                if self.db_service is not None:
+                    await self.db_service.delete_live_room(rid)
+                logger.info(f"面板删除直播间：{rid}")
+            except Exception as e:
+                logger.error(f"面板删除直播间失败({rid}): {e}")
         return self._action_response()
 
     async def _action_dynamic_bind(self, request):
@@ -379,8 +395,7 @@ class WebPanel:
             return self._action_response()
         try:
             removed = await self.binding_store.unbind_dynamic(group, up_uid)
-            if removed and self.dynamic_manager is not None \
-                    and not self.binding_store.get_dynamic_groups(up_uid):
+            if removed and self.dynamic_manager is not None                     and not self.binding_store.get_dynamic_groups(up_uid):
                 await self.dynamic_manager.remove(up_uid)
             logger.info(f"面板取消动态：群{group} UP主{up_uid}")
         except Exception as e:

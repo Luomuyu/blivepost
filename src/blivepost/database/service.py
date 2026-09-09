@@ -1424,6 +1424,56 @@ class DatabaseService:
             logger.error(f"查询主播昵称失败(uid={uid}): {e}")
             return ""
 
+    async def list_rooms(self) -> list:
+        """全部已添加直播间（直播间注册表，Web面板直播监控页用）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(
+                    select(LiveRoomRecord).order_by(LiveRoomRecord.room_id))
+                return list(res.scalars().all())
+        except Exception as e:
+            logger.error(f"查询直播间列表失败: {e}")
+            return []
+
+    async def get_room_uid(self, room_id: int) -> int:
+        """查询直播间对应主播UID（注册表，无记录返回0）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(
+                    select(LiveRoomRecord.uid).where(
+                        LiveRoomRecord.room_id == room_id))
+                return int(res.scalar_one_or_none() or 0)
+        except Exception as e:
+            logger.error(f"查询直播间主播UID失败(room={room_id}): {e}")
+            return 0
+
+    async def delete_live_room(self, room_id: int) -> bool:
+        """从直播间注册表移除（子库数据保留）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                result = await session.execute(
+                    select(LiveRoomRecord).where(
+                        LiveRoomRecord.room_id == room_id))
+                record = result.scalar_one_or_none()
+                if record is None:
+                    return False
+                await session.delete(record)
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"移除直播间注册失败(room={room_id}): {e}")
+            return False
+
+    async def list_bindings(self) -> list:
+        """全部群推送目标关系（Web面板绑定状态表用）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(GroupBindingRecord))
+                return list(res.scalars().all())
+        except Exception as e:
+            logger.error(f"查询推送关系失败: {e}")
+            return []
+
     async def list_room_ids(self) -> List[int]:
         """全部已知的直播间ID（子库映射登记过的，升序；趋势房间选择用）"""
         try:

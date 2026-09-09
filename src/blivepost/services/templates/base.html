@@ -197,16 +197,10 @@ window.renderTrend = function(data, mode){
       </a>
       <span class="hidden sm:inline text-xs text-slate-500 shrink-0">只读数据 · 操作需谨慎</span>
     </div>
-    <nav class="nav-scroll mt-2 -mx-1 flex items-center gap-1 overflow-x-auto whitespace-nowrap">
-      {% for path, key, label in nav %}
-      <a href="{{ path }}" hx-get="{{ path }}" hx-target="#page" hx-swap="outerHTML" hx-push-url="{{ path }}"
-         class="shrink-0 px-3 py-1.5 rounded-lg text-sm transition-colors {{ 'nav-active' if page == key else 'text-slate-400 hover:text-slate-200 hover:bg-slate-900' }}">{{ label }}</a>
-      {% endfor %}
-    </nav>
   </div>
 </header>
 <main class="max-w-6xl mx-auto px-4 py-6">
-  <div id="page">{% include page_template %}</div>
+  {% include page_template %}
 </main>
 </body>
 </html>

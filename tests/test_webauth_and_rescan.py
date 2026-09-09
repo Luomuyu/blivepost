@@ -112,6 +112,10 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
                 group_openid = "G1"
                 group_name = "测试群"
             return [G()]
+        @staticmethod
+        async def list_rooms(): return []
+        @staticmethod
+        async def list_bindings(): return []
     panel.db_service = D()
 
     async def fake_collect():
@@ -137,7 +141,8 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
     resp2 = await panel._make_page_handler("live")(CookieReq())
     assert resp2.status == 200
     assert "手动刷新" in resp2.text
-    assert "/web/bind" in resp2.text and "/web/monitor" in resp2.text
+    assert "/web/room/add" in resp2.text and "/web/room/push" in resp2.text
+    assert "/web/room/delete" in resp2.text
 
     # 趋势局部：12个月按月汇总模式
     class MonthReq:
