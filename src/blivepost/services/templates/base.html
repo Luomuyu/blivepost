@@ -86,17 +86,19 @@ window.renderTrend = function(data, mode){
 </head>
 <body class="bg-slate-950 text-slate-200 min-h-screen font-sans antialiased">
 <header class="sticky top-0 z-20 backdrop-blur bg-slate-950/80 border-b border-slate-800">
-  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-2.5">
-      <span class="w-2.5 h-2.5 rounded-full bg-pink-500 shadow-[0_0_8px_rgba(236,72,153,.8)]"></span>
-      <h1 class="text-lg font-bold tracking-wide">BLivePost <span class="text-slate-500 font-normal">状态面板</span></h1>
-    </div>
-    <span class="text-xs text-slate-500">每30秒自动刷新 · 只读</span>
+  <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-2 gap-y-2">
+    <span class="w-2.5 h-2.5 rounded-full bg-pink-500 shadow-[0_0_8px_rgba(236,72,153,.8)] mr-1"></span>
+    <a href="/" hx-get="/" hx-target="#page" hx-swap="outerHTML" hx-push-url="/"
+       class="text-lg font-bold tracking-wide mr-3">BLivePost <span class="text-slate-500 font-normal text-sm">面板</span></a>
+    {% for path, key, label in nav %}
+    <a href="{{ path }}" hx-get="{{ path }}" hx-target="#page" hx-swap="outerHTML" hx-push-url="{{ path }}"
+       class="px-3 py-1.5 rounded-lg text-sm transition-colors {{ 'bg-slate-800 text-white' if page == key else 'text-slate-400 hover:text-slate-200 hover:bg-slate-900' }}">{{ label }}</a>
+    {% endfor %}
+    <span class="ml-auto text-xs text-slate-500">只读数据 · 操作需谨慎</span>
   </div>
 </header>
-<main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
-  {% include 'partials/summary.html' %}
-  {% include 'partials/trend.html' %}
+<main class="max-w-6xl mx-auto px-4 py-6">
+  <div id="page">{% include page_template %}</div>
 </main>
 </body>
 </html>

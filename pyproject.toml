@@ -71,7 +71,7 @@ Issues = "https://github.com/luomuyu/blivepost/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-blivepost = ["py.typed", "services/templates/*.html", "services/templates/partials/*.html"]
+blivepost = ["py.typed", "services/templates/*.html", "services/templates/partials/*.html", "services/templates/pages/*.html"]
 
 [tool.black]
 line-length = 88

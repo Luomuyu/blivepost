@@ -83,11 +83,11 @@ async def test_token_auth_required():
         headers = {}
         cookies = {}
     req = Req()
-    resp = await panel._handle_index(req)
+    resp = await panel._make_page_handler("overview")(req)
     assert resp.status == 401
     resp2 = await panel._handle_history(req)
     assert resp2.status == 401
-    resp3 = await panel._handle_summary(req)
+    resp3 = await panel._make_page_handler("live")(req)
     assert resp3.status == 401
     resp4 = await panel._handle_trend(req)
     assert resp4.status == 401
@@ -104,7 +104,14 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
         async def get_daily_history_range(start_day, end_day, room_ids=None): return []
         @staticmethod
         async def get_recent_live_status(limit=10): return []
+        @staticmethod
         async def list_room_ids(): return []
+        @staticmethod
+        async def load_groups():
+            class G:
+                group_openid = "G1"
+                group_name = "测试群"
+            return [G()]
     panel.db_service = D()
 
     async def fake_collect():
@@ -115,21 +122,22 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
         query = {"token": "SECRET"}
         headers = {}
         cookies = {}
-    resp = await panel._handle_index(Req())
+    resp = await panel._make_page_handler("overview")(Req())
     assert resp.status == 200
     body = resp.text
-    # HTMX自动刷新 + viewport + 趋势图容器 + 机器人详情
-    assert "hx-trigger" in body and "viewport" in body and 'id="trend"' in body
-    assert "bot" in body
+    # HTMX自动刷新 + viewport + 机器人详情
+    assert "hx-trigger" in body and "viewport" in body
+    assert "bot" in body and "在线" in body  # 概览含机器人凭证状态
 
-    # 局部摘要请求凭cookie放行
+    # 直播监控页凭cookie放行（含群选项/房间表/手动刷新）
     class CookieReq:
         query = {}
         headers = {}
         cookies = {"web_token": "SECRET"}
-    resp2 = await panel._handle_summary(CookieReq())
+    resp2 = await panel._make_page_handler("live")(CookieReq())
     assert resp2.status == 200
-    assert "在线" in resp2.text and "token剩余" in resp2.text
+    assert "手动刷新" in resp2.text
+    assert "/web/bind" in resp2.text and "/web/monitor" in resp2.text
 
     # 趋势局部：12个月按月汇总模式
     class MonthReq:

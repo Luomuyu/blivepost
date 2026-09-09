@@ -1,0 +1,8 @@
+<div id="page">
+  <div class="flex items-center justify-between mb-4">
+    <h1 class="text-base font-semibold text-slate-300">收入趋势</h1>
+    <button hx-get="/trend" hx-target="#page" hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs hover:bg-slate-700">手动刷新</button>
+  </div>
+  {% include 'partials/trend.html' %}
+</div>

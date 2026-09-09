@@ -9,6 +9,8 @@ Web状态面板（只读，aiohttp + Jinja2 + HTMX实现）
 通过Setting.web_panel开关，web_host/web_port配置监听。
 """
 
+import asyncio
+
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -38,6 +40,17 @@ _env = Environment(
 class WebPanel:
     """Web状态面板服务"""
 
+    # 页面注册表：key -> (路径, 标题)
+    PAGES = {
+        "overview": ("/", "概览"),
+        "live": ("/live", "直播监控"),
+        "dynamics": ("/dynamics", "动态监控"),
+        "accounts": ("/accounts", "账号池"),
+        "records": ("/records", "下播记录"),
+        "trend": ("/trend", "收入趋势"),
+        "groups": ("/groups", "群列表"),
+    }
+
     def __init__(
         self,
         cookie_pool: "CookiePool",
@@ -49,6 +62,7 @@ class WebPanel:
         port: int = 8080,
         token: str = "",
         bot_client=None,
+        group_refresher=None,
     ):
         self.cookie_pool = cookie_pool
         self.monitor_manager = monitor_manager
@@ -59,16 +73,35 @@ class WebPanel:
         self.port = port
         self.token = token
         self.bot_client = bot_client
+        self.group_refresher = group_refresher
         self._runner: Optional[web.AppRunner] = None
+        # 扫码登录状态（单会话）：{"status", "message", "qr", "result"}
+        self._login_state: Optional[dict] = None
+        self._login_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         """启动HTTP服务"""
         app = web.Application()
-        app.router.add_get("/", self._handle_index)
-        app.router.add_get("/panel/summary", self._handle_summary)
+        # 页面（HTMX请求返回内容片段，普通请求返回完整布局）
+        for key, (path, _title) in self.PAGES.items():
+            app.router.add_get(path, self._make_page_handler(key))
+        # 局部/数据
         app.router.add_get("/panel/trend", self._handle_trend)
         app.router.add_get("/api/status", self._handle_api)
         app.router.add_get("/api/history", self._handle_history)
+        # 写操作
+        app.router.add_post("/web/bind", self._action_bind)
+        app.router.add_post("/web/monitor", self._action_monitor)
+        app.router.add_post("/web/unmonitor", self._action_unmonitor)
+        app.router.add_post("/web/unbind", self._action_unbind)
+        app.router.add_post("/web/dynamic/bind", self._action_dynamic_bind)
+        app.router.add_post("/web/dynamic/unbind", self._action_dynamic_unbind)
+        app.router.add_post("/web/account/refresh", self._action_account_refresh)
+        app.router.add_post("/web/account/login/start", self._action_login_start)
+        app.router.add_post("/web/account/login/cancel", self._action_login_cancel)
+        app.router.add_get("/web/account/login/qr", self._handle_login_qr)
+        app.router.add_get("/web/account/login/status", self._handle_login_status)
+        app.router.add_post("/web/groups/refresh", self._action_groups_refresh)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
@@ -77,6 +110,8 @@ class WebPanel:
 
     async def stop(self) -> None:
         """停止HTTP服务"""
+        if self._login_task is not None and not self._login_task.done():
+            self._login_task.cancel()
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
@@ -187,34 +222,273 @@ class WebPanel:
 
     # ========== 页面与局部渲染 ==========
 
-    async def _summary_context(self) -> dict:
+    def _make_page_handler(self, key: str):
+        """生成页面GET处理器（HTMX请求返回内容片段，普通请求返回完整布局）"""
+        async def _handler(request):
+            if not self._check_token(request):
+                return web.Response(status=401, text="unauthorized: token required")
+            ctx = await self._page_context(key)
+            if request.headers.get("HX-Request"):
+                html = self._render(f"pages/{key}.html", **ctx)
+            else:
+                nav = [(path, key_, title)
+                       for key_, (path, title) in self.PAGES.items()]
+                html = self._render("base.html", page=key, page_template=f"pages/{key}.html",
+                                    nav=nav, **ctx)
+            return self._html_response(request, html)
+        _handler.__name__ = f"page_{key}"
+        return _handler
+
+    async def _page_context(self, key: str) -> dict:
+        """各页面公共上下文（概览=全量；子页面按需子集）"""
         data = await self._collect()
-        return {
-            "bot": data["bot"],
-            "me": data["me"],
-            "app_id": data["app_id"],
-            "db_size_mb": data["db_size_mb"],
-            "accounts": data["accounts"],
-            "rooms": data["rooms"],
-            "dynamics": data["dynamics"],
+        ctx = {
+            "bot": data["bot"], "me": data["me"], "app_id": data["app_id"],
+            "db_size_mb": data["db_size_mb"], "accounts": data["accounts"],
+            "rooms": data["rooms"], "dynamics": data["dynamics"],
             "recent": data["recent"],
             "pool_active": sum(1 for a in data["accounts"] if a["status"] == "active"),
             "pool_total": len(data["accounts"]),
         }
+        if key in ("live", "dynamics", "groups"):
+            ctx["group_options"] = [(g.group_openid, g.group_name)
+                                    for g in await self.db_service.load_groups()]
+            ctx["groups"] = await self.db_service.load_groups()
+        if key == "trend":
+            ctx.update(await self._trend_context("d30", ""))
+        return ctx
 
-    async def _handle_index(self, request):
+    # ========== 写操作（绑定/监控/动态/账号） ==========
+
+    def _action_response(self) -> web.Response:
+        """HTMX动作响应：触发页面刷新以展示最新状态"""
+        return web.Response(headers={"HX-Refresh": "true"})
+
+    async def _read_action(self, request):
+        """读取动作参数并鉴权；未授权返回None"""
+        if not self._check_token(request):
+            return None
+        form = await request.post()
+        return form
+
+    def _form_room(self, form) -> Optional[int]:
+        try:
+            return int(str(form.get("room_id", "")))
+        except (TypeError, ValueError):
+            return None
+
+    def _form_uid(self, form) -> Optional[int]:
+        try:
+            return int(str(form.get("up_uid", "")))
+        except (TypeError, ValueError):
+            return None
+
+    async def _action_bind(self, request):
+        form = await self._read_action(request)
+        if form is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        group = str(form.get("group_openid", ""))
+        room_id = self._form_room(form)
+        if not group or room_id is None:
+            return self._action_response()
+        try:
+            room_info = await self.monitor_manager.get_room_info(room_id)
+            real_id = int(room_info.room_id) or room_id
+            await self.binding_store.bind(group, real_id, room_info.uid)
+            logger.info(f"面板绑定：群{group} <-> 直播间{real_id}")
+        except Exception as e:
+            logger.error(f"面板绑定失败(群{group} 房间{room_id}): {e}")
+        return self._action_response()
+
+    async def _action_monitor(self, request):
+        form = await self._read_action(request)
+        if form is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        group = str(form.get("group_openid", ""))
+        room_id = self._form_room(form)
+        if not group or room_id is None:
+            return self._action_response()
+        try:
+            binding = self.binding_store.get_binding(group, room_id)
+            bound_id = binding.room_id if binding else room_id
+            await self.monitor_manager.ensure(bound_id)
+            await self.binding_store.set_monitored(group, bound_id, True)
+            logger.info(f"面板开启监控：群{group} 直播间{bound_id}")
+        except Exception as e:
+            logger.error(f"面板开启监控失败(群{group} 房间{room_id}): {e}")
+        return self._action_response()
+
+    async def _action_unmonitor(self, request):
+        form = await self._read_action(request)
+        if form is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        group = str(form.get("group_openid", ""))
+        room_id = self._form_room(form)
+        if not group or room_id is None:
+            return self._action_response()
+        try:
+            await self.binding_store.set_monitored(group, room_id, False)
+            if not self.binding_store.get_monitored_groups(room_id):
+                await self.monitor_manager.remove(room_id)
+            logger.info(f"面板取消监控：群{group} 直播间{room_id}")
+        except Exception as e:
+            logger.error(f"面板取消监控失败(群{group} 房间{room_id}): {e}")
+        return self._action_response()
+
+    async def _action_unbind(self, request):
+        form = await self._read_action(request)
+        if form is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        group = str(form.get("group_openid", ""))
+        room_id = self._form_room(form)
+        if not group or room_id is None:
+            return self._action_response()
+        try:
+            await self.binding_store.unbind(group, room_id)
+            if not self.binding_store.get_monitored_groups(room_id):
+                await self.monitor_manager.remove(room_id)
+            logger.info(f"面板解绑：群{group} 直播间{room_id}")
+        except Exception as e:
+            logger.error(f"面板解绑失败(群{group} 房间{room_id}): {e}")
+        return self._action_response()
+
+    async def _action_dynamic_bind(self, request):
+        form = await self._read_action(request)
+        if form is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        group = str(form.get("group_openid", ""))
+        up_uid = self._form_uid(form)
+        if not group or up_uid is None:
+            return self._action_response()
+        try:
+            await self.binding_store.bind_dynamic(group, up_uid)
+            if self.dynamic_manager is not None:
+                await self.dynamic_manager.ensure(up_uid)
+            logger.info(f"面板绑定动态：群{group} UP主{up_uid}")
+        except Exception as e:
+            logger.error(f"面板绑定动态失败(群{group} UP{up_uid}): {e}")
+        return self._action_response()
+
+    async def _action_dynamic_unbind(self, request):
+        form = await self._read_action(request)
+        if form is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        group = str(form.get("group_openid", ""))
+        up_uid = self._form_uid(form)
+        if not group or up_uid is None:
+            return self._action_response()
+        try:
+            removed = await self.binding_store.unbind_dynamic(group, up_uid)
+            if removed and self.dynamic_manager is not None \
+                    and not self.binding_store.get_dynamic_groups(up_uid):
+                await self.dynamic_manager.remove(up_uid)
+            logger.info(f"面板取消动态：群{group} UP主{up_uid}")
+        except Exception as e:
+            logger.error(f"面板取消动态失败(群{group} UP{up_uid}): {e}")
+        return self._action_response()
+
+    async def _action_account_refresh(self, request):
+        form = await self._read_action(request)
+        if form is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        uid = self._form_uid(form)
+        if uid is None:
+            return self._action_response()
+        account = self.cookie_pool.get_account(uid) if self.cookie_pool else None
+        if account is None:
+            return self._action_response()
+        from .bili_login import BiliLoginService
+        service = BiliLoginService()
+        logger.info(f"面板触发刷新Cookie：uid={uid}")
+        try:
+            result = await service.refresh(account.cookie_string)
+        except Exception as e:
+            logger.error(f"面板刷新Cookie异常(uid={uid}): {e}")
+            return self._action_response()
+        if result.ok and result.uid == account.uid:
+            await self.cookie_pool.upsert(
+                uid=result.uid, nickname=result.nickname,
+                cookie_string=result.cookie_string, sessdata=result.sessdata,
+                bili_jct=result.bili_jct, ac_time_value=result.ac_time_value,
+                sessdata_expires_at=result.sessdata_expires_at)
+            logger.info(f"账号{uid} Cookie刷新成功")
+        else:
+            logger.warning(f"账号{uid} Cookie刷新失败（登录态失效？）")
+        return self._action_response()
+
+    # ========== 扫码登录（Web端） ==========
+
+    async def _action_login_start(self, request):
+        if await self._read_action(request) is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        if self._login_task is not None and not self._login_task.done():
+            return self._action_response()
+        from .bili_login import BiliLoginService
+
+        state = {"status": "starting", "message": "正在启动浏览器…", "qr": None}
+        self._login_state = state
+
+        async def on_qrcode(png_bytes, qr_url):
+            state["qr"] = png_bytes
+            state["status"] = "waiting"
+            state["message"] = "请使用B站APP扫码"
+
+        async def _run():
+            service = BiliLoginService(on_qrcode=on_qrcode, timeout=60)
+            try:
+                result = await service.login()
+            except asyncio.CancelledError:
+                state.update(status="cancelled", message="登录已取消")
+                raise
+            except Exception as e:
+                state.update(status="failed", message=f"登录异常: {e}")
+                return
+            if result is not None and getattr(result, "ok", False):
+                state.update(status="success",
+                             message=f"登录成功：{result.nickname}（UID:{result.uid}）")
+                if self.cookie_pool is not None:
+                    await self.cookie_pool.upsert(
+                        uid=result.uid, nickname=result.nickname,
+                        cookie_string=result.cookie_string,
+                        sessdata=result.sessdata, bili_jct=result.bili_jct,
+                        ac_time_value=result.ac_time_value,
+                        sessdata_expires_at=result.sessdata_expires_at)
+                logger.info(f"面板扫码登录成功：uid={result.uid}")
+            else:
+                state.update(status="failed", message="登录失败或超时（可重新开始）")
+
+        self._login_task = asyncio.create_task(_run(), name="web-login")
+        return self._action_response()
+
+    async def _action_login_cancel(self, request):
+        if await self._read_action(request) is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        if self._login_task is not None and not self._login_task.done():
+            self._login_task.cancel()
+        return self._action_response()
+
+    async def _handle_login_qr(self, request):
+        if not self._check_token(request):
+            return web.Response(status=401, text="unauthorized")
+        qr = (self._login_state or {}).get("qr")
+        if not qr:
+            return web.Response(status=404, text="no qrcode")
+        return web.Response(body=qr, content_type="image/png")
+
+    async def _handle_login_status(self, request):
+        if not self._check_token(request):
+            return web.Response(status=401, text="unauthorized")
+        state = self._login_state or {}
+        return web.json_response({"status": state.get("status", ""),
+                                  "message": state.get("message", "")})
+
+    async def _action_groups_refresh(self, request):
         if not self._check_token(request):
             return web.Response(status=401, text="unauthorized: token required")
-        summary_ctx = await self._summary_context()
-        trend_ctx = await self._trend_context("d30", "")
-        html = self._render("index.html", **summary_ctx, **trend_ctx)
-        return self._html_response(request, html)
-
-    async def _handle_summary(self, request):
-        if not self._check_token(request):
-            return web.Response(status=401, text="unauthorized: token required")
-        html = self._render("partials/summary.html", **await self._summary_context())
-        return self._html_response(request, html)
+        if self.group_refresher is not None:
+            count = await self.group_refresher.refresh_once()
+            logger.info(f"面板触发群信息刷新：{count}个群")
+        return self._action_response()
 
     async def _handle_trend(self, request):
         if not self._check_token(request):

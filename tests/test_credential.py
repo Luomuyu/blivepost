@@ -139,7 +139,7 @@ async def test_panel_token_required():
     panel = _panel(token="SECRET")
     from aiohttp.test_utils import make_mocked_request
     req = make_mocked_request("GET", "/")
-    resp = await panel._handle_index(req)
+    resp = await panel._make_page_handler("overview")(req)
     assert resp.status == 401
 
 
@@ -150,7 +150,7 @@ async def test_panel_token_ok_renders_credentials(monkeypatch):
 
     from aiohttp.test_utils import make_mocked_request
     req = make_mocked_request("GET", "/?token=SECRET")
-    resp = await panel._handle_index(req)
+    resp = await panel._make_page_handler("overview")(req)
     assert resp.status == 200
     body = resp.text
     assert "token剩余" in body and "在线" in body

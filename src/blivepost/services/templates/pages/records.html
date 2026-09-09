@@ -1,0 +1,40 @@
+<div id="page">
+  <div class="flex items-center justify-between mb-4">
+    <h1 class="text-base font-semibold text-slate-300">下播记录</h1>
+    <button hx-get="/records" hx-target="#page" hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs hover:bg-slate-700">手动刷新</button>
+  </div>
+
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-5 py-2.5 font-medium">时间</th>
+            <th class="px-4 py-2.5 font-medium">房间</th>
+            <th class="px-4 py-2.5 font-medium">弹幕</th>
+            <th class="px-4 py-2.5 font-medium">礼物(元)</th>
+            <th class="px-4 py-2.5 font-medium">上舰(元)</th>
+            <th class="px-4 py-2.5 font-medium">SC(元)</th>
+            <th class="px-4 py-2.5 font-medium">时长</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in recent %}
+          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
+            <td class="px-5 py-2.5">{{ r.end_time.strftime('%m-%d %H:%M') if r.end_time else '-' }}</td>
+            <td class="px-4 py-2.5 font-mono">{{ r.room_id }}</td>
+            <td class="px-4 py-2.5">{{ r.danmaku_count }}</td>
+            <td class="px-4 py-2.5">{{ r.gold_count }}</td>
+            <td class="px-4 py-2.5">{{ r.ship_count }}</td>
+            <td class="px-4 py-2.5">{{ r.sc_count }}</td>
+            <td class="px-4 py-2.5">{{ ((r.duration or 0) // 3600) }}h{{ ((r.duration or 0) % 3600 // 60) }}m</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="px-5 py-6 text-center text-slate-500">暂无下播记录</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>

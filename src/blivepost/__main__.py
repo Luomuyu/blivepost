@@ -363,6 +363,8 @@ async def main_async(
         group_refresher = GroupInfoRefresher(db_service, bot_client=qqbot)
         group_refresher.start()
         await group_refresher.backfill_missing()
+        if web_panel is not None:
+            web_panel.group_refresher = group_refresher
 
         # 恢复上次运行中处于监控状态的房间与动态订阅
         await monitor_manager.restore(binding_store.get_monitored_room_ids())

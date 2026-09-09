@@ -1,0 +1,81 @@
+<div id="page" hx-get="/" hx-trigger="every 30s" hx-target="this" hx-swap="outerHTML">
+  <div class="flex items-center justify-between mb-4">
+    <h1 class="text-base font-semibold text-slate-300">概览</h1>
+    <button hx-get="/" hx-target="#page" hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs hover:bg-slate-700">手动刷新</button>
+  </div>
+
+  <!-- 状态卡片 -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div class="text-xs text-slate-500 mb-1">机器人凭证</div>
+      {% if bot.client_started %}
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+        <span class="text-xl font-semibold text-emerald-400">在线</span>
+      </div>
+      {% else %}
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-red-400"></span>
+        <span class="text-xl font-semibold text-red-400">离线</span>
+      </div>
+      {% endif %}
+      <div class="text-xs text-slate-500 mt-1">token剩余 {{ bot.token_expires_in }} 秒</div>
+    </div>
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div class="text-xs text-slate-500 mb-1">账号池</div>
+      <div class="text-xl font-semibold">{{ pool_active }}<span class="text-slate-500 text-sm"> / {{ pool_total }} 可用</span></div>
+      <div class="text-xs text-slate-500 mt-1">多账号轮转 · 亲和绑定</div>
+    </div>
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div class="text-xs text-slate-500 mb-1">监控房间</div>
+      <div class="text-xl font-semibold">{{ rooms | length }}</div>
+      <div class="text-xs text-slate-500 mt-1">独立子进程 · 90秒状态校正</div>
+    </div>
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div class="text-xs text-slate-500 mb-1">数据库体积</div>
+      <div class="text-xl font-semibold">{{ db_size_mb }} <span class="text-slate-500 text-sm">MB</span></div>
+      <div class="text-xs text-slate-500 mt-1">永久保留策略，不自动删除</div>
+    </div>
+  </div>
+
+  <!-- 机器人详情 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 mt-6">
+    <div class="flex items-center gap-4">
+      {% if me.avatar %}
+      <img src="{{ me.avatar }}" alt="avatar" class="w-14 h-14 rounded-xl border border-slate-700 object-cover">
+      {% else %}
+      <div class="w-14 h-14 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-xl font-bold text-slate-400">
+        {{ (me.username or '?')[:1] }}
+      </div>
+      {% endif %}
+      <div class="min-w-0">
+        <div class="font-semibold text-base truncate">{{ me.username or '暂未获取到机器人详情' }}</div>
+        <div class="text-xs text-slate-500 font-mono mt-0.5">AppID: {{ app_id or '-' }}</div>
+        <div class="mt-1.5">
+          {% if me.share_url %}
+          <a href="{{ me.share_url }}" target="_blank" rel="noopener"
+             class="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors">
+            分享机器人
+          </a>
+          {% else %}
+          <span class="text-xs text-slate-600">暂无分享链接</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 快捷入口 -->
+  <div class="grid grid-cols-2 lg:grid-cols-3 gap-4 mt-6">
+    <a href="/live" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 hover:border-slate-600 transition-colors">
+      <div class="font-semibold">直播监控</div><div class="text-xs text-slate-500 mt-1">房间/绑定/监控管理</div>
+    </a>
+    <a href="/dynamics" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 hover:border-slate-600 transition-colors">
+      <div class="font-semibold">动态监控</div><div class="text-xs text-slate-500 mt-1">UP主动态订阅</div>
+    </a>
+    <a href="/accounts" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 hover:border-slate-600 transition-colors">
+      <div class="font-semibold">账号池</div><div class="text-xs text-slate-500 mt-1">扫码登录/刷新Cookie</div>
+    </a>
+  </div>
+</div>
