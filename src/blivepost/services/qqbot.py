@@ -496,11 +496,11 @@ class QQBotClient:
                                  media: Optional[str] = None,
                                  keyboard: Optional[dict] = None) -> bool:
         """
-        消息推送降级链（单群）：Markdown(嵌图/按钮) → 富媒体 → 文本
+        消息推送降级链（单群）：Markdown(原生嵌图/按钮) → 文本
 
-        所有推送统一Markdown优先（原生markdown群聊对所有机器人开放、
-        免申请；按钮仅Markdown下渲染）。有图时经原生图片语法嵌入，
-        Markdown失败自动降级富媒体保封面，再降级纯文本。
+        所有推送统一Markdown优先——原生markdown支持图片语法（免模板、
+        群聊对所有机器人开放），封面/图片直接嵌入正文，按钮仅Markdown下
+        渲染；Markdown失败（无权限/接口异常）降级纯文本（图片以URL保留）。
         """
         from .push import live_markdown_content
 
@@ -508,10 +508,9 @@ class QQBotClient:
         for group in groups:
             sent = await self.send_group_markdown(
                 group, live_markdown_content(content, media), keyboard=keyboard)
-            if not sent and media:
-                sent = await self.send_group_media(group, media, content)
             if not sent:
-                sent = await self.send_group_message(group, content)
+                text = content + f"\n图片：{media}" if media else content
+                sent = await self.send_group_message(group, text)
             if not sent:
                 success = False
             await asyncio.sleep(0.5)  # 避免发送过快

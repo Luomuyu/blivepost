@@ -362,3 +362,52 @@ def test_heartbeat_watchdog_stops_client_after_threshold():
 
     asyncio.run(run_ok())
     assert ok._heartbeat_fail_count == 0 and ok.stopped is False
+
+
+# ==================== Markdown优先降级链 ====================
+
+
+async def test_broadcast_message_ladder_markdown_first_text_fallback():
+    """降级链：Markdown优先→文字兜底（图片URL保留在文本），富媒体不再参与"""
+    from blivepost.services.qqbot import QQBotClient
+
+    c = object.__new__(QQBotClient)
+    calls = []
+
+    async def md(group, content, keyboard=None):
+        calls.append(("md", content))
+        return False
+
+    async def media(group, image_url, content, keyboard=None):
+        calls.append(("media", image_url))
+        return True
+
+    async def text(group, content, keyboard=None):
+        calls.append(("text", content))
+        return True
+
+    c.send_group_markdown = md
+    c.send_group_media = media
+    c.send_group_message = text
+
+    sent = await c._broadcast_message(["G1"], "开播啦", media="http://img.jpg")
+    assert sent is True
+    assert [k for k, _ in calls] == ["md", "text"]  # 富媒体中间层已移除
+    assert "![封面 #640px #360px](http://img.jpg)" in calls[0][1]  # Markdown原生嵌图
+    assert "图片：http://img.jpg" in calls[1][1]  # 文字兜底保留图片URL
+
+
+async def test_broadcast_message_all_fail():
+    """Markdown与文字均失败时返回False（不抛异常）"""
+    from blivepost.services.qqbot import QQBotClient
+
+    c = object.__new__(QQBotClient)
+
+    async def fail(*a, **k):
+        return False
+
+    c.send_group_markdown = fail
+    c.send_group_media = fail
+    c.send_group_message = fail
+    sent = await c._broadcast_message(["G1"], "hi", media="http://img.jpg")
+    assert sent is False
