@@ -1,0 +1,26 @@
+# BLivePost 容器编排
+# 数据/日志/配置默认挂载在本文件同级目录（./data ./logs ./config.yaml）
+services:
+  blivepost:
+    build: .
+    image: blivepost:latest
+    container_name: blivepost
+    restart: unless-stopped
+    ports:
+      # 面板端口默认仅映射到本机（web_token未配置时不建议暴露到局域网）
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # 配置文件（必需）：修改后重启容器生效
+      - ./config.yaml:/app/config.yaml:ro
+      # 数据库与房间子库（含全部永久保留数据）
+      - ./data:/app/data
+      # 运行日志（含logs/botpy.log）
+      - ./logs:/app/logs
+    # 密钥类配置建议经环境变量注入（也可写入config.yaml）
+    # 容器内必须监听0.0.0.0端口映射才能转发；安全性由宿主机侧绑定地址控制
+    # 开放面板到局域网：把上方端口映射改为 "8080:8080"，并配置 web_token
+    environment:
+      BLIVEPOST_WEB_HOST: 0.0.0.0
+      # BLIVEPOST_WEB_TOKEN: "your-token"
+      # BLIVEPOST_QQBOT_APP_SECRET: "your-secret"
+      # BLIVEPOST_ADMIN_OPENIDS: "openid1,openid2"

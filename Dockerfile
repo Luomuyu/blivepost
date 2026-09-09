@@ -1,6 +1,6 @@
 # BLivePost 容器镜像
 # 包含playwright chromium内核（扫码登录必需，镜像较大属预期）
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
