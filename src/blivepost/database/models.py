@@ -9,7 +9,7 @@ from typing import Optional
 
 from sqlalchemy import (
     String, Text, Integer, BigInteger, Float, DateTime,
-    Enum, Index, Boolean, UniqueConstraint
+    Enum, Index, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -248,7 +248,7 @@ class GroupBindingRecord(Base):
     group_openid: Mapped[str] = mapped_column(String(64), index=True, comment="群openid")
     room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
     uid: Mapped[int] = mapped_column(BigInteger, default=0, comment="主播UID")
-    monitored: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否处于监控状态")
+    monitored: Mapped[int] = mapped_column(Integer, default=0, comment="是否处于监控状态(0否/1是)")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="绑定时间")
 
     __table_args__ = (

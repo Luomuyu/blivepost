@@ -518,12 +518,12 @@ class DatabaseService:
                         group_openid=group_openid,
                         room_id=room_id,
                         uid=uid,
-                        monitored=monitored,
+                        monitored=1 if monitored else 0,
                     )
                     session.add(record)
                 else:
                     record.uid = uid
-                    record.monitored = monitored
+                    record.monitored = 1 if monitored else 0
                 await session.commit()
         except Exception as e:
             logger.error(f"保存绑定记录失败: {e}")

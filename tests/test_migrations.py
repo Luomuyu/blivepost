@@ -115,3 +115,50 @@ def test_migration_upgrades_legacy_friend_table():
         assert rows == [("O1", "好友甲", None)]
     finally:
         asyncio.run(db.close())
+
+
+def test_migration_v5_monitored_boolean_to_integer():
+    """旧group_binding表（monitored BOOLEAN）经v5重建为INTEGER，数据保留"""
+    tmp = tempfile.mkdtemp()
+    db_path = os.path.join(tmp, "legacy.db")
+
+    # 模拟旧库：monitored为BOOLEAN声明
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE group_binding (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "group_openid VARCHAR(64) NOT NULL, room_id BIGINT NOT NULL, "
+        "uid BIGINT NOT NULL DEFAULT 0, monitored BOOLEAN NOT NULL DEFAULT 0, "
+        "created_at TIMESTAMP NOT NULL, "
+        "CONSTRAINT uq_binding_group_room UNIQUE (group_openid, room_id))"
+    )
+    conn.execute(
+        "INSERT INTO group_binding (group_openid, room_id, uid, monitored, created_at) "
+        "VALUES ('G1', 100, 9, 1, datetime('now'))")
+    conn.commit()
+    conn.close()
+
+    settings = Settings()
+    settings.database.sqlite_path = db_path
+
+    async def run():
+        db = DatabaseManager(settings.database)
+        await db.initialize()
+        svc = DatabaseService(db)
+        # 迁移后绑定关系可用：更新监控状态走INTEGER列
+        await svc.set_binding_monitored("G1", 100, False)
+        return db
+
+    db = asyncio.run(run())
+    try:
+        conn = sqlite3.connect(db_path)
+        info = {row[1]: row[2] for row in conn.execute("PRAGMA table_info(group_binding)")}
+        rows = list(conn.execute(
+            "SELECT group_openid, room_id, monitored FROM group_binding"))
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(group_binding)")}
+        conn.close()
+
+        assert info["monitored"] == "INTEGER"  # 类型已更正
+        assert rows == [("G1", 100, 0)]  # 数据保留且set_monitored(False)生效
+        assert any("group_binding" in ix for ix in indexes)  # 索引已重建
+    finally:
+        db.close()

@@ -64,7 +64,7 @@ class BindingStore:
                 group_openid=rec.group_openid,
                 room_id=rec.room_id,
                 uid=rec.uid,
-                monitored=rec.monitored,
+                monitored=bool(rec.monitored),
             )
             self._bindings.setdefault(binding.group_openid, {})[binding.room_id] = binding
         logger.info(f"已加载 {len(records)} 条群绑定记录，{len(dyn_records)} 条动态订阅")
