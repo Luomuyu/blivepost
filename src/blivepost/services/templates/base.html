@@ -89,6 +89,19 @@
   .text-blue-400{color:var(--blue-text)!important}
   .text-amber-500{color:var(--amber-text)!important}
   #trend-tip{background:var(--tip-bg)!important;border-color:var(--tip-border)!important;color:var(--tip-text)!important}
+
+  /* ===== 导航激活标签（专属类走主题变量，避免固定色阶在日间模式下白字浅底）===== */
+  .nav-active{background:var(--surface-3)!important;color:var(--text-strong)!important;font-weight:600}
+
+  /* ===== 移动端适配 ===== */
+  .nav-scroll{scrollbar-width:none;-ms-overflow-style:none}
+  .nav-scroll::-webkit-scrollbar{display:none}
+  @media (max-width:640px){
+    body{font-size:14px}
+    main{padding:.75rem .75rem 1.5rem}
+    table{font-size:12px}
+    th,td{padding:4px 6px}
+  }
 </style>
 <script>
 /* 收入趋势图（原生JS，无外部依赖）：按容器宽度绘制SVG，resize重绘；悬停/触摸显示各日明细 */
@@ -175,15 +188,21 @@ window.renderTrend = function(data, mode){
 </head>
 <body class="bg-slate-950 text-slate-200 min-h-screen font-sans antialiased">
 <header class="sticky top-0 z-20 backdrop-blur bg-slate-950/80 border-b border-slate-800">
-  <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-2 gap-y-2">
-    <span class="w-2.5 h-2.5 rounded-full bg-pink-500 shadow-[0_0_8px_rgba(236,72,153,.8)] mr-1"></span>
-    <a href="/" hx-get="/" hx-target="#page" hx-swap="outerHTML" hx-push-url="/"
-       class="text-lg font-bold tracking-wide mr-3">BLivePost <span class="text-slate-500 font-normal text-sm">面板</span></a>
-    {% for path, key, label in nav %}
-    <a href="{{ path }}" hx-get="{{ path }}" hx-target="#page" hx-swap="outerHTML" hx-push-url="{{ path }}"
-       class="px-3 py-1.5 rounded-lg text-sm transition-colors {{ 'bg-slate-800 text-white' if page == key else 'text-slate-400 hover:text-slate-200 hover:bg-slate-900' }}">{{ label }}</a>
-    {% endfor %}
-    <span class="ml-auto text-xs text-slate-500">只读数据 · 操作需谨慎</span>
+  <div class="max-w-6xl mx-auto px-4 py-3">
+    <div class="flex items-center justify-between gap-2">
+      <a href="/" hx-get="/" hx-target="#page" hx-swap="outerHTML" hx-push-url="/"
+         class="flex items-center gap-2 min-w-0">
+        <span class="w-2.5 h-2.5 rounded-full bg-pink-500 shadow-[0_0_8px_rgba(236,72,153,.8)] shrink-0"></span>
+        <span class="text-lg font-bold tracking-wide truncate">BLivePost <span class="text-slate-500 font-normal text-sm">面板</span></span>
+      </a>
+      <span class="hidden sm:inline text-xs text-slate-500 shrink-0">只读数据 · 操作需谨慎</span>
+    </div>
+    <nav class="nav-scroll mt-2 -mx-1 flex items-center gap-1 overflow-x-auto whitespace-nowrap">
+      {% for path, key, label in nav %}
+      <a href="{{ path }}" hx-get="{{ path }}" hx-target="#page" hx-swap="outerHTML" hx-push-url="{{ path }}"
+         class="shrink-0 px-3 py-1.5 rounded-lg text-sm transition-colors {{ 'nav-active' if page == key else 'text-slate-400 hover:text-slate-200 hover:bg-slate-900' }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
   </div>
 </header>
 <main class="max-w-6xl mx-auto px-4 py-6">
