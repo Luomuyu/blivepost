@@ -282,3 +282,60 @@ async def test_live_page_bindings_carry_group_details(tmp_path):
     assert b["tags"] == "手游、公会"  # JSON解析为顿号串展示
     assert b["member_count"] == 42
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_dynamics_page_group_bindings(tmp_path):
+    """回归：动态页拆分两段后，下半段群绑定状态携带群详情并整页渲染"""
+    from aiohttp.test_utils import make_mocked_request
+
+    from blivepost.services.bindings import BindingStore
+    from blivepost.services.webpanel import WebPanel
+
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    await svc.update_group_info("G1", {
+        "group_name": "测试一群", "group_finger_memo": "简介文本",
+        "group_class_text": "游戏", "group_tags": ["手游", "公会"],
+        "group_member_num": 42,
+    })
+
+    class Pool:
+        accounts = []
+    class MM:
+        def room_ids(self): return []
+        def has(self, rid): return False
+        def get_cookie_uid(self, rid): return None
+        def get_account_rooms(self, uid): return []
+    class DynMgr:
+        def has(self, uid): return True
+    store = BindingStore(svc)
+    await store.bind_dynamic("G1", 91156053, up_name="墨翎_Moryin")
+    panel = WebPanel(Pool(), MM(), DynMgr(), store, svc, bot_client=None)
+
+    ctx = await panel._page_context("dynamics")
+    assert ctx["dynamics"] == [{"up_uid": 91156053, "name": "墨翎_Moryin",
+                                "alive": True, "groups": 1}]
+    b = ctx["dyn_bindings"][0]
+    assert b["group_openid"] == "G1"
+    assert b["up_uid"] == 91156053 and b["up_name"] == "墨翎_Moryin"
+    assert b["group_name"] == "测试一群"
+    assert b["group_desc"] == "简介文本"
+    assert b["category"] == "游戏"
+    assert b["tags"] == "手游、公会"
+    assert b["member_count"] == 42
+    assert any(ps["label"] == "动态监控" for ps in ctx["push_settings"])
+
+    # 整页渲染：下半段标题与群行/详情行出现
+    req = make_mocked_request("GET", "/dynamics")  # token为空时不鉴权
+    resp = await panel._make_page_handler("dynamics")(req)
+    assert resp.status == 200
+    body = resp.text
+    assert "群绑定状态" in body
+    assert "toggleDynGroupDetail" in body
+    assert "墨翎_Moryin" in body
+    assert 'data-key="G1-91156053"' in body
+    await db.close()

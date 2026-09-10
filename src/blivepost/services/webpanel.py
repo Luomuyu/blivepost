@@ -284,40 +284,68 @@ class WebPanel:
             for rec in await self.db_service.list_bindings():
                 if not rec.monitored:
                     continue  # 已停止的推送关系不入库也不展示
-                g = groups_by_openid.get(rec.group_openid)
-                tags = None
-                if g is not None and g.tags:
-                    try:
-                        tag_list = json.loads(g.tags)
-                        tags = "、".join(str(t) for t in tag_list) or None
-                    except ValueError:
-                        tags = g.tags
                 bindings.append({
                     "group_openid": rec.group_openid,
-                    "group_name": g.group_name if g else None,
-                    "group_desc": g.group_desc if g else None,
-                    "category": g.category if g else None,
-                    "tags": tags,
-                    "member_count": g.member_count if g else None,
+                    **self._group_info(groups_by_openid.get(rec.group_openid)),
                     "room_id": rec.room_id,
                 })
             ctx["bindings"] = bindings
-            ms = self.message_settings
-            def _on(attr):
-                return bool(getattr(ms, attr, False)) if ms is not None else False
-            ctx["push_settings"] = [
-                {"label": "天选时刻", "on": _on("anchor")},
-                {"label": "大航海成就", "on": _on("guard_achievement")},
-                {"label": "系统事件", "on": _on("system_event")},
-                {"label": "房间变更", "on": _on("room_change")},
-                {"label": "动态监控", "on": _on("dynamic_monitor")},
-                {"label": "每日结算", "on": _on("daily_report")},
-                {"label": "每周结算", "on": _on("weekly_report")},
-                {"label": "每月结算", "on": _on("monthly_report")},
-            ]
+            ctx["push_settings"] = self._push_settings()
+        if key == "dynamics":
+            # 下半段：动态订阅的群绑定关系（群×UP，含群详情）
+            groups_by_openid = {}
+            for g in await self.db_service.load_groups():
+                groups_by_openid[g.group_openid] = g
+            dyn_bindings = []
+            if self.binding_store is not None:
+                for uid in self.binding_store.get_dynamic_up_uids():
+                    up_name = self.binding_store.get_dynamic_up_name(uid)
+                    for openid in self.binding_store.get_dynamic_groups(uid):
+                        dyn_bindings.append({
+                            "group_openid": openid,
+                            **self._group_info(groups_by_openid.get(openid)),
+                            "up_uid": uid,
+                            "up_name": up_name,
+                        })
+            ctx["dyn_bindings"] = dyn_bindings
+            ctx["push_settings"] = self._push_settings()
         if key == "trend":
             ctx.update(await self._trend_context("d30", ""))
         return ctx
+
+    def _push_settings(self) -> list:
+        """全局推送开关徽标（直播/动态两页的群详情共用）"""
+        ms = self.message_settings
+        def _on(attr):
+            return bool(getattr(ms, attr, False)) if ms is not None else False
+        return [
+            {"label": "天选时刻", "on": _on("anchor")},
+            {"label": "大航海成就", "on": _on("guard_achievement")},
+            {"label": "系统事件", "on": _on("system_event")},
+            {"label": "房间变更", "on": _on("room_change")},
+            {"label": "动态监控", "on": _on("dynamic_monitor")},
+            {"label": "每日结算", "on": _on("daily_report")},
+            {"label": "每周结算", "on": _on("weekly_report")},
+            {"label": "每月结算", "on": _on("monthly_report")},
+        ]
+
+    @staticmethod
+    def _group_info(g) -> dict:
+        """bot_group行→群详情字段（tags JSON文本转顿号分隔；缺组/空值保持None）"""
+        tags = None
+        if g is not None and g.tags:
+            try:
+                tag_list = json.loads(g.tags)
+                tags = "、".join(str(t) for t in tag_list) or None
+            except ValueError:
+                tags = g.tags
+        return {
+            "group_name": g.group_name if g else None,
+            "group_desc": g.group_desc if g else None,
+            "category": g.category if g else None,
+            "tags": tags,
+            "member_count": g.member_count if g else None,
+        }
 
     # ========== 写操作（绑定/监控/动态/账号） ==========
 

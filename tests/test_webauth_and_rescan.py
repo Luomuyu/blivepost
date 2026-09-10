@@ -153,6 +153,7 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
     assert resp_dyn.status == 200
     assert "function enterDynAddMode" in resp_dyn.text
     assert "btn-dyn-del-confirm').classList.remove('hidden')" in resp_dyn.text
+    assert "群绑定状态" in resp_dyn.text and "toggleDynGroupDetail" in resp_dyn.text
 
     # 趋势局部：12个月按月汇总模式
     class MonthReq:

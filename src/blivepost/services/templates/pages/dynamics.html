@@ -43,7 +43,7 @@
     </form>
   </dialog>
 
-  <!-- 动态订阅表 -->
+  <!-- 上半段：UP订阅表（删除模式作用于本表） -->
   <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
@@ -74,7 +74,55 @@
             <td class="px-4 py-2.5">{{ d.groups }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="4" class="px-5 py-6 text-center text-slate-500">暂无订阅</td></tr>
+          <tr><td colspan="5" class="px-5 py-6 text-center text-slate-500">暂无订阅，点击右上角「添加」</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 下半段：群绑定状态（点击行展开群详情） -->
+  <h2 class="font-semibold text-sm text-slate-300 mt-6 mb-3">群绑定状态</h2>
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-5 py-2.5 font-medium">群名称</th>
+            <th class="px-4 py-2.5 font-medium">UP主</th>
+            <th class="px-4 py-2.5 font-medium">推送状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in dyn_bindings %}
+          <tr class="border-t border-slate-800 hover:bg-slate-800/40 cursor-pointer"
+              onclick="toggleDynGroupDetail('{{ b.group_openid }}-{{ b.up_uid }}')">
+            <td class="px-5 py-2.5">{{ b.group_name or '-' }}</td>
+            <td class="px-4 py-2.5">{{ b.up_name or '-' }} <span class="text-slate-500 font-mono text-xs ml-1">{{ b.up_uid }}</span></td>
+            <td class="px-4 py-2.5">
+              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">推送中</span>
+            </td>
+          </tr>
+          <tr class="grp-dyn-detail hidden border-t border-slate-800 bg-slate-800/30" data-key="{{ b.group_openid }}-{{ b.up_uid }}">
+            <td colspan="3" class="px-5 py-3">
+              <div class="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+                <div><span class="text-slate-500">群openId：</span><span class="font-mono">{{ b.group_openid }}</span></div>
+                <div><span class="text-slate-500">群名称：</span>{{ b.group_name or '-' }}</div>
+                <div><span class="text-slate-500">群简介：</span>{{ b.group_desc or 'NULL' }}</div>
+                <div><span class="text-slate-500">群分类：</span>{{ b.category or 'NULL' }}</div>
+                <div><span class="text-slate-500">群标签：</span>{{ b.tags or 'NULL' }}</div>
+                <div><span class="text-slate-500">群成员人数：</span>{{ b.member_count if b.member_count is not none else 'NULL' }}</div>
+              </div>
+              <div class="mt-3 pt-2 border-t border-slate-700/60">
+                <span class="text-xs text-slate-500">推送设置（跟随全局）：</span>
+                {% for ps in push_settings %}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs mr-1 {{ 'bg-emerald-500/10 text-emerald-400' if ps.on else 'bg-slate-600/30 text-slate-400' }}">{{ ps.label }}：{{ '开' if ps.on else '关' }}</span>
+                {% endfor %}
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="3" class="px-5 py-6 text-center text-slate-500">暂无绑定（添加订阅后显示）</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -115,5 +163,30 @@ function updateDynDelConfirm(){
 }
 document.addEventListener('change', e => {
   if (e.target.classList && e.target.classList.contains('dyn-del-check')) updateDynDelConfirm();
+});
+
+/* ===== 群绑定状态：点击行展开/收起群详情（同时仅一个展开） ===== */
+window.__dynOpenDetails = window.__dynOpenDetails || new Set();
+function toggleDynGroupDetail(key){
+  const row = document.querySelector('tr.grp-dyn-detail[data-key="' + key + '"]');
+  if(!row) return;
+  const wasHidden = row.classList.contains('hidden');
+  /* 先收起所有详情行 */
+  document.querySelectorAll('tr.grp-dyn-detail').forEach(r => r.classList.add('hidden'));
+  if(wasHidden){
+    row.classList.remove('hidden');
+    window.__dynOpenDetails.add(key);
+  } else {
+    window.__dynOpenDetails.delete(key);
+  }
+}
+/* 手动刷新/操作后交换恢复此前展开的群详情 */
+document.body.addEventListener('htmx:afterSwap', e => {
+  if (e.target.id !== 'page') return;
+  window.__dynOpenDetails.forEach(key => {
+    const row = document.querySelector('tr.grp-dyn-detail[data-key="' + key + '"]');
+    if (row) row.classList.remove('hidden');
+    else window.__dynOpenDetails.delete(key);
+  });
 });
 </script>
