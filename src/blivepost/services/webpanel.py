@@ -98,6 +98,7 @@ class WebPanel:
         app.router.add_post("/web/room/delete", self._action_room_delete)
         app.router.add_post("/web/dynamic/bind", self._action_dynamic_bind)
         app.router.add_post("/web/dynamic/unbind", self._action_dynamic_unbind)
+        app.router.add_post("/web/dynamic/delete", self._action_dynamic_delete)
         app.router.add_post("/web/account/refresh", self._action_account_refresh)
         app.router.add_post("/web/account/login/start", self._action_login_start)
         app.router.add_post("/web/account/login/cancel", self._action_login_cancel)
@@ -540,6 +541,24 @@ class WebPanel:
         state = self._login_state or {}
         return web.json_response({"status": state.get("status", ""),
                                   "message": state.get("message", "")})
+
+    async def _action_dynamic_delete(self, request):
+        """批量取消动态订阅：按up_uid解除全部群绑定并停止轮询进程"""
+        form = await self._read_action(request)
+        if form is None:
+            return web.Response(status=401, text="unauthorized: token required")
+        up_uids = [int(v) for v in form.getall("up_uid", []) if str(v).isdigit()]
+        for up_uid in up_uids:
+            try:
+                if self.binding_store is not None:
+                    for group_openid in self.binding_store.get_dynamic_groups(up_uid):
+                        await self.binding_store.unbind_dynamic(group_openid, up_uid)
+                if self.dynamic_manager is not None:
+                    await self.dynamic_manager.remove(up_uid)
+                logger.info(f"面板取消动态订阅：UP主{up_uid}")
+            except Exception as e:
+                logger.error(f"面板取消动态订阅失败(UP{up_uid}): {e}")
+        return self._action_response()
 
     async def _action_groups_refresh(self, request):
         if not self._check_token(request):

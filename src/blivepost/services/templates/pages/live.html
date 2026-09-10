@@ -221,16 +221,18 @@ function clearPush(roomId){
   savePush(roomId, []);
 }
 
-/* ===== 群绑定状态：点击行展开群详情 ===== */
+/* ===== 群绑定状态：点击行展开/收起群详情 ===== */
 function toggleGroupDetail(openid){
   const row = document.querySelector('tr.grp-detail[data-group="' + openid + '"]');
   if(!row) return;
-  /* 只允许一个展开：先收起其他详情行并同步状态集合 */
-  document.querySelectorAll('tr.grp-detail').forEach(r => { if (r !== row) { r.classList.add('hidden'); window.__liveOpenDetails.delete(String(r.dataset.group)); } });
-  const opening = row.classList.contains('hidden');
-  if(opening){
+  const wasHidden = row.classList.contains('hidden');
+  /* 先收起所有详情行 */
+  document.querySelectorAll('tr.grp-detail').forEach(r => r.classList.add('hidden'));
+  if(wasHidden){
     row.classList.remove('hidden');
     window.__liveOpenDetails.add(openid);
+  } else {
+    window.__liveOpenDetails.delete(openid);
   }
 }
 

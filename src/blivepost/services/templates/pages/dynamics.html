@@ -1,40 +1,55 @@
-<div id="page" hx-target="#page" hx-swap="outerHTML">
+<div id="page">
   {% include 'partials/nav.html' %}
   <div class="flex items-center justify-between mb-4">
     <h1 class="text-base font-semibold text-slate-300">动态监控 <span class="text-slate-500 text-sm font-normal">{{ dynamics | length }}个订阅</span></h1>
-    <button hx-get="/dynamics" hx-target="#page" hx-swap="outerHTML"
-            class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs hover:bg-slate-700">手动刷新</button>
+    <div class="flex items-center gap-2">
+      <button hx-get="/dynamics" hx-target="#page" hx-swap="outerHTML"
+              class="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs hover:bg-slate-700">手动刷新</button>
+      <button onclick="enterDynAddMode()"
+              class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">添加</button>
+      <button id="btn-dyn-del" onclick="enterDynDeleteMode()"
+              class="px-3 py-1.5 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-xs font-medium">删除</button>
+      <button id="btn-dyn-del-confirm" hx-post="/web/dynamic/delete" hx-include="input.dyn-del-check:checked"
+              hx-confirm="确定删除勾选的动态订阅？最后一个订阅群取消后轮询进程自动停止"
+              hx-target="#page" hx-swap="outerHTML" disabled onclick="return false"
+              class="hidden px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium opacity-40 cursor-not-allowed">
+        确认删除
+      </button>
+      <button id="btn-dyn-del-cancel" onclick="cancelDynDeleteMode()"
+              class="hidden px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs">取消</button>
+    </div>
   </div>
 
-  <!-- 订阅表单 -->
-  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-5">
-    <form id="dyn-actions" class="flex flex-wrap items-end gap-3 text-sm">
-      <div>
-        <label class="block text-xs text-slate-500 mb-1">群</label>
-        <select name="group_openid" class="bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 min-w-[13rem]">
-          {% for g in group_options %}
-          <option value="{{ g[0] }}">{{ g[1] or g[0] }}</option>
-          {% endfor %}
-        </select>
+  <!-- 订阅表单（弹窗） -->
+  <dialog id="dyn-add-dialog" class="bg-slate-900 text-slate-200 border border-slate-700 rounded-2xl p-5 backdrop:bg-black/60">
+    <form hx-post="/web/dynamic/bind" hx-target="#page" hx-swap="outerHTML"
+          onsubmit="document.getElementById('dyn-add-dialog').close()">
+      <h2 class="font-semibold text-sm mb-3">绑定动态</h2>
+      <label class="block text-xs text-slate-500 mb-1">群</label>
+      <select name="group_openid" class="w-full bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 mb-3">
+        {% for g in group_options %}
+        <option value="{{ g[0] }}">{{ g[1] or g[0] }}</option>
+        {% endfor %}
+      </select>
+      <label class="block text-xs text-slate-500 mb-1">UP主UID</label>
+      <input name="up_uid" required placeholder="UP主UID"
+             class="w-full bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 mb-3">
+      <p class="text-xs text-slate-500 mb-2">需开启 dynamic_monitor 开关</p>
+      <div class="flex justify-end gap-2 mt-4">
+        <button type="button" onclick="document.getElementById('dyn-add-dialog').close()"
+                class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs">取消</button>
+        <button type="submit" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">绑定</button>
       </div>
-      <div>
-        <label class="block text-xs text-slate-500 mb-1">UP主UID</label>
-        <input name="up_uid" placeholder="UP主UID" required
-               class="bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 w-40">
-      </div>
-      <button hx-post="/web/dynamic/bind" hx-include="#dyn-actions"
-              class="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">绑定动态</button>
-      <button hx-post="/web/dynamic/unbind" hx-include="#dyn-actions"
-              class="px-3 py-2 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-xs font-medium">取消动态</button>
     </form>
-    <p class="text-xs text-slate-500 mt-2">需开启 dynamic_monitor 开关；最后一个订阅群取消后轮询进程自动停止。</p>
-  </div>
+  </dialog>
 
+  <!-- 动态订阅表 -->
   <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
           <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-3 py-2.5 w-8 dyn-del-col hidden"></th>
             <th class="px-5 py-2.5 font-medium">UP主UID</th>
             <th class="px-4 py-2.5 font-medium">昵称</th>
             <th class="px-4 py-2.5 font-medium">轮询进程</th>
@@ -43,7 +58,10 @@
         </thead>
         <tbody>
           {% for d in dynamics %}
-          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
+          <tr class="border-t border-slate-800 dyn-row hover:bg-slate-800/40 cursor-pointer">
+            <td class="dyn-del-col hidden px-3 py-2.5" onclick="event.stopPropagation()">
+              <input type="checkbox" name="up_uid" value="{{ d.up_uid }}" class="dyn-del-check accent-red-500">
+            </td>
             <td class="px-5 py-2.5 font-mono">{{ d.up_uid }}</td>
             <td class="px-4 py-2.5">{{ d.name or '-' }}</td>
             <td class="px-4 py-2.5">
@@ -63,3 +81,32 @@
     </div>
   </div>
 </div>
+
+<script>
+/* ===== 删除模式 ===== */
+function enterDynDeleteMode(){
+  document.body.classList.add('dyn-delete-mode');
+  document.querySelectorAll('.dyn-del-col, .dyn-del-check').forEach(el => el.classList.remove('hidden'));
+  document.getElementById('btn-dyn-del').classList.add('hidden');
+  updateDynDelConfirm();
+}
+function cancelDynDeleteMode(){
+  document.body.classList.remove('dyn-delete-mode');
+  document.querySelectorAll('.dyn-del-col, .dyn-del-check').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.dyn-del-check').forEach(el => el.checked = false);
+  document.getElementById('btn-dyn-del').classList.remove('hidden');
+  document.getElementById('btn-dyn-del-confirm').classList.add('hidden');
+  document.getElementById('btn-dyn-del-cancel').classList.add('hidden');
+  updateDynDelConfirm();
+}
+function updateDynDelConfirm(){
+  const any = [...document.querySelectorAll('.dyn-del-check')].some(c => c.checked);
+  const btn = document.getElementById('btn-dyn-del-confirm');
+  btn.disabled = !any;
+  btn.classList.toggle('opacity-40', !any);
+  btn.classList.toggle('cursor-not-allowed', !any);
+}
+document.addEventListener('change', e => {
+  if (e.target.classList && e.target.classList.contains('dyn-del-check')) updateDynDelConfirm();
+});
+</script>
