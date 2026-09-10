@@ -10,6 +10,7 @@ Web状态面板（只读，aiohttp + Jinja2 + HTMX实现）
 """
 
 import asyncio
+import json
 
 from datetime import date, datetime
 from pathlib import Path
@@ -255,10 +256,14 @@ class WebPanel:
         if key == "groups":
             ctx["groups"] = await self.db_service.load_groups()
         if key == "live":
-            # 上半段：直播间注册表（推送群/监控状态），下半段：群绑定关系
+            # 上半段：直播间注册表（推送群/监控状态），下半段：群绑定关系（含群详情）
+            groups_by_openid = {}
+            for g in await self.db_service.load_groups():
+                groups_by_openid[g.group_openid] = g
             live_rooms = []
             for rec in await self.db_service.list_rooms():
-                push_groups = self.binding_store.get_monitored_groups(rec.room_id)                     if self.binding_store else []
+                push_groups = self.binding_store.get_monitored_groups(rec.room_id) \
+                    if self.binding_store else []
                 live_rooms.append({
                     "room_id": rec.room_id,
                     "streamer": await self.db_service.get_streamer_name(rec.uid)
@@ -269,7 +274,28 @@ class WebPanel:
                              and self.monitor_manager.has(rec.room_id),
                 })
             ctx["rooms"] = live_rooms
-            ctx["bindings"] = await self.db_service.list_bindings()
+
+            bindings = []
+            for rec in await self.db_service.list_bindings():
+                g = groups_by_openid.get(rec.group_openid)
+                tags = None
+                if rec.tags:
+                    try:
+                        tag_list = json.loads(rec.tags)
+                        tags = "、".join(str(t) for t in tag_list) or None
+                    except ValueError:
+                        tags = rec.tags
+                bindings.append({
+                    "group_openid": rec.group_openid,
+                    "group_name": g.group_name if g else None,
+                    "group_desc": g.group_desc if g else None,
+                    "category": g.category if g else None,
+                    "tags": tags,
+                    "member_count": g.member_count if g else None,
+                    "room_id": rec.room_id,
+                    "monitored": bool(rec.monitored),
+                })
+            ctx["bindings"] = bindings
         if key == "trend":
             ctx.update(await self._trend_context("d30", ""))
         return ctx

@@ -9,18 +9,18 @@
               class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">添加</button>
       <button id="btn-del" onclick="enterDeleteMode()"
               class="px-3 py-1.5 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-xs font-medium">删除</button>
-      <button id="btn-del-cancel" onclick="cancelDeleteMode()"
-              class="hidden px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs">取消</button>
       <button id="btn-del-confirm" hx-post="/web/room/delete" hx-include="input.del-check:checked"
               hx-confirm="确定删除勾选的直播间？将解除全部群绑定并停止推送（历史数据保留）"
-              hx-target="#page" hx-swap="outerHTML" disabled
-              class="hidden px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium opacity-40 cursor-not-allowed" onclick="return false">
+              hx-target="#page" hx-swap="outerHTML" disabled onclick="return false"
+              class="hidden px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium opacity-40 cursor-not-allowed">
         确认删除
       </button>
+      <button id="btn-del-cancel" onclick="cancelDeleteMode()"
+              class="hidden px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs">取消</button>
     </div>
   </div>
 
-  <!-- 上半段：全部已绑定直播间 -->
+  <!-- 上半段：全部已绑定直播间（点击行展开推送群编辑） -->
   <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
@@ -51,6 +51,33 @@
               {% endif %}
             </td>
           </tr>
+          <tr class="push-editor hidden border-t border-slate-800 bg-slate-800/30" data-editor="{{ r.room_id }}">
+            <td colspan="5" class="px-5 py-3">
+              <div class="relative">
+                <input readonly onclick="togglePushDropdown('{{ r.room_id }}')" placeholder="点击选择推送群"
+                       class="w-full bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2 border border-slate-700 cursor-pointer focus:outline-none focus:border-blue-500"
+                       value="{{ r.push_groups | join('、') }}">
+                <div class="push-dd hidden mt-2 bg-slate-800 border border-slate-700 rounded-lg p-1 max-h-44 overflow-y-auto">
+                  {% for g in group_options %}
+                  <label class="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-slate-700 text-xs">
+                    <input type="checkbox" name="groups" value="{{ g[0] }}" class="accent-blue-500 push-cb"
+                           onchange="updatePushDisplay('{{ r.room_id }}')">
+                    <span>{{ g[1] or g[0] }}</span>
+                    <span class="text-slate-500 font-mono ml-auto">{{ g[0] }}</span>
+                  </label>
+                  {% endfor %}
+                </div>
+              </div>
+              <div class="flex items-center justify-end gap-2 mt-3">
+                <button type="button" onclick="clearPushSelection('{{ r.room_id }}')"
+                        class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs">清空</button>
+                <button type="button" onclick="collapsePushEditor('{{ r.room_id }}')"
+                        class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs">取消</button>
+                <button type="button" onclick="savePush('{{ r.room_id }}')"
+                        class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">保存</button>
+              </div>
+            </td>
+          </tr>
           {% else %}
           <tr><td colspan="5" class="px-5 py-6 text-center text-slate-500">暂无直播间，点击右上角「添加」</td></tr>
           {% endfor %}
@@ -59,22 +86,23 @@
     </div>
   </div>
 
-  <!-- 下半段：直播间与群绑定状态 -->
+  <!-- 下半段：群绑定状态（点击行展开群详情） -->
   <h2 class="font-semibold text-sm text-slate-300 mt-6 mb-3">群绑定状态</h2>
   <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
           <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
-            <th class="px-5 py-2.5 font-medium">群</th>
+            <th class="px-5 py-2.5 font-medium">群名称</th>
             <th class="px-4 py-2.5 font-medium">直播间</th>
             <th class="px-4 py-2.5 font-medium">推送状态</th>
           </tr>
         </thead>
         <tbody>
           {% for b in bindings %}
-          <tr class="border-t border-slate-800 hover:bg-slate-800/40">
-            <td class="px-5 py-2.5 font-mono text-xs">{{ b.group_openid }}</td>
+          <tr class="border-t border-slate-800 hover:bg-slate-800/40 cursor-pointer"
+              onclick="toggleGroupDetail('{{ b.group_openid }}')">
+            <td class="px-5 py-2.5">{{ b.group_name }}</td>
             <td class="px-4 py-2.5 font-mono">{{ b.room_id }}</td>
             <td class="px-4 py-2.5">
               {% if b.monitored %}
@@ -82,6 +110,19 @@
               {% else %}
               <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-slate-600/30 text-slate-400">已停止</span>
               {% endif %}
+            </td>
+          </tr>
+          <tr class="grp-detail hidden border-t border-slate-800 bg-slate-800/30" data-group="{{ b.group_openid }}">
+            <td colspan="3" class="px-5 py-3">
+              <div class="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+                <div><span class="text-slate-500">群openId：</span><span class="font-mono">{{ b.group_openid }}</span></div>
+                <div><span class="text-slate-500">群名称：</span>{{ b.group_name or '-' }}</div>
+                <div><span class="text-slate-500">群简介：</span>{{ b.group_desc or 'NULL' }}</div>
+                <div><span class="text-slate-500">群分类：</span>{{ b.category or 'NULL' }}</div>
+                <div><span class="text-slate-500">群标签：</span>{{ b.tags or 'NULL' }}</div>
+                <div><span class="text-slate-500">群成员人数：</span>{{ b.member_count if b.member_count is not none else 'NULL' }}</div>
+                <div class="col-span-2"><span class="text-slate-500">推送设置：</span>跟随全局设置（推送中/已停止见上方推送状态）</div>
+              </div>
             </td>
           </tr>
           {% else %}
@@ -110,48 +151,67 @@
   </form>
 </dialog>
 
-<!-- 推送群选择弹窗 -->
-<dialog id="push-dialog" class="bg-slate-900 text-slate-200 border border-slate-700 rounded-2xl p-5 backdrop:bg-black/60 min-w-[20rem]">
-  <form hx-post="/web/room/push" hx-target="#page" hx-swap="outerHTML"
-        onsubmit="document.getElementById('push-dialog').close()">
-    <input type="hidden" name="room_id" id="push-room-id">
-    <h2 class="font-semibold text-sm mb-1">选择推送群</h2>
-    <p class="text-xs text-slate-500 mb-3">直播间 <span id="push-room-label" class="font-mono"></span> ·
-      保存后有推送群则启用监控，无则停止</p>
-    <div class="space-y-1.5 max-h-60 overflow-y-auto">
-      {% for g in group_options %}
-      <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
-        <input type="checkbox" name="groups" value="{{ g[0] }}" class="accent-blue-500">
-        <span class="text-sm">{{ g[1] or g[0] }}</span>
-        <span class="text-xs text-slate-500 font-mono ml-auto">{{ g[0] }}</span>
-      </label>
-      {% endfor %}
-    </div>
-    <div class="flex justify-end gap-2 mt-4">
-      <button type="button" onclick="document.getElementById('push-dialog').close()"
-              class="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-xs">取消</button>
-      <button type="submit" class="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">保存</button>
-    </div>
-  </form>
-</dialog>
-
 <script>
-/* 行点击（非删除模式）→ 打开推送群选择弹窗 */
-document.querySelectorAll('.room-row').forEach(row => {
-  row.addEventListener('click', () => {
-    if (document.body.classList.contains('delete-mode')) return;
-    openPush(parseInt(row.dataset.room, 10), JSON.parse(row.dataset.groups || '[]'));
-  });
-});
+/* ===== 推送群行内编辑 ===== */
+function editorRow(roomId){
+  return document.querySelector('tr.push-editor[data-editor="' + roomId + '"]');
+}
+function togglePushEditor(roomId){
+  const row = editorRow(roomId);
+  if(!row) return;
+  /* 打开某行时收起其他已展开行 */
+  document.querySelectorAll('tr.push-editor:not([data-editor="' + roomId + '"])').forEach(r => r.classList.add('hidden'));
+  row.classList.toggle('hidden');
+}
+function collapsePushEditor(roomId){
+  const row = editorRow(roomId);
+  if(row) row.classList.add('hidden');
+}
+function togglePushDropdown(roomId){
+  const row = editorRow(roomId);
+  if(row) row.querySelector('.push-dd').classList.toggle('hidden');
+}
+function pushCheckboxes(roomId){
+  const row = editorRow(roomId);
+  return row ? [...row.querySelectorAll('input.push-cb')] : [];
+}
+function selectedPushGroups(roomId){
+  return pushCheckboxes(roomId).filter(c => c.checked).map(c => c.value);
+}
+function updatePushDisplay(roomId){
+  const row = editorRow(roomId);
+  if(!row) return;
+  row.querySelector('input[readonly]').value = selectedPushGroups(roomId).join('、');
+}
+function refreshLivePanel(){
+  if(window.htmx) htmx.ajax('GET', '/live', {target: '#page', swap: 'outerHTML'});
+}
+function savePush(roomId, groups){
+  const body = new URLSearchParams();
+  body.append('room_id', roomId);
+  (groups || []).forEach(g => body.append('groups', g));
+  fetch('/web/room/push', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded', 'HX-Request': 'true'},
+    body: body.toString(),
+  }).then(refreshLivePanel);
+}
+function clearPushSelection(roomId){
+  /* 清空=取消该直播间全部推送群并立即保存（推送停止） */
+  savePush(roomId, []);
+}
 
-/* 删除模式：勾选直播间→确认删除；取消退出；删除按钮在未勾选时禁用 */
+/* ===== 群绑定状态：点击行展开群详情 ===== */
+function toggleGroupDetail(openid){
+  const row = document.querySelector('tr.grp-detail[data-group="' + openid + '"]');
+  if(row) row.classList.toggle('hidden');
+}
+
+/* ===== 删除模式 ===== */
 function enterDeleteMode(){
   document.body.classList.add('delete-mode');
   document.querySelectorAll('.del-col, .del-check').forEach(el => el.classList.remove('hidden'));
   document.getElementById('btn-del').classList.add('hidden');
-  document.getElementById('btn-del-cancel').classList.remove('hidden');
-  const confirm = document.getElementById('btn-del-confirm');
-  confirm.classList.remove('hidden');
   updateDelConfirm();
 }
 function cancelDeleteMode(){
@@ -159,6 +219,7 @@ function cancelDeleteMode(){
   document.querySelectorAll('.del-col, .del-check').forEach(el => el.classList.add('hidden'));
   document.querySelectorAll('.del-check').forEach(el => el.checked = false);
   document.getElementById('btn-del').classList.remove('hidden');
+  document.getElementById('btn-del-confirm').classList.add('hidden');
   document.getElementById('btn-del-cancel').classList.add('hidden');
   updateDelConfirm();
 }
@@ -172,15 +233,23 @@ function updateDelConfirm(){
 document.addEventListener('change', e => {
   if (e.target.classList && e.target.classList.contains('del-check')) updateDelConfirm();
 });
+
+/* ===== 添加弹窗 ===== */
 function enterAddMode(){
   document.getElementById('add-dialog').showModal();
 }
-function openPush(roomId, groups){
-  document.getElementById('push-room-id').value = roomId;
-  document.getElementById('push-room-label').textContent = roomId;
-  document.querySelectorAll('#push-dialog input[name=groups]').forEach(cb => {
-    cb.checked = groups.includes(cb.value);
+
+/* ===== 行点击：删除模式下忽略，否则展开推送编辑 ===== */
+document.querySelectorAll('.room-row').forEach(row => {
+  row.addEventListener('click', () => {
+    if(document.body.classList.contains('delete-mode')) return;
+    togglePushEditor(row.dataset.room);
   });
-  document.getElementById('push-dialog').showModal();
-}
+});
+document.addEventListener('click', e => {
+  /* 点击编辑区与房间行之外时收起下拉框 */
+  if(!e.target.closest('.push-dd') && !e.target.closest('input[readonly]')){
+    document.querySelectorAll('.push-dd').forEach(d => d.classList.add('hidden'));
+  }
+});
 </script>
