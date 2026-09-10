@@ -266,11 +266,13 @@ class WebPanel:
             for rec in await self.db_service.list_rooms():
                 push_groups = self.binding_store.get_monitored_groups(rec.room_id) \
                     if self.binding_store else []
+                push_names = [groups_by_openid[g].group_name if g in groups_by_openid else g
+                              for g in push_groups]
                 live_rooms.append({
                     "room_id": rec.room_id,
                     "streamer": await self.db_service.get_streamer_name(rec.uid)
                                 if rec.uid else "",
-                    "push_groups": push_groups,
+                    "push_groups": push_names,
                     "monitored": bool(push_groups),
                     "alive": bool(push_groups) and self.monitor_manager is not None
                              and self.monitor_manager.has(rec.room_id),
