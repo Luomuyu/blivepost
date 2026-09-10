@@ -104,6 +104,28 @@
   }
 </style>
 <script>
+/* 弹幕词云（原生JS）：按词频映射字号与主题配色，无外部依赖 */
+window.renderWordCloud = function(){
+  var box = document.getElementById('wordcloud');
+  if(!box) return;
+  var words = box.querySelectorAll('.wc-word');
+  if(!words.length) return;
+  var counts = [...words].map(w => +w.dataset.count || 1);
+  var max = Math.max(...counts), min = Math.min(...counts);
+  var minPx = 13, maxPx = 40;
+  var palette = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
+    ? ['#2563eb', '#d97706', '#059669', '#dc2626', '#7c3aed', '#0f766e', '#be185d']
+    : ['#60a5fa', '#f59e0b', '#34d399', '#f87171', '#a78bfa', '#2dd4bf', '#f472b6'];
+  words.forEach((w, i) => {
+    var c = +w.dataset.count || 1;
+    var t = max === min ? 0.5 : (Math.log(c) - Math.log(min)) / (Math.log(max) - Math.log(min));
+    w.style.fontSize = Math.round(minPx + t * (maxPx - minPx)) + 'px';
+    w.style.color = palette[i % palette.length];
+    w.style.fontWeight = t > 0.6 ? '700' : '500';
+  });
+};
+</script>
+<script>
 /* 收入趋势图（原生JS，无外部依赖）：按容器宽度绘制SVG，resize重绘；悬停/触摸显示各日明细 */
 window.renderTrend = function(data, mode){
   var el = document.getElementById('trend'), tip = document.getElementById('trend-tip');

@@ -1,0 +1,73 @@
+<div id="wordcloud-panel" class="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+    <h2 class="font-semibold">弹幕词云 <span class="text-slate-500 text-sm font-normal">{{ label }} · {{ danmaku_count }}条弹幕</span></h2>
+    <div class="flex flex-wrap items-center gap-1.5 text-xs">
+      <select name="room" aria-label="选择直播间"
+              hx-get="/panel/wordcloud?range={{ active }}&day={{ day_value }}&month={{ month_value }}&year={{ year_value }}"
+              hx-trigger="change" hx-target="#wordcloud-panel" hx-swap="outerHTML" hx-include="this"
+              class="bg-slate-800 text-slate-300 rounded-lg px-2 py-1.5 border border-slate-700 hover:bg-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer">
+        <option value="">全部直播间</option>
+        {% for r in room_options %}
+        <option value="{{ r }}" {% if r|string == room_id|string %}selected{% endif %}>直播间 {{ r }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <!-- 范围选择：按天 -->
+  <div class="flex flex-wrap items-center gap-1.5 text-xs mb-2">
+    <span class="text-slate-500 mr-1">按天</span>
+    {% for key, name in [('today','今天'),('yesterday','昨天')] %}
+    <button hx-get="/panel/wordcloud?range={{ key }}&room={{ room_id }}" hx-target="#wordcloud-panel" hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded-lg transition-colors {{ 'bg-blue-600 text-white' if active == key else 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200' }}">{{ name }}</button>
+    {% endfor %}
+    <input type="date" name="day" value="{{ day_value }}" max="{{ day_value }}"
+           hx-get="/panel/wordcloud?range=day&room={{ room_id }}" hx-trigger="change" hx-include="this"
+           hx-target="#wordcloud-panel" hx-swap="outerHTML"
+           class="bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1.5 border border-slate-700 hover:bg-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer"
+           title="指定天">
+    <span class="text-slate-500 mx-1">区间</span>
+    {% for key, name in [('d3','近3天'),('d7','近7天'),('d14','近14天')] %}
+    <button hx-get="/panel/wordcloud?range={{ key }}&room={{ room_id }}" hx-target="#wordcloud-panel" hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded-lg transition-colors {{ 'bg-blue-600 text-white' if active == key else 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200' }}">{{ name }}</button>
+    {% endfor %}
+  </div>
+
+  <!-- 范围选择：按月/按年 -->
+  <div class="flex flex-wrap items-center gap-1.5 text-xs">
+    <span class="text-slate-500 mr-1">按月</span>
+    {% for key, name in [('month','本月'),('lastmonth','上月')] %}
+    <button hx-get="/panel/wordcloud?range={{ key }}&room={{ room_id }}" hx-target="#wordcloud-panel" hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded-lg transition-colors {{ 'bg-blue-600 text-white' if active == key else 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200' }}">{{ name }}</button>
+    {% endfor %}
+    <input type="month" name="month" value="{{ month_value }}" max="{{ this_month_key }}"
+           hx-get="/panel/wordcloud?range=month:custom&room={{ room_id }}" hx-trigger="change" hx-include="this"
+           hx-target="#wordcloud-panel" hx-swap="outerHTML"
+           class="bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1.5 border border-slate-700 hover:bg-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer"
+           title="指定月">
+    <span class="text-slate-500 mx-1">按年</span>
+    {% for key, name in [('year','今年'),('lastyear','去年')] %}
+    <button hx-get="/panel/wordcloud?range={{ key }}&room={{ room_id }}" hx-target="#wordcloud-panel" hx-swap="outerHTML"
+            class="px-3 py-1.5 rounded-lg transition-colors {{ 'bg-blue-600 text-white' if active == key else 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200' }}">{{ name }}</button>
+    {% endfor %}
+    <input type="number" name="year" value="{{ year_value }}" min="2000" max="{{ this_year }}"
+           hx-get="/panel/wordcloud?range=year:custom&room={{ room_id }}" hx-trigger="change" hx-include="this"
+           hx-target="#wordcloud-panel" hx-swap="outerHTML"
+           class="w-20 bg-slate-800 text-slate-300 text-xs rounded-lg px-2 py-1.5 border border-slate-700 hover:bg-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer"
+           title="指定年">
+  </div>
+
+  <!-- 词云主体 -->
+  <div id="wordcloud" class="mt-4 min-h-[220px] flex flex-wrap items-center justify-center gap-x-3 gap-y-1 leading-tight">
+    {% if words %}
+    {% for w in words %}
+    <span class="wc-word cursor-default" data-count="{{ w.count }}"
+          title="{{ w.word }}：{{ w.count }}次">{{ w.word }}</span>
+    {% endfor %}
+    {% else %}
+    <p class="py-10 text-center text-sm text-slate-500 w-full">该范围内暂无弹幕数据</p>
+    {% endif %}
+  </div>
+  <p class="mt-3 text-xs text-slate-500">字号越大出现次数越多 · 悬停查看具体次数 · 已过滤停用词、单字与纯数字</p>
+  <script>renderWordCloud();</script>
+</div>

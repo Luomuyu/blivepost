@@ -1872,3 +1872,39 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"播种群推送设置失败(房间{room_id}): {e}")
             return 0
+
+
+    # ========== 弹幕词云 ==========
+
+    async def get_danmaku_texts(self, room_ids=None, start_day=None,
+                                end_day=None, limit: int = 200_000) -> List[str]:
+        """词云用弹幕文本聚合（房间子库扇出；按时间范围取msg，限行保护）
+
+        Args:
+            room_ids: 指定房间列表（None=全部已知房间）
+            start_day: 起始自然日（默认今天）
+            end_day: 结束自然日（默认同start_day）
+            limit: 最多取的弹幕行数（防止超大范围拖垮内存）
+        """
+        start_day = start_day or local_now()
+        end_day = end_day or start_day
+        start = datetime(start_day.year, start_day.month, start_day.day)
+        end = datetime(end_day.year, end_day.month, end_day.day,
+                       23, 59, 59)
+        if room_ids is None:
+            room_ids = await self.list_room_ids()
+        texts: List[str] = []
+        try:
+            for rid in room_ids:
+                if len(texts) >= limit:
+                    break
+                async with self._event_session(int(rid)) as session:
+                    res = await session.execute(
+                        select(DanmakuRecord.msg).where(
+                            DanmakuRecord.timestamp >= start,
+                            DanmakuRecord.timestamp <= end)
+                        .limit(max(limit - len(texts), 0)))
+                    texts.extend(r[0] or "" for r in res.all())
+        except Exception as e:
+            logger.error(f"词云弹幕聚合失败: {e}")
+        return texts[:limit]

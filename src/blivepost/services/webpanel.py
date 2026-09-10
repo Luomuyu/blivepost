@@ -94,6 +94,7 @@ class WebPanel:
         "accounts": ("/accounts", "账号池"),
         "records": ("/records", "下播记录"),
         "trend": ("/trend", "收入趋势"),
+        "wordcloud": ("/wordcloud", "词云"),
         "groups": ("/groups", "群列表"),
     }
 
@@ -157,6 +158,7 @@ class WebPanel:
         app.router.add_post("/web/room/push_setting", self._action_group_push_setting)
         # 局部/数据
         app.router.add_get("/panel/trend", self._handle_trend)
+        app.router.add_get("/panel/wordcloud", self._handle_wordcloud)
         app.router.add_get("/api/status", self._handle_api)
         app.router.add_get("/api/history", self._handle_history)
         # 写操作（游客拒绝；登录用户可用）
@@ -713,6 +715,8 @@ class WebPanel:
             ctx["push_settings"] = await self._push_settings()
         if key == "trend":
             ctx.update(await self._trend_context("d30", ""))
+        if key == "wordcloud":
+            ctx.update(await self._wordcloud_context("today"))
         return ctx
 
     async def _push_settings(self) -> list:
@@ -1009,6 +1013,120 @@ class WebPanel:
         html = self._render("partials/trend.html", **ctx)
         return self._html_response(request, html)
 
+    async def _handle_wordcloud(self, request):
+        """词云局部（HTMX交换；游客只读可看）"""
+        room_raw = (request.query.get("room") or "").strip()
+        room_id = int(room_raw) if room_raw.isdigit() else None
+        ctx = await self._wordcloud_context(
+            request.query.get("range", "today"),
+            day_str=request.query.get("day", ""),
+            month_str=request.query.get("month", ""),
+            year_str=request.query.get("year", ""),
+            room_id=room_id)
+        html = self._render("partials/wordcloud.html", **ctx)
+        return self._html_response(request, html)
+
+    async def _wordcloud_context(self, range_key: str, day_str: str = "",
+                                 month_str: str = "", year_str: str = "",
+                                 room_id: Optional[int] = None) -> dict:
+        """
+        词云上下文：按天（今天/昨天/指定天）、近3/7/14天、按月（本月/上月/指定月）、
+        按年（今年/去年/指定年），可切全部/单独直播间
+
+        Returns:
+            dict: {label, words, total, room_id, active, day/month/year值, room_options}
+        """
+        today = datetime.now().date()
+        start = end = today
+        active = range_key or "today"
+        label = "今天"
+        day_value = today.strftime("%Y-%m-%d")
+        month_value = today.strftime("%Y-%m")
+        year_value = str(today.year)
+
+        def _month_bounds(y: int, m: int):
+            start_m = date(y, m, 1)
+            next_m = date(y + (m == 12), (m % 12) + 1, 1)
+            return start_m, _add_days(next_m, -1)
+
+        if range_key == "today":
+            label = "今天"
+        elif range_key == "yesterday":
+            start = end = _add_days(today, -1)
+            label = "昨天"
+        elif range_key == "day" and _parse_day(day_str):
+            start = end = _parse_day(day_str)
+            day_value = start.strftime("%Y-%m-%d")
+            active = "day"
+            label = f"{start.year}年{start.month}月{start.day}日"
+        elif range_key in ("d3", "d7", "d14"):
+            n = int(range_key[1:])
+            start = _add_days(today, -(n - 1))
+            label = f"近{n}天"
+        elif range_key == "month":
+            start, end = _month_bounds(today.year, today.month)
+            end = min(end, today)
+            label = f"{today.year}年{today.month}月"
+        elif range_key == "lastmonth":
+            first_this = today.replace(day=1)
+            last_prev = _add_days(first_this, -1)
+            start = last_prev.replace(day=1)
+            end = last_prev
+            label = f"{last_prev.year}年{last_prev.month}月"
+        elif range_key.startswith("month:") and _parse_month(month_str):
+            y, m = _parse_month(month_str)
+            start, end = _month_bounds(y, m)
+            end = min(end, today)
+            if start > today:
+                start = end = today
+            active = f"month:{month_str}"
+            month_value = month_str
+            label = f"{y}年{m}月"
+        elif range_key == "year":
+            start = date(today.year, 1, 1)
+            label = f"{today.year}年"
+        elif range_key == "lastyear":
+            start = date(today.year - 1, 1, 1)
+            end = date(today.year - 1, 12, 31)
+            label = f"{today.year - 1}年"
+        elif range_key.startswith("year:") and year_str.isdigit()                 and 2000 <= int(year_str) <= today.year:
+            y = int(year_str)
+            start = date(y, 1, 1)
+            end = min(date(y, 12, 31), today)
+            active = f"year:{year_str}"
+            year_value = year_str
+            label = f"{y}年"
+        else:
+            active = "today"
+
+        room_ids = [room_id] if room_id else None
+        texts = await self.db_service.get_danmaku_texts(
+            room_ids=room_ids, start_day=start, end_day=end)
+        from .wordcloud import build_wordcloud
+        words = await asyncio.get_running_loop().run_in_executor(
+            None, build_wordcloud, texts)
+        label += f" · 房间{room_id}" if room_id else ""
+
+        room_options = set()
+        if self.binding_store is not None:
+            try:
+                room_options.update(self.binding_store.get_monitored_room_ids())
+            except Exception:
+                pass
+        try:
+            room_options.update(await self.db_service.list_room_ids())
+        except Exception:
+            pass
+        return {
+            "label": label, "words": words, "total": len(texts),
+            "danmaku_count": len(texts),
+            "room_id": room_id, "active": active,
+            "day_value": day_value, "month_value": month_value,
+            "year_value": year_value,
+            "this_month_key": month_value, "this_year": str(today.year),
+            "room_options": sorted(room_options),
+        }
+
     async def _trend_context(self, range_key: str, month_str: str,
                              room_id: Optional[int] = None) -> dict:
         """
@@ -1145,3 +1263,11 @@ def _aggregate_monthly(daily: list) -> list:
         m["gift_gold"] = round(m["gift_gold"], 1)
         m["ship_gold"] = round(m["ship_gold"], 1)
     return [months[k] for k in sorted(months)]
+
+
+def _parse_day(text: str):
+    """YYYY-MM-DD→date（非法返回None）"""
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
