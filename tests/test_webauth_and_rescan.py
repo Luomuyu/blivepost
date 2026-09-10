@@ -129,9 +129,9 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
     resp = await panel._make_page_handler("overview")(Req())
     assert resp.status == 200
     body = resp.text
-    # HTMX自动刷新 + viewport + 机器人详情
-    assert "hx-trigger" in body and "viewport" in body
-    assert "bot" in body and "在线" in body  # 概览含机器人凭证状态
+    # viewport + 机器人详情 + 导航（自动刷新已按需求移除）
+    assert "viewport" in body
+    assert "bot" in body and "在线" in body
 
     # 直播监控页凭cookie放行（含群选项/房间表/手动刷新）
     class CookieReq:
