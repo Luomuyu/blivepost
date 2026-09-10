@@ -200,6 +200,8 @@ async def test_check_periodic_weekly(tmp_path):
     db = DatabaseManager(settings.database)
     await db.initialize()
     svc = DatabaseService(db)
+    await svc.seed_push_switches({"daily_report": True, "weekly_report": True,
+                                  "monthly_report": True})  # 群设置播种的全局来源
     store = BindingStore(svc)
     await store.load()
     await store.bind("G1", 100, 1)
@@ -234,6 +236,11 @@ class PushServiceStub:
 
     def send_message(self, message, room_id=None):
         return self.bot.push(message, ["G1"])
+
+    @staticmethod
+    def _groups(allowed):
+        from contextlib import nullcontext
+        return nullcontext()
 
 
 async def test_check_periodic_respects_flags(tmp_path):

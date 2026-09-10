@@ -119,14 +119,22 @@
                 <div><span class="text-slate-500">群成员人数：</span>{{ b.member_count if b.member_count is not none else 'NULL' }}</div>
               </div>
               <div class="mt-3 pt-2 border-t border-slate-700/60">
-                <span class="text-xs text-slate-500">推送设置（跟随全局）：</span>
-                {% for ps in push_settings %}
+                <div class="flex items-center flex-wrap gap-1">
+                  <span class="text-xs text-slate-500">推送设置（本群{{ '，已独立于全局' if b.has_custom else '，跟随全局' }}）：</span>
+                  {% if b.has_custom and (is_admin or current_user) %}
+                  <button onclick="resetGroupPush('{{ b.room_id }}', '{{ b.group_openid }}')"
+                          class="text-xs text-amber-500 hover:text-amber-400 mr-1">恢复跟随全局</button>
+                  {% endif %}
+                </div>
+                {% for ps in b.push_settings %}
                 {% set can_toggle = is_admin or (current_user and ps.allow_modify) %}
                 {% if can_toggle %}
-                <button onclick="toggleSwitch('{{ ps.name }}')" title="点击切换"
-                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs mr-1 {{ 'bg-emerald-500/10 text-emerald-400 hover:ring-1 hover:ring-emerald-400' if ps.on else 'bg-slate-600/30 text-slate-400 hover:ring-1 hover:ring-slate-400' }}">{{ ps.label }}：{{ '开' if ps.on else '关' }}</button>
+                <button onclick="toggleGroupSwitch('{{ b.room_id }}', '{{ b.group_openid }}', '{{ ps.name }}')"
+                        title="点击切换（{{ '本群独立设置' if ps.custom else '当前跟随全局' }}）"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs mr-1 {{ 'bg-emerald-500/10 text-emerald-400 hover:ring-1 hover:ring-emerald-400' if ps.on else 'bg-slate-600/30 text-slate-400 hover:ring-1 hover:ring-slate-400' }}">{{ ps.label }}{{ '·' if ps.custom }}：{{ '开' if ps.on else '关' }}</button>
                 {% else %}
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs mr-1 {{ 'bg-emerald-500/10 text-emerald-400' if ps.on else 'bg-slate-600/30 text-slate-400' }}">{{ ps.label }}：{{ '开' if ps.on else '关' }}</span>
+                <span title="{{ '本群独立设置' if ps.custom else '当前跟随全局' }}"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs mr-1 {{ 'bg-emerald-500/10 text-emerald-400' if ps.on else 'bg-slate-600/30 text-slate-400' }}">{{ ps.label }}{{ '·' if ps.custom }}：{{ '开' if ps.on else '关' }}</span>
                 {% endif %}
                 {% endfor %}
               </div>
@@ -313,6 +321,27 @@ document.addEventListener('click', e => {
     document.querySelectorAll('.push-dd').forEach(d => d.classList.add('hidden'));
   }
 });
+/* ===== 群独立推送开关（本群行缺省回落全局；403/401提示） ===== */
+async function toggleGroupSwitch(roomId, group, name){
+  const resp = await fetch('/web/room/push_setting', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({room_id: roomId, group_openid: group, name: name}).toString(),
+  });
+  if(resp.status === 401){ alert('请先登录（游客只读）'); return; }
+  if(resp.status === 403){ alert('该开关不允许前台修改'); return; }
+  location.reload();
+}
+async function resetGroupPush(roomId, group){
+  if(!confirm('恢复跟随全局将删除本群独立设置，确定？')) return;
+  const resp = await fetch('/web/room/push_setting', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: new URLSearchParams({room_id: roomId, group_openid: group, reset: '1'}).toString(),
+  });
+  if(resp.status === 401){ alert('请先登录（游客只读）'); return; }
+  location.reload();
+}
 /* ===== 全局推送开关（后台允许时前台可切；403/401提示） ===== */
 async function toggleSwitch(name){
   const resp = await fetch('/web/switch/toggle', {

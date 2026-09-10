@@ -123,6 +123,8 @@ class PushService:
         self.contact_store: Any = None
         # 当前推送所属全局开关名（子进程入队时随消息携带，主进程按运行时开关判定）
         self._switch_tag: Optional[str] = None
+        # 推送目标群覆盖（主进程消费者按群独立设置过滤后注入；None=按绑定解析）
+        self._groups_override: Optional[List[str]] = None
 
     @contextmanager
     def _switch(self, name: str):
@@ -132,6 +134,15 @@ class PushService:
             yield
         finally:
             self._switch_tag = None
+
+    @contextmanager
+    def _groups(self, allowed: Optional[List[str]]):
+        """限定一段推送的目标群（群独立设置过滤结果；None=不限定）"""
+        self._groups_override = allowed
+        try:
+            yield
+        finally:
+            self._groups_override = None
 
     @staticmethod
     def _render(template: str, fields: dict) -> Optional[str]:
@@ -169,7 +180,11 @@ class PushService:
             rid = int(room_id)
         except (TypeError, ValueError):
             return []
-        return self.binding_store.get_monitored_groups(rid)
+        groups = self.binding_store.get_monitored_groups(rid)
+        if self._groups_override is not None:
+            allow = set(self._groups_override)
+            groups = [g for g in groups if g in allow]
+        return groups
 
     def send_message(self, message: str, room_id=None, keyboard: Optional[dict] = None) -> bool:
         """

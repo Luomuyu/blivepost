@@ -90,7 +90,19 @@ class BindingStore:
             binding.uid = uid
 
         await self._db.save_binding(group_openid, room_id, uid, binding.monitored)
+        # 新绑定播种群独立推送设置（继承当前全局开关；幂等）
+        await self._seed_group_push_settings(room_id, [group_openid])
         return binding
+
+    async def _seed_group_push_settings(self, room_id: int, groups) -> None:
+        """为绑定群播种独立推送设置行（缺行才建，值继承全局开关）"""
+        try:
+            switches = await self._db.get_push_switches()
+            defaults = {name: info.get("enabled", False)
+                        for name, info in switches.items()}
+            await self._db.seed_group_push_settings(room_id, groups, defaults)
+        except Exception as e:
+            logger.error(f"播种群推送设置失败(房间{room_id}): {e}")
 
     async def unbind(self, group_openid: str, room_id: int) -> bool:
         """
@@ -112,6 +124,11 @@ class BindingStore:
             del self._bindings[group_openid]
 
         await self._db.delete_binding(group_openid, room_id)
+        # 解绑后清理该群对本房间的独立推送设置（重绑时重新继承全局）
+        try:
+            await self._db.reset_group_push_setting(room_id, group_openid)
+        except Exception as e:
+            logger.error(f"清理群推送设置失败(房间{room_id} 群{group_openid}): {e}")
         return True
 
     async def set_monitored(self, group_openid: str, room_id: int, monitored: bool) -> bool:
@@ -132,6 +149,8 @@ class BindingStore:
 
         binding.monitored = monitored
         await self._db.set_binding_monitored(group_openid, room_id, monitored)
+        if monitored:
+            await self._seed_group_push_settings(room_id, [group_openid])
         return True
 
     def get_binding(self, group_openid: str, room_id: int) -> Optional[Binding]:

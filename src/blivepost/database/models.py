@@ -424,3 +424,21 @@ class PushSwitchRecord(Base):
     allow_modify: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="前台可改0/1")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+
+
+class GroupPushSettingRecord(EventBase):
+    """群推送设置表（房间子库：每个绑定群对本房间各推送项的独立开关；
+    行缺省时回落全局开关，创建时默认继承全局）"""
+    __tablename__ = "group_push_setting"
+
+    group_openid: Mapped[str] = mapped_column(String(64), primary_key=True, comment="群openid")
+    anchor: Mapped[int] = mapped_column(Integer, default=0, comment="天选时刻推送")
+    guard_achievement: Mapped[int] = mapped_column(Integer, default=0, comment="大航海成就推送")
+    system_event: Mapped[int] = mapped_column(Integer, default=0, comment="系统事件推送")
+    room_change: Mapped[int] = mapped_column(Integer, default=0, comment="房间变更推送")
+    daily_report: Mapped[int] = mapped_column(Integer, default=0, comment="每日结算推送")
+    weekly_report: Mapped[int] = mapped_column(Integer, default=0, comment="每周结算推送")
+    monthly_report: Mapped[int] = mapped_column(Integer, default=0, comment="每月结算推送")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=local_now, onupdate=local_now, comment="更新时间")

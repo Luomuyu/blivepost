@@ -19,8 +19,12 @@ from .models import (
     SystemEventRecord, RoomChangeRecord, LiveStatusRecord, EventType, local_now,
     GroupBindingRecord, CookieAccountRecord, DynamicBindingRecord,
     FriendRecord, GroupRecord, StreamerRecord, LiveRoomRecord,
-    RoomDbRecord, WebUserRecord, PushSwitchRecord
+    RoomDbRecord, WebUserRecord, PushSwitchRecord, GroupPushSettingRecord
 )
+
+# 群独立推送设置覆盖的开关（与GroupPushSettingRecord列对应；动态监控为全局项不在其中）
+GROUP_PUSH_SWITCHES = ("anchor", "guard_achievement", "system_event", "room_change",
+                       "daily_report", "weekly_report", "monthly_report")
 from .room_store import RoomDbRegistry
 from ..utils.logger import get_logger
 
@@ -1778,3 +1782,93 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"更新推送开关失败: {e}")
             return False
+
+
+    # ========== 群独立推送设置（房间子库；行缺省回落全局开关） ==========
+
+    async def get_group_push_settings(self, room_id) -> Dict[str, Dict[str, bool]]:
+        """指定房间的全部群推送设置 {group: {switch: bool}}（房间子库）"""
+        try:
+            async with self._event_session(int(room_id)) as session:
+                res = await session.execute(select(GroupPushSettingRecord))
+                return {r.group_openid: {s: bool(getattr(r, s))
+                                         for s in GROUP_PUSH_SWITCHES}
+                        for r in res.scalars().all()}
+        except Exception as e:
+            logger.error(f"查询群推送设置失败(房间{room_id}): {e}")
+            return {}
+
+    async def get_group_push_setting(self, room_id,
+                                     group_openid: str) -> Optional[Dict[str, bool]]:
+        """单个群的独立推送设置（无行返回None=跟随全局）"""
+        try:
+            async with self._event_session(int(room_id)) as session:
+                res = await session.execute(select(GroupPushSettingRecord).where(
+                    GroupPushSettingRecord.group_openid == group_openid))
+                r = res.scalar_one_or_none()
+                if r is None:
+                    return None
+                return {s: bool(getattr(r, s)) for s in GROUP_PUSH_SWITCHES}
+        except Exception as e:
+            logger.error(f"查询群推送设置失败(房间{room_id} 群{group_openid}): {e}")
+            return None
+
+    async def set_group_push_setting(self, room_id, group_openid: str,
+                                     switch: str, enabled: bool) -> bool:
+        """翻转群独立开关（行缺省时创建；switch须属GROUP_PUSH_SWITCHES）"""
+        if switch not in GROUP_PUSH_SWITCHES:
+            return False
+        try:
+            async with self._event_session(int(room_id)) as session:
+                res = await session.execute(select(GroupPushSettingRecord).where(
+                    GroupPushSettingRecord.group_openid == group_openid))
+                r = res.scalar_one_or_none()
+                if r is None:
+                    r = GroupPushSettingRecord(group_openid=group_openid)
+                    session.add(r)
+                setattr(r, switch, 1 if enabled else 0)
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新群推送设置失败(房间{room_id} 群{group_openid}): {e}")
+            return False
+
+    async def reset_group_push_setting(self, room_id, group_openid: str) -> bool:
+        """删除群独立设置行（恢复跟随全局）"""
+        try:
+            async with self._event_session(int(room_id)) as session:
+                res = await session.execute(select(GroupPushSettingRecord).where(
+                    GroupPushSettingRecord.group_openid == group_openid))
+                r = res.scalar_one_or_none()
+                if r is None:
+                    return False
+                await session.delete(r)
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"重置群推送设置失败(房间{room_id} 群{group_openid}): {e}")
+            return False
+
+    async def seed_group_push_settings(self, room_id, groups, defaults: Dict[str, bool]) -> int:
+        """为房间缺行的绑定群播种独立设置（继承全局开关值）；返回播种行数（幂等）"""
+        if not groups:
+            return 0
+        try:
+            async with self._event_session(int(room_id)) as session:
+                res = await session.execute(select(GroupPushSettingRecord.group_openid))
+                existing = {r[0] for r in res.all()}
+                added = 0
+                for g in groups:
+                    if g in existing:
+                        continue
+                    session.add(GroupPushSettingRecord(
+                        group_openid=g,
+                        **{s: 1 if defaults.get(s) else 0 for s in GROUP_PUSH_SWITCHES}))
+                    added += 1
+                if added:
+                    await session.commit()
+                    logger.info(f"房间{room_id}播种群推送设置{added}行（继承全局）")
+                return added
+        except Exception as e:
+            logger.error(f"播种群推送设置失败(房间{room_id}): {e}")
+            return 0

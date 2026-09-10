@@ -256,6 +256,10 @@ async def test_daily_report_pushes_to_monitored_rooms(tmp_path):
     db = DatabaseManager(settings.database)
     await db.initialize()
     svc = DatabaseService(db)
+    await svc.seed_push_switches({"daily_report": True, "weekly_report": False,
+                                  "monthly_report": False, "anchor": False,
+                                  "guard_achievement": True, "system_event": True,
+                                  "room_change": False})  # 群设置播种的全局来源
     store = BindingStore(svc)
     await store.load()
     await store.bind("G1", 100, 1)

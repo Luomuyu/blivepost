@@ -575,11 +575,11 @@ async def test_admin_login_user_manage_and_switch(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_push_switch_seed_and_consumer_gate():
-    """开关播种幂等；消费者按DB运行时开关丢弃/放行带tag推送"""
+async def test_push_switch_seed_and_consumer_gate(tmp_path):
+    """开关播种幂等；消费者按群独立设置过滤（行值优先，缺行回落全局）"""
     from blivepost.core.manager import PushQueueConsumer
     settings = Settings()
-    settings.database.sqlite_path = str(tempfile_mkddir()) + "/t.db"
+    settings.database.sqlite_path = str(tmp_path / "t.db")
     db = DatabaseManager(settings.database)
     await db.initialize()
     svc = DatabaseService(db)
@@ -590,35 +590,53 @@ async def test_push_switch_seed_and_consumer_gate():
     assert await svc.get_push_switch_enabled("system_event", False) is True
     assert await svc.get_push_switch_enabled("daily_report", False) is False
 
-    sent = []
+    # 绑定群播种继承全局：两群anchor=关；随后手动开G1独立anchor
+    await svc.seed_group_push_settings(100, ["G1", "G2"], {"anchor": False})
+    own = await svc.get_group_push_setting(100, "G1")
+    assert own == {s: False for s in (
+        "anchor", "guard_achievement", "system_event", "room_change",
+        "daily_report", "weekly_report", "monthly_report")}
+    await svc.set_group_push_setting(100, "G1", "anchor", True)
+    assert (await svc.get_group_push_setting(100, "G1"))["anchor"] is True
 
-    class Bot:
-        async def send_group_message(self, content, **kw):
-            sent.append(content)
-            return {"ret": 0}
-    push = type("P", (object,), {})()
-    push.send_message = lambda content, room_id=None, keyboard=None: sent.append(content)
-    consumer = PushQueueConsumer(
-        None, push, db_service=svc,
-        switch_defaults={"anchor": True})  # config默认开，但DB关→丢弃
+    class Store:
+        def get_monitored_groups(self, rid):
+            return ["G1", "G2"]
 
-    item = {"type": "push", "room_id": 1, "content": "hello",
+    received = []
+
+    class Push:
+        @staticmethod
+        def _groups(allowed):
+            Push.last_allowed = allowed
+            from contextlib import nullcontext
+            return nullcontext()
+
+        def send_message(self, content, room_id=None, keyboard=None):
+            received.append(content)
+            return True
+
+    Push.last_allowed = "unset"
+    consumer = PushQueueConsumer(None, Push(), db_service=svc, binding_store=Store(),
+                                 switch_defaults={"anchor": True})
+    item = {"type": "push", "room_id": 100, "content": "hello",
             "media": None, "keyboard": None, "switch": "anchor"}
-    await consumer._handle(item)
-    assert sent == []  # DB开关关→丢弃
 
+    # G1独立开→收；G2缺行回落全局(关)→不收：限定群列表恰为[G1]
+    await consumer._handle(dict(item))
+    assert received == ["hello"]
+    assert Push.last_allowed == ["G1"]
+
+    # 全局开+两群都独立关→无人收
     await svc.set_push_switch("anchor", enabled=True)
-    await consumer._handle(item)
-    assert sent == ["hello"]  # DB开关开→放行
+    await svc.set_group_push_setting(100, "G1", "anchor", False)
+    await svc.seed_group_push_settings(100, ["G2"], {"anchor": True})
+    await svc.set_group_push_setting(100, "G2", "anchor", False)
+    assert await consumer._allowed_groups(100, "anchor") == []
 
-    # 无tag的push不检查开关（如开播/下播）
-    await svc.set_push_switch("anchor", enabled=False)
-    await consumer._handle({"type": "push", "room_id": 1, "content": "x",
+    # 无tag推送不受开关影响（override解除）
+    await consumer._handle({"type": "push", "room_id": 100, "content": "x",
                             "media": None, "keyboard": None, "switch": None})
-    assert sent == ["hello", "x"]
+    assert received[-1] == "x"
+    assert Push.last_allowed is None
     await db.close()
-
-
-def tempfile_mkddir():
-    import tempfile
-    return tempfile.mkdtemp()

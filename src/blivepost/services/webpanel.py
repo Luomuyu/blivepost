@@ -153,6 +153,8 @@ class WebPanel:
         app.router.add_get("/web/admin/export", self._handle_admin_export)
         # 全局开关（前台可改项：登录用户；管理员不受限）
         app.router.add_post("/web/switch/toggle", self._action_switch_toggle)
+        # 群独立推送设置（直播页群详情）
+        app.router.add_post("/web/room/push_setting", self._action_group_push_setting)
         # 局部/数据
         app.router.add_get("/panel/trend", self._handle_trend)
         app.router.add_get("/api/status", self._handle_api)
@@ -564,6 +566,39 @@ class WebPanel:
                     zf.write(f, arcname=str(f.relative_to(data_dir).as_posix()))
         return buf
 
+    # ========== 群独立推送设置（直播页群详情） ==========
+
+    async def _action_group_push_setting(self, request):
+        """切换本群独立推送开关；reset=1时删除行恢复跟随全局"""
+        denied = await self._require_login(request)
+        if denied is not None:
+            return denied
+        form = await request.post()
+        room_id = self._form_room(form)
+        group = str(form.get("group_openid", ""))
+        name = str(form.get("name", ""))
+        reset = str(form.get("reset", "")) == "1"
+        if room_id is None or not group:
+            return self._action_response()
+        if reset:
+            await self.db_service.reset_group_push_setting(room_id, group)
+            logger.info(f"面板重置群推送设置：房间{room_id} 群{group} 恢复跟随全局")
+            return self._action_response()
+        if name not in {n for n, _ in SWITCH_DEFS}:
+            return self._action_response()
+        # 前台用户需该开关全局allow_modify放行；管理员不受限
+        if not self._is_admin(request) and not self._web_token_ok(request):
+            switches = await self.db_service.get_push_switches()                 if self.db_service is not None else {}
+            if not switches.get(name, {}).get("allow_modify", False):
+                return web.Response(status=403, text="forbidden: 该开关不允许前台修改")
+        own = await self.db_service.get_group_push_setting(room_id, group)
+        current = bool(own and own.get(name))
+        new_state = not current
+        await self.db_service.set_group_push_setting(room_id, group, name, new_state)
+        logger.info(f"面板切换群推送设置：房间{room_id} 群{group} {name} → "
+                    f"{'开' if new_state else '关'}")
+        return self._action_response()
+
     # ========== 全局开关（前台可改项） ==========
 
     async def _action_switch_toggle(self, request):
@@ -627,17 +662,37 @@ class WebPanel:
                 })
             ctx["rooms"] = live_rooms
 
+            global_sw = {ps["name"]: ps for ps in await self._push_settings()}
             bindings = []
             for rec in await self.db_service.list_bindings():
                 if not rec.monitored:
                     continue  # 已停止的推送关系不入库也不展示
+                own = await self.db_service.get_group_push_setting(
+                    rec.room_id, rec.group_openid)
+                push_items = []
+                custom_any = False
+                for name, label in SWITCH_DEFS:
+                    if name == "dynamic_monitor":
+                        continue  # 动态监控为全局项，不随房间
+                    g = global_sw.get(name, {})
+                    glob_on = g.get("on", False)
+                    # custom=本群值偏离全局（行随绑定自动播种，偏离才视为独立设置）
+                    custom = own is not None and own[name] != glob_on
+                    custom_any = custom_any or custom
+                    push_items.append({
+                        "name": name, "label": label,
+                        "on": own[name] if own else glob_on,
+                        "custom": custom,
+                        "allow_modify": g.get("allow_modify", False),
+                    })
                 bindings.append({
                     "group_openid": rec.group_openid,
                     **self._group_info(groups_by_openid.get(rec.group_openid)),
                     "room_id": rec.room_id,
+                    "push_settings": push_items,
+                    "has_custom": custom_any,
                 })
             ctx["bindings"] = bindings
-            ctx["push_settings"] = await self._push_settings()
         if key == "dynamics":
             # 下半段：动态订阅的群绑定关系（群×UP，含群详情）
             groups_by_openid = {}

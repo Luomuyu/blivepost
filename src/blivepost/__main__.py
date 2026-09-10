@@ -391,6 +391,13 @@ async def main_async(
         if web_panel is not None:
             web_panel.group_refresher = group_refresher
 
+        # 旧库升级：为已监控绑定群播种独立推送设置行（继承全局开关，缺行才建）
+        g_defaults = {name: info.get("enabled", False)
+                      for name, info in (await db_service.get_push_switches()).items()}
+        for rid in binding_store.get_monitored_room_ids():
+            await db_service.seed_group_push_settings(
+                rid, binding_store.get_monitored_groups(rid), g_defaults)
+
         # 恢复上次运行中处于监控状态的房间与动态订阅
         await monitor_manager.restore(binding_store.get_monitored_room_ids())
         dynamic_ups = binding_store.get_dynamic_up_uids() \

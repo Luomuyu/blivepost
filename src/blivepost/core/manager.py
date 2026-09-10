@@ -330,6 +330,30 @@ class PushQueueConsumer:
         except Exception:
             return default
 
+    async def _allowed_groups(self, room_id, switch: str) -> Optional[list]:
+        """按群独立推送设置过滤收群（行存在用行值，缺省回落全局开关）
+
+        Returns:
+            Optional[list]: 允许收推送的群列表；无绑定存储时None（回落全局开关判定）
+        """
+        if self.binding_store is None:
+            return None
+        try:
+            rid = int(room_id) if room_id is not None else 0
+        except (TypeError, ValueError):
+            rid = 0
+        groups = self.binding_store.get_monitored_groups(rid)
+        if not groups:
+            return []
+        global_on = await self._switch_on(switch)
+        rows: dict = {}
+        if self.db_service is not None:
+            try:
+                rows = await self.db_service.get_group_push_settings(rid)
+            except Exception:
+                rows = {}
+        return [g for g in groups if (rows.get(g) or {}).get(switch, global_on)]
+
     def start(self) -> None:
         """启动消费循环（需在事件循环内调用）"""
         if self._task is None or self._task.done():
@@ -384,19 +408,26 @@ class PushQueueConsumer:
 
         elif kind == "push":
             switch = item.get("switch")
-            if switch and not await self._switch_on(switch):
-                logger.debug(f"全局推送开关 {switch} 已关闭，丢弃推送（房间{item.get('room_id')}）")
-                return
             room_id = item.get("room_id")
             media = item.get("media")
             content = item.get("content", "")
             keyboard = item.get("keyboard")
-            if media:
-                self.push_service.push_media_message(media, content, room_id=room_id,
-                                                     keyboard=keyboard)
-            else:
-                self.push_service.send_message(content, room_id=room_id,
-                                               keyboard=keyboard)
+            # 群独立设置过滤（行值优先，缺行回落全局开关）；无绑定存储时回落全局开关判定
+            allowed = await self._allowed_groups(room_id, switch) if switch else None
+            if allowed is not None and not allowed:
+                logger.debug(f"开关{switch}下房间{room_id}无启用推送的群，丢弃")
+                return
+            drop = allowed is None and switch and not await self._switch_on(switch)
+            if drop:
+                logger.debug(f"全局推送开关 {switch} 已关闭，丢弃推送（房间{room_id}）")
+                return
+            with self.push_service._groups(allowed):
+                if media:
+                    self.push_service.push_media_message(media, content, room_id=room_id,
+                                                         keyboard=keyboard)
+                else:
+                    self.push_service.send_message(content, room_id=room_id,
+                                                   keyboard=keyboard)
 
         elif kind == "not_login":
             await self._handle_not_login(item.get("room_id"))

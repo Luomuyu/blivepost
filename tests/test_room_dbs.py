@@ -339,3 +339,86 @@ async def test_dynamics_page_group_bindings(tmp_path):
     assert "墨翎_Moryin" in body
     assert 'data-key="G1-91156053"' in body
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_group_push_setting_lifecycle(tmp_path):
+    """群独立推送设置全生命周期：绑定播种继承全局/解绑清理/重绑重新继承"""
+    from blivepost.services.bindings import BindingStore
+
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    await svc.seed_push_switches({"anchor": True, "guard_achievement": True,
+                                  "system_event": True, "room_change": False,
+                                  "daily_report": False, "weekly_report": False,
+                                  "monthly_report": False, "dynamic_monitor": False})
+    store = BindingStore(svc)
+    await store.load()
+
+    # 绑定播种：行值继承全局开关（anchor开/room_change关）
+    await store.bind("G1", 100, 1)
+    own = await svc.get_group_push_setting(100, "G1")
+    assert own is not None
+    assert own["anchor"] is True and own["guard_achievement"] is True
+    assert own["room_change"] is False and own["monthly_report"] is False
+
+    # 独立翻转：本群可单独开room_change（全局仍关）
+    await svc.set_group_push_setting(100, "G1", "room_change", True)
+    assert (await svc.get_group_push_setting(100, "G1"))["room_change"] is True
+    assert await svc.get_push_switch_enabled("room_change", False) is False
+
+    # 幂等：重复播种不覆盖已有行
+    await svc.seed_group_push_settings(100, ["G1"], {"room_change": False})
+    assert (await svc.get_group_push_setting(100, "G1"))["room_change"] is True
+
+    # 解绑清理 → 重绑重新继承全局（room_change回到关）
+    await store.unbind("G1", 100)
+    assert await svc.get_group_push_setting(100, "G1") is None
+    await store.bind("G1", 100, 1)
+    assert (await svc.get_group_push_setting(100, "G1"))["room_change"] is False
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_live_page_group_push_settings_ctx(tmp_path):
+    """直播页群详情携带本群推送设置（custom标记）与前台改权限"""
+    from blivepost.services.bindings import BindingStore
+    from blivepost.services.webpanel import WebPanel
+
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    await svc.seed_push_switches({"anchor": True})
+    store = BindingStore(svc)
+    await store.load()
+    await store.bind("G1", 100, 1)
+    await store.set_monitored("G1", 100, True)
+    await svc.save_live_room_info(100, uid=9, title="t")
+
+    class Pool:
+        accounts = []
+    class MM:
+        def room_ids(self): return [100]
+        def has(self, rid): return True
+        def get_cookie_uid(self, rid): return 1
+        def get_account_rooms(self, uid): return [100]
+    panel = WebPanel(Pool(), MM(), None, store, svc, bot_client=None)
+
+    ctx = await panel._page_context("live")
+    b = ctx["bindings"][0]
+    items = {ps["name"]: ps for ps in b["push_settings"]}
+    assert "dynamic_monitor" not in items  # 全局项不随房间
+    assert items["anchor"]["on"] is True and items["anchor"]["custom"] is False
+    # 独立修改后ctx标记custom
+    await svc.set_group_push_setting(100, "G1", "anchor", False)
+    ctx2 = await panel._page_context("live")
+    b2 = ctx2["bindings"][0]
+    assert b2["has_custom"] is True
+    items2 = {ps["name"]: ps for ps in b2["push_settings"]}
+    assert items2["anchor"]["on"] is False and items2["anchor"]["custom"] is True
+    await db.close()

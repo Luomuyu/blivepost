@@ -100,12 +100,14 @@ class DailyReportJob:
             if await self._switch_on("weekly_report"):
                 start = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0,
                                                           microsecond=0)
-                count += await self._push_range("【每周结算】", start, now)
+                count += await self._push_range("【每周结算】", start, now,
+                                                switch="weekly_report")
         if self.monthly_enabled and now.day == 1:
             if await self._switch_on("monthly_report"):
                 start = (now - timedelta(days=now.day)).replace(day=1, hour=0, minute=0,
                                                                 second=0, microsecond=0)
-                count += await self._push_range("【每月结算】", start, now)
+                count += await self._push_range("【每月结算】", start, now,
+                                                switch="monthly_report")
         return count
 
     async def _switch_on(self, name: str) -> bool:
@@ -123,8 +125,9 @@ class DailyReportJob:
         except Exception:
             return default
 
-    async def _push_range(self, title: str, start: datetime, end: datetime) -> int:
-        """推送指定时间段各监控房间汇总"""
+    async def _push_range(self, title: str, start: datetime, end: datetime,
+                          switch: str = "daily_report") -> int:
+        """推送指定时间段各监控房间汇总（按群独立设置过滤收群）"""
         room_ids = self.binding_store.get_monitored_room_ids()
         count = 0
         for rid in room_ids:
@@ -133,12 +136,34 @@ class DailyReportJob:
                 if not self._has_data(summary):
                     continue
                 text = self._render(rid, summary, title=title)
-                self.push_service.send_message(text, room_id=rid)
-                count += 1
+                if await self._send_to_allowed(rid, switch, text):
+                    count += 1
             except Exception as e:
                 logger.error(f"房间 {rid} 周期结算推送失败: {e}")
         logger.info(f"{title.strip()}推送完成，共推送 {count} 个房间")
         return count
+
+    async def _send_to_allowed(self, rid: int, switch: str, text: str) -> bool:
+        """按群独立设置过滤后发送（行存在用行值，缺省回落全局开关）；无人收返回False"""
+        allowed = await self._allowed_groups(rid, switch)
+        if not allowed:
+            return False
+        with self.push_service._groups(allowed):
+            return bool(self.push_service.send_message(text, room_id=rid))
+
+    async def _allowed_groups(self, rid: int, switch: str) -> list:
+        """房间内启用该推送项的群（群独立设置优先，缺省回落全局开关）"""
+        groups = self.binding_store.get_monitored_groups(rid)
+        global_on = await self._switch_on(switch)
+        if not groups:
+            return []
+        rows: dict = {}
+        if self.db_service is not None:
+            try:
+                rows = await self.db_service.get_group_push_settings(rid)
+            except Exception:
+                rows = {}
+        return [g for g in groups if (rows.get(g) or {}).get(switch, global_on)]
 
     def _seconds_until_next(self) -> float:
         """距下一个推送时刻的秒数"""
@@ -177,8 +202,8 @@ class DailyReportJob:
                     skipped += 1
                     continue
                 text = self._render(rid, summary)
-                self.push_service.send_message(text, room_id=rid)
-                count += 1
+                if await self._send_to_allowed(rid, "daily_report", text):
+                    count += 1
             except Exception as e:
                 logger.error(f"房间 {rid} 每日结算推送失败: {e}")
 
