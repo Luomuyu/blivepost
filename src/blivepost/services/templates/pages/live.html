@@ -105,11 +105,7 @@
             <td class="px-5 py-2.5">{{ b.group_name }}</td>
             <td class="px-4 py-2.5 font-mono">{{ b.room_id }}</td>
             <td class="px-4 py-2.5">
-              {% if b.monitored %}
               <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-emerald-500/10 text-emerald-400">推送中</span>
-              {% else %}
-              <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-slate-600/30 text-slate-400">已停止</span>
-              {% endif %}
             </td>
           </tr>
           <tr class="grp-detail hidden border-t border-slate-800 bg-slate-800/30" data-group="{{ b.group_openid }}">
@@ -121,7 +117,12 @@
                 <div><span class="text-slate-500">群分类：</span>{{ b.category or 'NULL' }}</div>
                 <div><span class="text-slate-500">群标签：</span>{{ b.tags or 'NULL' }}</div>
                 <div><span class="text-slate-500">群成员人数：</span>{{ b.member_count if b.member_count is not none else 'NULL' }}</div>
-                <div class="col-span-2"><span class="text-slate-500">推送设置：</span>跟随全局设置（推送中/已停止见上方推送状态）</div>
+              </div>
+              <div class="mt-3 pt-2 border-t border-slate-700/60">
+                <span class="text-xs text-slate-500">推送设置（跟随全局）：</span>
+                {% for ps in push_settings %}
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs mr-1 {{ 'bg-emerald-500/10 text-emerald-400' if ps.on else 'bg-slate-600/30 text-slate-400' }}">{{ ps.label }}：{{ '开' if ps.on else '关' }}</span>
+                {% endfor %}
               </div>
             </td>
           </tr>
@@ -159,13 +160,20 @@ function editorRow(roomId){
 function togglePushEditor(roomId){
   const row = editorRow(roomId);
   if(!row) return;
-  /* 打开某行时收起其他已展开行 */
-  document.querySelectorAll('tr.push-editor:not([data-editor="' + roomId + '"])').forEach(r => r.classList.add('hidden'));
-  row.classList.toggle('hidden');
+  /* 只允许一个展开：先收起其他编辑行并同步状态集合 */
+  document.querySelectorAll('tr.push-editor').forEach(r => { if (r !== row) { r.classList.add('hidden'); window.__liveOpenEditors.delete(String(r.dataset.editor)); } });
+  const opening = row.classList.contains('hidden');
+  if(opening){
+    row.classList.remove('hidden');
+    window.__liveOpenEditors.add(String(roomId));
+  }
 }
 function collapsePushEditor(roomId){
   const row = editorRow(roomId);
-  if(row) row.classList.add('hidden');
+  if(row){
+    row.classList.add('hidden');
+    window.__liveOpenEditors.delete(String(roomId));
+  }
 }
 function togglePushDropdown(roomId){
   const row = editorRow(roomId);
@@ -204,7 +212,14 @@ function clearPushSelection(roomId){
 /* ===== 群绑定状态：点击行展开群详情 ===== */
 function toggleGroupDetail(openid){
   const row = document.querySelector('tr.grp-detail[data-group="' + openid + '"]');
-  if(row) row.classList.toggle('hidden');
+  if(!row) return;
+  /* 只允许一个展开：先收起其他详情行并同步状态集合 */
+  document.querySelectorAll('tr.grp-detail').forEach(r => { if (r !== row) { r.classList.add('hidden'); window.__liveOpenDetails.delete(String(r.dataset.group)); } });
+  const opening = row.classList.contains('hidden');
+  if(opening){
+    row.classList.remove('hidden');
+    window.__liveOpenDetails.add(openid);
+  }
 }
 
 /* ===== 删除模式 ===== */
@@ -239,7 +254,11 @@ function enterAddMode(){
   document.getElementById('add-dialog').showModal();
 }
 
-/* ===== 行点击：删除模式下忽略，否则展开推送编辑 ===== */
+/* 展开状态（跨30秒自动刷新保留；增删改后按需收起） */
+window.__liveOpenEditors = window.__liveOpenEditors || new Set();
+window.__liveOpenDetails = window.__liveOpenDetails || new Set();
+
+/* ===== 行点击：删除模式下忽略，否则展开推送编辑（同时仅一个） ===== */
 document.querySelectorAll('.room-row').forEach(row => {
   row.addEventListener('click', () => {
     if(document.body.classList.contains('delete-mode')) return;

@@ -64,6 +64,7 @@ class WebPanel:
         token: str = "",
         bot_client=None,
         group_refresher=None,
+        message_settings=None,
     ):
         self.cookie_pool = cookie_pool
         self.monitor_manager = monitor_manager
@@ -75,6 +76,7 @@ class WebPanel:
         self.token = token
         self.bot_client = bot_client
         self.group_refresher = group_refresher
+        self.message_settings = message_settings
         self._runner: Optional[web.AppRunner] = None
         # 扫码登录状态（单会话）：{"status", "message", "qr", "result"}
         self._login_state: Optional[dict] = None
@@ -277,6 +279,8 @@ class WebPanel:
 
             bindings = []
             for rec in await self.db_service.list_bindings():
+                if not rec.monitored:
+                    continue  # 已停止的推送关系不入库也不展示
                 g = groups_by_openid.get(rec.group_openid)
                 tags = None
                 if g is not None and g.tags:
@@ -293,9 +297,21 @@ class WebPanel:
                     "tags": tags,
                     "member_count": g.member_count if g else None,
                     "room_id": rec.room_id,
-                    "monitored": bool(rec.monitored),
                 })
             ctx["bindings"] = bindings
+            ms = self.message_settings
+            def _on(attr):
+                return bool(getattr(ms, attr, False)) if ms is not None else False
+            ctx["push_settings"] = [
+                {"label": "天选时刻", "on": _on("anchor")},
+                {"label": "大航海成就", "on": _on("guard_achievement")},
+                {"label": "系统事件", "on": _on("system_event")},
+                {"label": "房间变更", "on": _on("room_change")},
+                {"label": "动态监控", "on": _on("dynamic_monitor")},
+                {"label": "每日结算", "on": _on("daily_report")},
+                {"label": "每周结算", "on": _on("weekly_report")},
+                {"label": "每月结算", "on": _on("monthly_report")},
+            ]
         if key == "trend":
             ctx.update(await self._trend_context("d30", ""))
         return ctx
