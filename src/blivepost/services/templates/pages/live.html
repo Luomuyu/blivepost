@@ -1,4 +1,4 @@
-<div id="page" hx-get="/live" hx-trigger="every 30s" hx-target="#page" hx-swap="outerHTML">
+<div id="page" hx-get="/live" hx-trigger="every 30s [!document.body.classList.contains('ui-busy')]" hx-target="#page" hx-swap="outerHTML">
   {% include 'partials/nav.html' %}
   <div class="flex items-center justify-between mb-4">
     <h1 class="text-base font-semibold text-slate-300">直播监控 <span class="text-slate-500 text-sm font-normal">{{ rooms | length }}个直播间</span></h1>
@@ -160,19 +160,23 @@ function editorRow(roomId){
 function togglePushEditor(roomId){
   const row = editorRow(roomId);
   if(!row) return;
-  /* 只允许一个展开：先收起其他编辑行并同步状态集合 */
+  /* 只允许一个展开：先收起其他编辑行并同步状态集合；编辑期间暂停自动刷新 */
   document.querySelectorAll('tr.push-editor').forEach(r => { if (r !== row) { r.classList.add('hidden'); window.__liveOpenEditors.delete(String(r.dataset.editor)); } });
   const opening = row.classList.contains('hidden');
   if(opening){
     row.classList.remove('hidden');
     window.__liveOpenEditors.add(String(roomId));
   }
+  document.body.classList.toggle('ui-busy', window.__liveOpenEditors.size > 0);
 }
 function collapsePushEditor(roomId){
   const row = editorRow(roomId);
   if(row){
     row.classList.add('hidden');
     window.__liveOpenEditors.delete(String(roomId));
+  }
+  if(window.__liveOpenEditors.size === 0){
+    document.body.classList.remove('ui-busy');
   }
 }
 function togglePushDropdown(roomId){
@@ -225,12 +229,14 @@ function toggleGroupDetail(openid){
 /* ===== 删除模式 ===== */
 function enterDeleteMode(){
   document.body.classList.add('delete-mode');
+  document.body.classList.add('ui-busy');
   document.querySelectorAll('.del-col, .del-check').forEach(el => el.classList.remove('hidden'));
   document.getElementById('btn-del').classList.add('hidden');
   updateDelConfirm();
 }
 function cancelDeleteMode(){
   document.body.classList.remove('delete-mode');
+  document.body.classList.remove('ui-busy');
   document.querySelectorAll('.del-col, .del-check').forEach(el => el.classList.add('hidden'));
   document.querySelectorAll('.del-check').forEach(el => el.checked = false);
   document.getElementById('btn-del').classList.remove('hidden');
@@ -257,6 +263,24 @@ function enterAddMode(){
 /* 展开状态（跨30秒自动刷新保留；增删改后按需收起） */
 window.__liveOpenEditors = window.__liveOpenEditors || new Set();
 window.__liveOpenDetails = window.__liveOpenDetails || new Set();
+
+/* 30秒自动刷新等交换后，恢复此前的展开状态（编辑行/群详情） */
+document.body.addEventListener('htmx:afterSwap', e => {
+  if (e.target.id !== 'page') return;
+  window.__liveOpenEditors.forEach(roomId => {
+    const row = editorRow(roomId);
+    if (row) row.classList.remove('hidden');
+    else window.__liveOpenEditors.delete(roomId);
+  });
+  window.__liveOpenDetails.forEach(openid => {
+    const row = document.querySelector('tr.grp-detail[data-group="' + openid + '"]');
+    if (row) row.classList.remove('hidden');
+    else window.__liveOpenDetails.delete(openid);
+  });
+  if(window.__liveOpenEditors.size === 0){
+    document.body.classList.remove('ui-busy');
+  }
+});
 
 /* ===== 行点击：删除模式下忽略，否则展开推送编辑（同时仅一个） ===== */
 document.querySelectorAll('.room-row').forEach(row => {
