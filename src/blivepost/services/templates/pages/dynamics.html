@@ -83,11 +83,18 @@
 </div>
 
 <script>
+/* ===== 添加弹窗 ===== */
+function enterDynAddMode(){
+  document.getElementById('dyn-add-dialog').showModal();
+}
+
 /* ===== 删除模式 ===== */
 function enterDynDeleteMode(){
   document.body.classList.add('dyn-delete-mode');
   document.querySelectorAll('.dyn-del-col, .dyn-del-check').forEach(el => el.classList.remove('hidden'));
   document.getElementById('btn-dyn-del').classList.add('hidden');
+  document.getElementById('btn-dyn-del-confirm').classList.remove('hidden');
+  document.getElementById('btn-dyn-del-cancel').classList.remove('hidden');
   updateDynDelConfirm();
 }
 function cancelDynDeleteMode(){

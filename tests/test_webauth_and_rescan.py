@@ -144,6 +144,16 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
     assert "/web/room/add" in resp2.text and "/web/room/push" in resp2.text
     assert "/web/room/delete" in resp2.text
 
+    # 回归：删除模式必须解除确认/取消按钮的hidden（曾漏移除导致按钮永不出现）
+    assert "btn-del-confirm').classList.remove('hidden')" in resp2.text
+    assert "btn-del-cancel').classList.remove('hidden')" in resp2.text
+
+    # 动态监控页：添加按钮的处理函数必须存在（回归：enterDynAddMode曾未定义致点击无响应）
+    resp_dyn = await panel._make_page_handler("dynamics")(CookieReq())
+    assert resp_dyn.status == 200
+    assert "function enterDynAddMode" in resp_dyn.text
+    assert "btn-dyn-del-confirm').classList.remove('hidden')" in resp_dyn.text
+
     # 趋势局部：12个月按月汇总模式
     class MonthReq:
         query = {"range": "12m"}

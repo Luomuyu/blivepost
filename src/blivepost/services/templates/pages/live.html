@@ -242,6 +242,8 @@ function enterDeleteMode(){
   document.body.classList.add('ui-busy');
   document.querySelectorAll('.del-col, .del-check').forEach(el => el.classList.remove('hidden'));
   document.getElementById('btn-del').classList.add('hidden');
+  document.getElementById('btn-del-confirm').classList.remove('hidden');
+  document.getElementById('btn-del-cancel').classList.remove('hidden');
   updateDelConfirm();
 }
 function cancelDeleteMode(){
