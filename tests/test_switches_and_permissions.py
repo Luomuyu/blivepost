@@ -100,19 +100,27 @@ class AchievementInfo:
     second_line_content = "舰队<%壮大%>"
 
 
-def test_guard_achievement_switch():
-    bot = RecordingBot()
+def test_guard_achievement_forwards_with_switch_tag():
+    """第五十九批后开关在主进程消费端按DB运行时判定：handler恒转发并携带开关tag"""
+    from blivepost.core.manager import QueuePushService
 
-    h_on = Ctx(make_settings(guard_achievement=True), bot).handler
-    h_on._on_guard_achievement(None, AchievementInfo())
-    assert len(bot.text) == 1
-    assert "大航海成就" in bot.text[0][0]
+    captured = []
 
-    # 开关关闭：不推送
-    bot2 = RecordingBot()
-    h_off = Ctx(make_settings(guard_achievement=False), bot2).handler
-    h_off._on_guard_achievement(None, AchievementInfo())
-    assert len(bot2.text) == 0
+    class FakeQueue:
+        def put(self, item, timeout=5):
+            captured.append(item)
+
+    # handler用QueuePushService：无论config开关如何都入队且tag=guard_achievement
+    for flag in (True, False):
+        captured.clear()
+        settings = make_settings(guard_achievement=flag)
+        ps = QueuePushService(settings, FakeQueue(), 23058)
+        h = Ctx(settings, RecordingBot()).handler
+        h.push_service = ps
+        h._on_guard_achievement(None, AchievementInfo())
+        assert len(captured) == 1
+        assert captured[0]["switch"] == "guard_achievement"
+        assert "大航海成就" in captured[0]["content"]
 
 
 def test_system_event_switch():

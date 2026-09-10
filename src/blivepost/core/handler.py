@@ -356,10 +356,9 @@ class BaseEventHandler:
         """天选抽奖回调"""
         logger.info(f"天选抽奖：礼物:{message.award_name}，弹幕:{message.danmu}，要求:{message.require_text}")
 
-        if self.message_settings.anchor:
-            self.push_service.push_anchor(
-                self.room_id_str, message.award_name, message.danmu, message.require_text
-            )
+        self.push_service.push_anchor(
+            self.room_id_str, message.award_name, message.danmu, message.require_text
+        )
 
         if self.db_service:
             self._async_save(
@@ -407,8 +406,7 @@ class BaseEventHandler:
         )
         logger.info(f"大航海成就：{content}")
 
-        if self.message_settings.guard_achievement:
-            self.push_service.push_guard_achievement(self.room_id_str, content)
+        self.push_service.push_guard_achievement(self.room_id_str, content)
         if self.db_service:
             self._async_save(
                 self.db_service.save_guard_achievement(
@@ -425,8 +423,7 @@ class BaseEventHandler:
     ) -> None:
         """直播切断回调"""
         logger.warning(f"直播被切断，原因：{info.msg}")
-        if self.message_settings.system_event:
-            self.push_service.push_cut_off(self.room_id_str, info.msg)
+        self.push_service.push_cut_off(self.room_id_str, info.msg)
         if self.db_service:
             self._async_save(
                 self.db_service.save_cut_off(
@@ -442,8 +439,7 @@ class BaseEventHandler:
     ) -> None:
         """收到警告回调"""
         logger.warning(f"收到警告，原因：{info.msg}")
-        if self.message_settings.system_event:
-            self.push_service.push_warning(self.room_id_str, info.msg)
+        self.push_service.push_warning(self.room_id_str, info.msg)
         if self.db_service:
             self._async_save(
                 self.db_service.save_warning(
@@ -477,8 +473,7 @@ class BaseEventHandler:
     ) -> None:
         """禁言回调"""
         logger.info(f"{info.uname}[{info.uid}]被禁言")
-        if self.message_settings.system_event:
-            self.push_service.push_room_block(self.room_id_str, info.uname, info.uid)
+        self.push_service.push_room_block(self.room_id_str, info.uname, info.uid)
         if self.db_service:
             self._async_save(
                 self.db_service.save_ban(
@@ -495,8 +490,7 @@ class BaseEventHandler:
     ) -> None:
         """设置房管回调"""
         logger.info(f"[{info.uid}]被设为房管")
-        if self.message_settings.system_event:
-            self.push_service.push_admin_change(self.room_id_str, info.uid, revoked=False)
+        self.push_service.push_admin_change(self.room_id_str, info.uid, revoked=False)
         if self.db_service:
             self._async_save(
                 self.db_service.save_admin_set(
@@ -512,8 +506,7 @@ class BaseEventHandler:
     ) -> None:
         """撤销房管回调"""
         logger.info(f"[{info.uid}]被撤销房管")
-        if self.message_settings.system_event:
-            self.push_service.push_admin_change(self.room_id_str, info.uid, revoked=True)
+        self.push_service.push_admin_change(self.room_id_str, info.uid, revoked=True)
         if self.db_service:
             self._async_save(
                 self.db_service.save_admin_revoke(
@@ -529,11 +522,10 @@ class BaseEventHandler:
     ) -> None:
         """房间信息变更回调"""
         logger.info(f"直播间信息更新：标题: {info.title}, 分区: {info.parent_area_name}-{info.area_name}")
-        if self.message_settings.room_change:
-            self.push_service.push_room_change(
-                self.room_id_str, info.title,
-                info.parent_area_name, info.area_name
-            )
+        self.push_service.push_room_change(
+            self.room_id_str, info.title,
+            info.parent_area_name, info.area_name
+        )
         if self.db_service:
             self._async_save(
                 self.db_service.save_room_change(

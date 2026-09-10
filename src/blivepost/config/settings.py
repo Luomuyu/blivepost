@@ -51,6 +51,9 @@ class MessageSettings:
     web_host: str = "127.0.0.1"
     web_port: int = 8080
     web_token: str = ""
+    # Web后台管理员（config设置；口令非空才启用后台登录，登录后可管用户/推送开关/导出）
+    web_admin_user: str = "admin"
+    web_admin_password: str = ""
     # 数据保留策略：0=永久保留不删除（设计决策，见PROJECT.md）；>0为保留天数（预留）
     data_retention_days: int = 0
     db_size_warn_mb: int = 500
@@ -188,6 +191,8 @@ class Settings:
                 web_host=str(setting_data.get("web_host", "127.0.0.1")),
                 web_port=int(setting_data.get("web_port", 8080)),
                 web_token=str(setting_data.get("web_token", "")),
+                web_admin_user=str(setting_data.get("web_admin_user", "admin")),
+                web_admin_password=str(setting_data.get("web_admin_password", "")),
                 data_retention_days=int(setting_data.get("data_retention_days", 0)),
                 db_size_warn_mb=int(setting_data.get("db_size_warn_mb", 500)),
                 ignore_cmds=setting_data.get("ignore_cmds", []),
@@ -255,7 +260,9 @@ Setting: # 消息推送设置
   web_panel: "N" # Web状态面板 (只读, 默认仅本机访问)
   web_host: "127.0.0.1" # Web面板监听地址
   web_port: 8080 # Web面板端口
-  web_token: "" # Web面板访问令牌 (留空不鉴权; 设置后需 ?token= 或 X-Web-Token 头)
+  web_token: "" # Web面板管理员快捷令牌 (设置后 ?token= 即管理员登录, 免输账号密码)
+  web_admin_user: "admin" # Web后台管理员账号 (管理员来自config不入库)
+  web_admin_password: "" # Web后台管理员口令 (非空才启用登录与后台; 前台用户由后台添加)
   data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)
   db_size_warn_mb: 500 # 数据库体积预警阈值MB (超过时私聊提醒管理员, 0=不提醒)
   ignore_cmds: [] # 忽略的未知命令列表 (不打印日志)

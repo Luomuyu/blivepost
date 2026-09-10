@@ -135,25 +135,37 @@ def _full_collect():
 
 
 @pytest.mark.asyncio
-async def test_panel_token_required():
-    panel = _panel(token="SECRET")
+async def test_panel_guest_renders_credentials():
+    """新鉴权模型：页面公开（游客只读），概览含凭证与在线状态"""
+    panel = _panel()
+    panel._collect = lambda: _full_collect_async()
+
     from aiohttp.test_utils import make_mocked_request
     req = make_mocked_request("GET", "/")
     resp = await panel._make_page_handler("overview")(req)
-    assert resp.status == 401
+    assert resp.status == 200
+    body = resp.text
+    assert "token剩余" in body and "在线" in body
+    assert "游客" in body  # 默认游客身份，可点击登录
 
 
 @pytest.mark.asyncio
-async def test_panel_token_ok_renders_credentials(monkeypatch):
+async def test_panel_token_quick_login():
+    """?token=快捷令牌→管理员会话并重定向"""
     panel = _panel(token="SECRET")
     panel._collect = lambda: _full_collect_async()
 
     from aiohttp.test_utils import make_mocked_request
     req = make_mocked_request("GET", "/?token=SECRET")
     resp = await panel._make_page_handler("overview")(req)
-    assert resp.status == 200
-    body = resp.text
-    assert "token剩余" in body and "在线" in body
+    assert resp.status == 302
+    sid = next(iter(panel._sessions))
+    assert panel._sessions[sid]["admin"] is True
+    # 携会话渲染
+    req2 = make_mocked_request("GET", "/", headers={"Cookie": f"blivepost_sid={sid}"})
+    resp2 = await panel._make_page_handler("overview")(req2)
+    assert resp2.status == 200
+    assert "后台" in resp2.text
 
 
 async def _full_collect_async():

@@ -19,7 +19,7 @@ from .models import (
     SystemEventRecord, RoomChangeRecord, LiveStatusRecord, EventType, local_now,
     GroupBindingRecord, CookieAccountRecord, DynamicBindingRecord,
     FriendRecord, GroupRecord, StreamerRecord, LiveRoomRecord,
-    RoomDbRecord
+    RoomDbRecord, WebUserRecord, PushSwitchRecord
 )
 from .room_store import RoomDbRegistry
 from ..utils.logger import get_logger
@@ -1629,3 +1629,152 @@ class DatabaseService:
             moved += len(rows)
             logger.info(f"迁移{table.name}: 已搬移{moved}行")
         return moved
+
+
+    # ========== Web面板：前台用户与全局推送开关 ==========
+
+    def sqlite_path(self) -> str:
+        """主库文件路径（用于后台数据导出；由DatabaseConfig提供）"""
+        return self.db_manager.config.sqlite_path
+
+    async def create_web_user(self, username: str, password_hash: str) -> bool:
+        """新建前台用户（用户名唯一）；已存在返回False"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(WebUserRecord).where(
+                    WebUserRecord.username == username))
+                if res.scalar_one_or_none() is not None:
+                    return False
+                session.add(WebUserRecord(username=username,
+                                          password_hash=password_hash))
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"创建Web用户失败: {e}")
+            return False
+
+    async def get_web_user(self, username: str) -> Optional[dict]:
+        """按用户名查询前台用户（None=不存在）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(WebUserRecord).where(
+                    WebUserRecord.username == username))
+                record = res.scalar_one_or_none()
+                if record is None:
+                    return None
+                return {"username": record.username,
+                        "password_hash": record.password_hash,
+                        "created_at": record.created_at}
+        except Exception as e:
+            logger.error(f"查询Web用户失败: {e}")
+            return None
+
+    async def list_web_users(self) -> List[dict]:
+        """全部前台用户（按创建时间升序）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(
+                    select(WebUserRecord).order_by(WebUserRecord.created_at))
+                return [{"username": r.username, "created_at": r.created_at}
+                        for r in res.scalars().all()]
+        except Exception as e:
+            logger.error(f"列出Web用户失败: {e}")
+            return []
+
+    async def update_web_user_password(self, username: str,
+                                       password_hash: str) -> bool:
+        """重置前台用户口令（用户不存在返回False）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(WebUserRecord).where(
+                    WebUserRecord.username == username))
+                record = res.scalar_one_or_none()
+                if record is None:
+                    return False
+                record.password_hash = password_hash
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"重置Web用户口令失败: {e}")
+            return False
+
+    async def delete_web_user(self, username: str) -> bool:
+        """删除前台用户"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(WebUserRecord).where(
+                    WebUserRecord.username == username))
+                record = res.scalar_one_or_none()
+                if record is None:
+                    return False
+                await session.delete(record)
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"删除Web用户失败: {e}")
+            return False
+
+    async def seed_push_switches(self, defaults: Dict[str, bool]) -> None:
+        """播种全局推送开关（仅插入缺失行；已有行不覆盖——后台修改优先）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                for name, enabled in defaults.items():
+                    res = await session.execute(select(PushSwitchRecord).where(
+                        PushSwitchRecord.name == name))
+                    if res.scalar_one_or_none() is None:
+                        session.add(PushSwitchRecord(name=name,
+                                                     enabled=1 if enabled else 0,
+                                                     allow_modify=0))
+                await session.commit()
+        except Exception as e:
+            logger.error(f"播种推送开关失败: {e}")
+
+    async def get_push_switches(self) -> Dict[str, Dict[str, bool]]:
+        """全部推送开关 {name: {enabled, allow_modify}}（缺行时不含）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(PushSwitchRecord))
+                return {r.name: {"enabled": bool(r.enabled),
+                                 "allow_modify": bool(r.allow_modify)}
+                        for r in res.scalars().all()}
+        except Exception as e:
+            logger.error(f"查询推送开关失败: {e}")
+            return {}
+
+    async def get_push_switch_enabled(self, name: str,
+                                      default: bool = False) -> bool:
+        """单个推送开关状态（行缺失回退default）"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(PushSwitchRecord.enabled).where(
+                    PushSwitchRecord.name == name))
+                row = res.first()
+                return bool(row[0]) if row is not None else default
+        except Exception as e:
+            logger.error(f"查询推送开关失败: {e}")
+            return default
+
+    async def set_push_switch(self, name: str, enabled: Optional[bool] = None,
+                              allow_modify: Optional[bool] = None) -> bool:
+        """更新推送开关（行缺失则按给定值或默认关创建）；有变更返回True"""
+        try:
+            async with self.db_manager.get_session() as session:
+                res = await session.execute(select(PushSwitchRecord).where(
+                    PushSwitchRecord.name == name))
+                record = res.scalar_one_or_none()
+                if record is None:
+                    record = PushSwitchRecord(
+                        name=name,
+                        enabled=1 if enabled else 0,
+                        allow_modify=1 if allow_modify else 0)
+                    session.add(record)
+                else:
+                    if enabled is not None:
+                        record.enabled = 1 if enabled else 0
+                    if allow_modify is not None:
+                        record.allow_modify = 1 if allow_modify else 0
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新推送开关失败: {e}")
+            return False

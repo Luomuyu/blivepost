@@ -25,6 +25,8 @@ ENV_MAP: Dict[str, str] = {
     "BLIVEPOST_ADMIN_MAIN_OPENIDS": "admin.main_openids",
     "BLIVEPOST_SESSDATA": "auth.sessdata",
     "BLIVEPOST_WEB_TOKEN": "message.web_token",
+    "BLIVEPOST_WEB_ADMIN_USER": "message.web_admin_user",
+    "BLIVEPOST_WEB_ADMIN_PASSWORD": "message.web_admin_password",
     "BLIVEPOST_WEB_PORT": "message.web_port",
     "BLIVEPOST_DB_TYPE": "database.type",
     "BLIVEPOST_DB_HOST": "database.host",

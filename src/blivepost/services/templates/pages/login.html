@@ -1,0 +1,25 @@
+<div id="page">
+  <div class="max-w-sm mx-auto mt-10 mb-16">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+      <h1 class="text-base font-semibold text-slate-300 mb-1">登录</h1>
+      <p class="text-xs text-slate-500 mb-5">游客仅可浏览只读数据；登录后可进行操作{% if admin_enabled %}，管理员可进入后台{% endif %}</p>
+      {% if error == "1" %}
+      <div class="mb-4 px-3 py-2 rounded-lg bg-red-500/10 text-red-400 text-xs">用户名或密码错误</div>
+      {% elif error == "2" %}
+      <div class="mb-4 px-3 py-2 rounded-lg bg-amber-500/10 text-amber-500 text-xs">该页面需要管理员权限，请先登录</div>
+      {% endif %}
+      <form method="post" action="/web/login">
+        <label class="block text-xs text-slate-500 mb-1">用户名</label>
+        <input name="username" required autocomplete="username"
+               class="w-full bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 mb-3">
+        <label class="block text-xs text-slate-500 mb-1">密码</label>
+        <input name="password" type="password" required autocomplete="current-password"
+               class="w-full bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 mb-5">
+        <button type="submit"
+                class="w-full px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium">登录</button>
+      </form>
+      <a href="/" hx-get="/" hx-target="#page" hx-swap="outerHTML" hx-push-url="/"
+         class="block text-center text-xs text-slate-500 hover:text-slate-300 mt-4">继续以游客身份浏览</a>
+    </div>
+  </div>
+</div>

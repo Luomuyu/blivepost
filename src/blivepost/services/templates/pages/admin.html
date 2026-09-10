@@ -1,0 +1,136 @@
+<div id="page">
+  {% include 'partials/nav.html' %}
+  <h1 class="text-base font-semibold text-slate-300 mb-4">管理后台 <span class="text-slate-500 text-sm font-normal">仅管理员可见</span></h1>
+
+  <!-- 用户管理 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-5">
+    <h2 class="font-semibold text-sm text-slate-300 mb-3">前台用户</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-4 py-2 font-medium">用户名</th>
+            <th class="px-4 py-2 font-medium">创建时间</th>
+            <th class="px-4 py-2 font-medium w-44">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr class="border-t border-slate-800">
+            <td class="px-4 py-2.5">{{ u.username }}</td>
+            <td class="px-4 py-2.5 text-slate-400 text-xs">{{ u.created_at.strftime('%Y-%m-%d %H:%M') if u.created_at else '-' }}</td>
+            <td class="px-4 py-2.5">
+              <button onclick="resetUser('{{ u.username }}')"
+                      class="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs">改密</button>
+              <button onclick="deleteUser('{{ u.username }}')"
+                      class="px-2.5 py-1 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-xs ml-1">删除</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="3" class="px-4 py-5 text-center text-slate-500">暂无前台用户（游客仅可浏览，添加用户后可登录操作）</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="flex items-end gap-2 mt-4 flex-wrap">
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">用户名</label>
+        <input id="new-username" placeholder="用户名"
+               class="bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 text-xs w-40">
+      </div>
+      <div>
+        <label class="block text-xs text-slate-500 mb-1">密码（≥4位）</label>
+        <input id="new-password" type="password" placeholder="密码"
+               class="bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 text-xs w-40">
+      </div>
+      <button onclick="addUser()" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">添加用户</button>
+    </div>
+  </div>
+
+  <!-- 全局推送设置 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-5">
+    <h2 class="font-semibold text-sm text-slate-300 mb-1">全局推送设置</h2>
+    <p class="text-xs text-slate-500 mb-3">开关即时生效；「前台可改」允许登录的前台用户自行切换该开关（管理员不受限）。动态监控开关关闭时停止全部轮询进程，开启时自动恢复。</p>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+            <th class="px-4 py-2 font-medium">推送项</th>
+            <th class="px-4 py-2 font-medium">状态</th>
+            <th class="px-4 py-2 font-medium">前台可改</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in switches %}
+          <tr class="border-t border-slate-800">
+            <td class="px-4 py-2.5">{{ s.label }}</td>
+            <td class="px-4 py-2.5">
+              <button onclick="setSwitch('{{ s.name }}', 'enabled', {{ 'false' if s.enabled else 'true' }})"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs {{ 'bg-emerald-500/10 text-emerald-400' if s.enabled else 'bg-slate-600/30 text-slate-400' }}">
+                {{ '开' if s.enabled else '关' }}（点击切换）
+              </button>
+            </td>
+            <td class="px-4 py-2.5">
+              <button onclick="setSwitch('{{ s.name }}', 'allow_modify', {{ 'false' if s.allow_modify else 'true' }})"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs {{ 'bg-blue-500/10 text-blue-400' if s.allow_modify else 'bg-slate-600/30 text-slate-400' }}">
+                {{ '允许' if s.allow_modify else '禁止' }}（点击切换）
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 数据导出 -->
+  <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+    <h2 class="font-semibold text-sm text-slate-300 mb-1">数据导出</h2>
+    <p class="text-xs text-slate-500 mb-3">打包主库与全部直播间/动态子库为zip下载（仅SQLite存储支持）。</p>
+    <a href="/web/admin/export"
+       class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">
+      <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/></svg>
+      导出全部数据
+    </a>
+  </div>
+</div>
+
+<script>
+/* ===== 用户管理 ===== */
+async function addUser(){
+  const u = document.getElementById('new-username').value.trim();
+  const p = document.getElementById('new-password').value;
+  if(!u || p.length < 4){ alert('请填写用户名和至少4位密码'); return; }
+  await postForm('/web/admin/user/add', {username: u, password: p});
+}
+async function resetUser(username){
+  const p = prompt('为用户「' + username + '」设置新密码（≥4位）：');
+  if(p === null) return;
+  if(p.length < 4){ alert('密码至少4位'); return; }
+  await postForm('/web/admin/user/password', {username: username, password: p});
+}
+async function deleteUser(username){
+  if(!confirm('确定删除用户「' + username + '」？')) return;
+  await postForm('/web/admin/user/delete', {username: username});
+}
+/* ===== 推送开关 ===== */
+async function setSwitch(name, field, value){
+  const body = {name: name};
+  body[field] = value ? '1' : '0';
+  await postForm('/web/admin/switch', body);
+}
+/* ===== 通用POST + 整页刷新 ===== */
+async function postForm(url, fields){
+  const body = new URLSearchParams(fields);
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    body: body.toString(),
+  });
+  if(resp.status === 401 || resp.status === 403){
+    alert('权限不足（' + resp.status + '）');
+    return;
+  }
+  location.reload();
+}
+</script>

@@ -404,3 +404,23 @@ class LiveStatusRecord(EventBase):
     __table_args__ = (
         Index("idx_live_status_room_time", "room_id", "timestamp"),
     )
+
+
+class WebUserRecord(Base):
+    """Web面板前台用户表（游客只读，登录后可控；管理员来自config不入库）"""
+    __tablename__ = "web_user"
+
+    username: Mapped[str] = mapped_column(String(64), primary_key=True, comment="用户名")
+    password_hash: Mapped[str] = mapped_column(Text, comment="pbkdf2口令哈希")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="创建时间")
+
+
+class PushSwitchRecord(Base):
+    """全局推送开关表（运行时可改：后台设置状态与是否允许前台修改）"""
+    __tablename__ = "push_switch"
+
+    name: Mapped[str] = mapped_column(String(32), primary_key=True, comment="开关名")
+    enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="0关/1开")
+    allow_modify: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="前台可改0/1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=local_now, onupdate=local_now, comment="更新时间")

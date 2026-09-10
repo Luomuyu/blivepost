@@ -204,6 +204,17 @@ async def main_async(
         moved = await db_service.migrate_legacy_events()
         if moved:
             logger.info(f"事件数据已迁移至房间子库（{moved}行）")
+        # 播种全局推送开关（仅插入缺失行，enabled取config默认；已有行以后台修改为准）
+        await db_service.seed_push_switches({
+            "anchor": settings.message.anchor,
+            "guard_achievement": settings.message.guard_achievement,
+            "system_event": settings.message.system_event,
+            "room_change": settings.message.room_change,
+            "dynamic_monitor": settings.message.dynamic_monitor,
+            "daily_report": settings.message.daily_report,
+            "weekly_report": settings.message.weekly_report,
+            "monthly_report": settings.message.monthly_report,
+        })
         logger.info("数据库初始化成功")
 
         # 加载群绑定、Cookie账号池与联系人
@@ -310,7 +321,17 @@ async def main_async(
             cookie_pool=cookie_pool,
             admin_openids=settings.admin.openids,
             main_admin_openids=settings.admin.main_openids,
-            binding_store=binding_store
+            binding_store=binding_store,
+            switch_defaults={
+                "anchor": settings.message.anchor,
+                "guard_achievement": settings.message.guard_achievement,
+                "system_event": settings.message.system_event,
+                "room_change": settings.message.room_change,
+                "dynamic_monitor": settings.message.dynamic_monitor,
+                "daily_report": settings.message.daily_report,
+                "weekly_report": settings.message.weekly_report,
+                "monthly_report": settings.message.monthly_report,
+            },
         )
         consumer.start()
 
@@ -319,6 +340,7 @@ async def main_async(
                 or settings.message.monthly_report:
             daily_report = DailyReportJob(
                 binding_store, push_service, db_service,
+                daily=settings.message.daily_report,
                 weekly=settings.message.weekly_report,
                 monthly=settings.message.monthly_report,
             )
@@ -340,6 +362,8 @@ async def main_async(
                 host=settings.message.web_host, port=settings.message.web_port,
                 token=settings.message.web_token, bot_client=qqbot,
                 message_settings=settings.message,
+                admin_user=settings.message.web_admin_user,
+                admin_password=settings.message.web_admin_password,
             )
             await web_panel.start()
 

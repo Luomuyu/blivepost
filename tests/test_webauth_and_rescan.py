@@ -3,6 +3,8 @@
 
 import pytest
 
+from aiohttp import web
+
 from blivepost.config.settings import Settings
 from blivepost.database import DatabaseManager, DatabaseService
 from blivepost.services.cookie_pool import CookiePool
@@ -75,27 +77,45 @@ def _make_panel(token=""):
     return WebPanel(None, None, None, None, None, token=token)
 
 
+class FakeReq:
+    """最小请求桩：query/headers/cookies字典 + 可选表单"""
+    def __init__(self, query=None, headers=None, cookies=None, form=None, path="/"):
+        self.query = query or {}
+        self.headers = headers or {}
+        self.cookies = cookies or {}
+        self._form = form or {}
+        self.path = path
+        self.remote = "test"
+
+    async def post(self):
+        return self._form
+
+
 @pytest.mark.asyncio
-async def test_token_auth_required():
-    panel = _make_panel(token="SECRET")
-    class Req:
-        query = {}
-        headers = {}
-        cookies = {}
-    req = Req()
-    resp = await panel._make_page_handler("overview")(req)
-    assert resp.status == 401
-    resp2 = await panel._handle_history(req)
-    assert resp2.status == 401
-    resp3 = await panel._make_page_handler("live")(req)
+async def test_guest_readonly_actions_denied():
+    """新鉴权模型：页面/只读接口游客可浏览，写动作与后台接口拒绝"""
+    panel = _make_panel()
+    resp = await panel._make_page_handler("overview")(FakeReq())
+    assert resp.status == 200  # 游客可浏览
+    resp2 = await panel._handle_history(FakeReq())
+    assert resp2.status == 200
+    # 写动作：游客401
+    resp3 = await panel._action_room_add(FakeReq(form={"room_id": "123"}))
     assert resp3.status == 401
-    resp4 = await panel._handle_trend(req)
-    assert resp4.status == 401
+    assert await panel._read_action(FakeReq()) is None
+    # 后台动作：游客403
+    resp4 = await panel._action_admin_user_add(FakeReq(form={"username": "u", "password": "1234"}))
+    assert resp4.status == 403
+    # 后台页面：游客跳登录页
+    import pytest as _pytest
+    with _pytest.raises(web.HTTPFound) as ei:
+        await panel._handle_admin_page(FakeReq())
+    assert "/login" in ei.value.location
 
 
 @pytest.mark.asyncio
-async def test_token_auth_via_query(monkeypatch, tmp_path):
-    """携带正确token时放行（home渲染空数据集），并下发cookie供HTMX局部请求使用"""
+async def test_token_quick_login_and_pages(monkeypatch, tmp_path):
+    """?token=快捷令牌→管理员会话重定向；后续请求携cookie渲染各页（回归断言保留）"""
     panel = _make_panel(token="SECRET")
     class D:
         @staticmethod
@@ -122,25 +142,32 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
         return dict(_FULL_COLLECT)
     panel._collect = fake_collect
 
-    class Req:
-        query = {"token": "SECRET"}
-        headers = {}
-        cookies = {}
-    resp = await panel._make_page_handler("overview")(Req())
-    assert resp.status == 200
-    body = resp.text
-    # viewport + 机器人详情 + 导航（自动刷新已按需求移除）
-    assert "viewport" in body
-    assert "bot" in body and "在线" in body
+    # ?token= → 管理员会话 + 重定向干净URL
+    resp = await panel._make_page_handler("overview")(FakeReq(query={"token": "SECRET"}))
+    assert resp.status == 302
+    sid = next(iter(panel._sessions))  # cookie经Set-Cookie下发（prepare时应用）
+    assert panel._sessions[sid]["admin"] is True
 
-    # 直播监控页凭cookie放行（含群选项/房间表/手动刷新）
+    # 携会话cookie渲染概览页（回归：viewport/机器人详情）
     class CookieReq:
         query = {}
         headers = {}
-        cookies = {"web_token": "SECRET"}
+        cookies = {"blivepost_sid": sid}
+    resp_home = await panel._make_page_handler("overview")(CookieReq())
+    assert resp_home.status == 200
+    body = resp_home.text
+    assert "viewport" in body
+    assert "bot" in body and "在线" in body
+    assert "后台" in body  # 管理员身份显示后台入口
+
+    # 错误token不做会话：直接404？——无token query时页面照常200（游客）
+    resp_guest = await panel._make_page_handler("live")(FakeReq())
+    assert resp_guest.status == 200
+
+    # 直播监控页（含群选项/房间表/删除模式/刷新图标）
     resp2 = await panel._make_page_handler("live")(CookieReq())
     assert resp2.status == 200
-    assert "手动刷新" in resp2.text
+    assert "手动刷新" not in resp2.text and 'aria-label="刷新"' in resp2.text
     assert "/web/room/add" in resp2.text and "/web/room/push" in resp2.text
     assert "/web/room/delete" in resp2.text
 
@@ -159,25 +186,18 @@ async def test_token_auth_via_query(monkeypatch, tmp_path):
     class MonthReq:
         query = {"range": "12m"}
         headers = {}
-        cookies = {"web_token": "SECRET"}
+        cookies = {"blivepost_sid": sid}
     resp3 = await panel._handle_trend(MonthReq())
     assert resp3.status == 200
     assert "按月汇总" in resp3.text
 
 
-@pytest.mark.asyncio
-async def test_token_via_header():
+def test_token_via_header():
+    """X-Web-Token头携带令牌视同管理员（动作接口放行）"""
     panel = _make_panel(token="SECRET")
-    seen = {}
-    panel._collect = lambda: _fake_collect(seen)
-    panel._check_token_original = panel._check_token
-
-    class Req:
-        query = {}
-        headers = {"X-Web-Token": "SECRET"}
-
-    # 头携带token应放行
-    assert panel._check_token(Req()) is True
+    req = FakeReq(headers={"X-Web-Token": "SECRET"})
+    assert panel._web_token_ok(req) is True
+    assert panel._web_token_ok(FakeReq()) is False
 
 
 async def _fake_collect(seen):
@@ -457,3 +477,148 @@ async def test_trend_room_selector(tmp_path):
     resp2 = await panel._handle_trend(ReqAll())
     assert resp2.status == 200
     assert D.requested_rooms is None  # None=跨全部房间子库扇出
+
+
+# ==================== 登录体系/后台/推送开关（第五十九批） ====================
+
+
+@pytest.mark.asyncio
+async def test_admin_login_user_manage_and_switch(tmp_path):
+    """管理员config登录→建用户→用户登录→开关权限链路全测"""
+    from blivepost.services.webpanel import WebPanel, hash_password, verify_password
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+
+    panel = WebPanel(None, None, None, None, svc,
+                     admin_user="boss", admin_password="SECRET123")
+
+    # 口令哈希往返
+    h = hash_password("abcd1234")
+    assert h != "abcd1234" and verify_password("abcd1234", h)
+    assert not verify_password("wrong", h)
+
+    # 管理员登录成功 → 302 /admin + 会话cookie
+    resp_login = await panel._action_web_login(FakeReq(form={
+        "username": "boss", "password": "SECRET123"}))
+    assert resp_login.status == 302 and resp_login.location == "/admin"
+    admin_sid = next(iter(panel._sessions))
+    assert panel._sessions[admin_sid]["admin"] is True
+
+    # 登录失败 → 回登录页带错误
+    with pytest.raises(web.HTTPFound) as ei2:
+        await panel._action_web_login(FakeReq(form={
+            "username": "boss", "password": "wrong"}))
+    assert "/login?err=1" in ei2.value.location
+
+    admin_req = FakeReq(cookies={"blivepost_sid": admin_sid})
+
+    # 管理员建前台用户（密码过短拒绝）
+    resp = await panel._action_admin_user_add(FakeReq(
+        cookies={"blivepost_sid": admin_sid},
+        form={"username": "alice", "password": "12"}))
+    assert resp.status == 200  # 动作静默，无建户
+    assert await svc.get_web_user("alice") is None
+    await panel._action_admin_user_add(FakeReq(
+        cookies={"blivepost_sid": admin_sid},
+        form={"username": "alice", "password": "abcd1234"}))
+    assert await svc.get_web_user("alice") is not None
+
+    # 后台页面管理员可进
+    resp_admin = await panel._handle_admin_page(admin_req)
+    assert resp_admin.status == 200
+    assert "管理后台" in resp_admin.text and "alice" in resp_admin.text
+
+    # 用户登录（非管理员）→ 首页
+    resp_alice = await panel._action_web_login(FakeReq(form={
+        "username": "alice", "password": "abcd1234"}))
+    assert resp_alice.status == 302 and resp_alice.location == "/"
+    alice_sid = [k for k, v in panel._sessions.items() if not v["admin"]][0]
+    assert panel._sessions[alice_sid]["user"] == "alice"
+
+    # 用户改开关：默认allow_modify关→403；管理员放行后可切
+    deny = await panel._action_switch_toggle(FakeReq(
+        cookies={"blivepost_sid": alice_sid}, form={"name": "anchor"}))
+    assert deny.status == 403
+    assert await svc.get_push_switch_enabled("anchor", False) is False
+
+    await panel._action_admin_switch(FakeReq(
+        cookies={"blivepost_sid": admin_sid},
+        form={"name": "anchor", "allow_modify": "1"}))
+    await panel._action_switch_toggle(FakeReq(
+        cookies={"blivepost_sid": alice_sid}, form={"name": "anchor"}))
+    assert await svc.get_push_switch_enabled("anchor", False) is True
+
+    # 用户不可改allow_modify（越权拒绝）
+    resp_am = await panel._action_admin_switch(FakeReq(
+        cookies={"blivepost_sid": alice_sid},
+        form={"name": "anchor", "allow_modify": "0"}))
+    assert resp_am.status == 403
+
+    # 管理员改密+删用户
+    await panel._action_admin_user_password(FakeReq(
+        cookies={"blivepost_sid": admin_sid},
+        form={"username": "alice", "password": "newpass99"}))
+    rec = await svc.get_web_user("alice")
+    assert verify_password("newpass99", rec["password_hash"])
+    await panel._action_admin_user_delete(FakeReq(
+        cookies={"blivepost_sid": admin_sid}, form={"username": "alice"}))
+    assert await svc.get_web_user("alice") is None
+
+    # 登出：会话销毁
+    with pytest.raises(web.HTTPFound):
+        await panel._action_web_logout(FakeReq(cookies={"blivepost_sid": alice_sid}))
+    assert alice_sid not in panel._sessions
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_push_switch_seed_and_consumer_gate():
+    """开关播种幂等；消费者按DB运行时开关丢弃/放行带tag推送"""
+    from blivepost.core.manager import PushQueueConsumer
+    settings = Settings()
+    settings.database.sqlite_path = str(tempfile_mkddir()) + "/t.db"
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+
+    await svc.seed_push_switches({"anchor": False, "system_event": True})
+    await svc.seed_push_switches({"anchor": True})  # 已有行不覆盖
+    assert await svc.get_push_switch_enabled("anchor", True) is False
+    assert await svc.get_push_switch_enabled("system_event", False) is True
+    assert await svc.get_push_switch_enabled("daily_report", False) is False
+
+    sent = []
+
+    class Bot:
+        async def send_group_message(self, content, **kw):
+            sent.append(content)
+            return {"ret": 0}
+    push = type("P", (object,), {})()
+    push.send_message = lambda content, room_id=None, keyboard=None: sent.append(content)
+    consumer = PushQueueConsumer(
+        None, push, db_service=svc,
+        switch_defaults={"anchor": True})  # config默认开，但DB关→丢弃
+
+    item = {"type": "push", "room_id": 1, "content": "hello",
+            "media": None, "keyboard": None, "switch": "anchor"}
+    await consumer._handle(item)
+    assert sent == []  # DB开关关→丢弃
+
+    await svc.set_push_switch("anchor", enabled=True)
+    await consumer._handle(item)
+    assert sent == ["hello"]  # DB开关开→放行
+
+    # 无tag的push不检查开关（如开播/下播）
+    await svc.set_push_switch("anchor", enabled=False)
+    await consumer._handle({"type": "push", "room_id": 1, "content": "x",
+                            "media": None, "keyboard": None, "switch": None})
+    assert sent == ["hello", "x"]
+    await db.close()
+
+
+def tempfile_mkddir():
+    import tempfile
+    return tempfile.mkdtemp()

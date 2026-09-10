@@ -130,7 +130,8 @@ class QueuePushService(PushService):
         try:
             self._queue.put(
                 {"type": "push", "room_id": self.room_id, "content": content,
-                 "media": media, "keyboard": keyboard},
+                 "media": media, "keyboard": keyboard,
+                 "switch": self._switch_tag},
                 timeout=5
             )
             return True
@@ -291,7 +292,8 @@ class PushQueueConsumer:
         cookie_pool=None,
         admin_openids: Optional[list] = None,
         main_admin_openids: Optional[list] = None,
-        binding_store=None
+        binding_store=None,
+        switch_defaults: Optional[dict] = None
     ):
         """
         初始化消费者
@@ -303,6 +305,7 @@ class PushQueueConsumer:
             monitor_manager: 监控管理器（处理子进程上报时暂停/重建用）
             cookie_pool: Cookie账号池（凭证失效轮转用）
             admin_openids: 管理员openid列表（私聊提醒用）
+            switch_defaults: 全局推送开关config默认值（运行时以DB为准，缺行回落）
         """
         self._queue = queue
         self.push_service = push_service
@@ -313,8 +316,19 @@ class PushQueueConsumer:
         # 主管理员：接收Cookie失效等敏感通知，未配置时回落全部管理员
         self.main_admin_openids = [str(o) for o in (main_admin_openids or [])]
         self.binding_store = binding_store
+        self.switch_defaults = switch_defaults or {}
         self._task: Optional[asyncio.Task] = None
         self._stopping = False
+
+    async def _switch_on(self, name: str) -> bool:
+        """全局推送开关运行时状态（DB优先，缺行/无DB回落config默认）"""
+        default = bool(self.switch_defaults.get(name, False))
+        if self.db_service is None:
+            return default
+        try:
+            return await self.db_service.get_push_switch_enabled(name, default)
+        except Exception:
+            return default
 
     def start(self) -> None:
         """启动消费循环（需在事件循环内调用）"""
@@ -369,6 +383,10 @@ class PushQueueConsumer:
             )
 
         elif kind == "push":
+            switch = item.get("switch")
+            if switch and not await self._switch_on(switch):
+                logger.debug(f"全局推送开关 {switch} 已关闭，丢弃推送（房间{item.get('room_id')}）")
+                return
             room_id = item.get("room_id")
             media = item.get("media")
             content = item.get("content", "")
@@ -384,9 +402,15 @@ class PushQueueConsumer:
             await self._handle_not_login(item.get("room_id"))
 
         elif kind == "dynamic":
+            if not await self._switch_on("dynamic_monitor"):
+                logger.debug("全局推送开关 dynamic_monitor 已关闭，丢弃动态推送")
+                return
             await self._handle_dynamic(item)
 
         elif kind == "up_live":
+            if not await self._switch_on("dynamic_monitor"):
+                logger.debug("全局推送开关 dynamic_monitor 已关闭，丢弃UP开播提醒")
+                return
             await self._handle_up_live(item)
 
         elif kind == "db":

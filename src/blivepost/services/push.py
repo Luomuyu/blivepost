@@ -5,6 +5,7 @@
 
 import inspect
 import re
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -120,6 +121,17 @@ class PushService:
         self.bilibili_api: Any = None
         # ContactStore实例（可选）：发送前过滤未开启消息接收的群
         self.contact_store: Any = None
+        # 当前推送所属全局开关名（子进程入队时随消息携带，主进程按运行时开关判定）
+        self._switch_tag: Optional[str] = None
+
+    @contextmanager
+    def _switch(self, name: str):
+        """标记一段推送所属的全局开关（主进程侧运行时判定是否发送）"""
+        self._switch_tag = name
+        try:
+            yield
+        finally:
+            self._switch_tag = None
 
     @staticmethod
     def _render(template: str, fields: dict) -> Optional[str]:
@@ -427,15 +439,16 @@ class PushService:
         require_text: str
     ) -> bool:
         """推送天选抽奖"""
-        text = self._render(self.templates.anchor, {
-            "room_id": room_id, "award": award_name, "danmu": danmu, "require": require_text,
-        })
-        if text is None:
-            text = (
-                f"直播间{room_id}天选抽奖："
-                f"礼物:{award_name}，弹幕:{danmu}，要求:{require_text}"
-            )
-        return self.send_message(text, room_id=room_id)
+        with self._switch("anchor"):
+            text = self._render(self.templates.anchor, {
+                "room_id": room_id, "award": award_name, "danmu": danmu, "require": require_text,
+            })
+            if text is None:
+                text = (
+                    f"直播间{room_id}天选抽奖："
+                    f"礼物:{award_name}，弹幕:{danmu}，要求:{require_text}"
+                )
+            return self.send_message(text, room_id=room_id)
 
     def push_guard_achievement(
         self,
@@ -443,46 +456,52 @@ class PushService:
         content: str
     ) -> bool:
         """推送大航海成就"""
-        text = self._render(self.templates.guard_achievement, {
-            "room_id": room_id, "content": content,
-        })
-        if text is None:
-            text = f"直播间{room_id}获得大航海成就：{content}"
-        return self.send_message(text, room_id=room_id)
+        with self._switch("guard_achievement"):
+            text = self._render(self.templates.guard_achievement, {
+                "room_id": room_id, "content": content,
+            })
+            if text is None:
+                text = f"直播间{room_id}获得大航海成就：{content}"
+            return self.send_message(text, room_id=room_id)
 
     def push_room_block(self, room_id: str, user_name: str, uid: int) -> bool:
         """推送禁言事件"""
-        return self.send_message(
-            f"System：{room_id} {user_name}[{uid}]被禁言", room_id=room_id
-        )
+        with self._switch("system_event"):
+            return self.send_message(
+                f"System：{room_id} {user_name}[{uid}]被禁言", room_id=room_id
+            )
 
     def push_admin_change(self, room_id: str, uid: int, revoked: bool) -> bool:
         """推送房管变更事件"""
-        action = "撤销房管" if revoked else "被设为房管"
-        return self.send_message(f"System：{room_id} [{uid}]{action}", room_id=room_id)
+        with self._switch("system_event"):
+            action = "撤销房管" if revoked else "被设为房管"
+            return self.send_message(f"System：{room_id} [{uid}]{action}", room_id=room_id)
 
     def push_room_change(self, room_id: str, title: str,
                          parent_area: str, area: str) -> bool:
         """推送房间信息变更"""
-        return self.send_message(
-            f"System：{room_id}直播间信息更新：标题: {title}，分区: {parent_area}-{area}",
-            room_id=room_id,
-        )
+        with self._switch("room_change"):
+            return self.send_message(
+                f"System：{room_id}直播间信息更新：标题: {title}，分区: {parent_area}-{area}",
+                room_id=room_id,
+            )
 
     def push_cut_off(self, room_id: str, reason: str) -> bool:
         """推送直播切断"""
-        text = self._render(self.templates.cut_off, {
-            "room_id": room_id, "reason": reason,
-        })
-        if text is None:
-            text = f"System：{room_id}直播被切断，原因：{reason}"
-        return self.send_message(text, room_id=room_id)
+        with self._switch("system_event"):
+            text = self._render(self.templates.cut_off, {
+                "room_id": room_id, "reason": reason,
+            })
+            if text is None:
+                text = f"System：{room_id}直播被切断，原因：{reason}"
+            return self.send_message(text, room_id=room_id)
 
     def push_warning(self, room_id: str, reason: str) -> bool:
         """推送警告"""
-        text = self._render(self.templates.warning, {
-            "room_id": room_id, "reason": reason,
-        })
-        if text is None:
-            text = f"System：{room_id}收到警告，原因：{reason}"
-        return self.send_message(text, room_id=room_id)
+        with self._switch("system_event"):
+            text = self._render(self.templates.warning, {
+                "room_id": room_id, "reason": reason,
+            })
+            if text is None:
+                text = f"System：{room_id}收到警告，原因：{reason}"
+            return self.send_message(text, room_id=room_id)

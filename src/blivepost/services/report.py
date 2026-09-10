@@ -33,6 +33,7 @@ class DailyReportJob:
         db_service: "DatabaseService",
         hour: int = 0,
         minute: int = 5,
+        daily: bool = True,
         weekly: bool = False,
         monthly: bool = False,
     ):
@@ -45,6 +46,7 @@ class DailyReportJob:
             db_service: 数据库服务（汇总查询）
             hour: 推送时刻（时）
             minute: 推送时刻（分）
+            daily: 启用每日结算
             weekly: 启用每周结算（周一推送上周汇总）
             monthly: 启用每月结算（每月1日推送上月汇总）
         """
@@ -53,6 +55,7 @@ class DailyReportJob:
         self.db_service = db_service
         self.hour = hour
         self.minute = minute
+        self.daily_enabled = daily
         self.weekly_enabled = weekly
         self.monthly_enabled = monthly
         self._task: Optional[asyncio.Task] = None
@@ -79,7 +82,8 @@ class DailyReportJob:
             try:
                 delay = self._seconds_until_next()
                 await asyncio.sleep(delay)
-                await self.check_once()
+                if self.daily_enabled:
+                    await self.check_once()
                 # 周结（周一）、月结（每月1日）紧随日结执行
                 await self.check_periodic()
             except asyncio.CancelledError:
@@ -89,17 +93,35 @@ class DailyReportJob:
                 await asyncio.sleep(60)
 
     async def check_periodic(self) -> int:
-        """按配置执行周结/月结（周一推上周、每月1日推上月）"""
+        """按配置执行周结/月结（周一推上周、每月1日推上月；发送前查运行时开关）"""
         now = datetime.now()
         count = 0
         if self.weekly_enabled and now.weekday() == 0:
-            start = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
-            count += await self._push_range("【每周结算】", start, now)
+            if await self._switch_on("weekly_report"):
+                start = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0,
+                                                          microsecond=0)
+                count += await self._push_range("【每周结算】", start, now)
         if self.monthly_enabled and now.day == 1:
-            start = (now - timedelta(days=now.day)).replace(day=1, hour=0, minute=0,
-                                                            second=0, microsecond=0)
-            count += await self._push_range("【每月结算】", start, now)
+            if await self._switch_on("monthly_report"):
+                start = (now - timedelta(days=now.day)).replace(day=1, hour=0, minute=0,
+                                                                second=0, microsecond=0)
+                count += await self._push_range("【每月结算】", start, now)
         return count
+
+    async def _switch_on(self, name: str) -> bool:
+        """结算开关运行时状态（DB优先，缺行/无DB回落config默认值）"""
+        if name == "daily_report":
+            default = self.daily_enabled
+        elif name == "weekly_report":
+            default = self.weekly_enabled
+        else:
+            default = self.monthly_enabled
+        if self.db_service is None:
+            return default
+        try:
+            return await self.db_service.get_push_switch_enabled(name, default)
+        except Exception:
+            return default
 
     async def _push_range(self, title: str, start: datetime, end: datetime) -> int:
         """推送指定时间段各监控房间汇总"""
@@ -138,6 +160,9 @@ class DailyReportJob:
             int: 推送的房间数
         """
         day = day or (datetime.now() - timedelta(days=1))
+        if not await self._switch_on("daily_report"):
+            logger.info("每日结算推送开关已关闭，跳过")
+            return 0
         room_ids = self.binding_store.get_monitored_room_ids()
         if not room_ids:
             logger.info("无监控中的房间，跳过每日结算推送")

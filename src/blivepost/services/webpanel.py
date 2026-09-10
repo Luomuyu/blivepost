@@ -1,18 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-Web状态面板（只读，aiohttp + Jinja2 + HTMX实现）
+Web状态面板（aiohttp + Jinja2 + HTMX实现）
 
 暗色现代界面：状态卡片、机器人详情、收入趋势（区间选择）、监控房间/
-动态订阅/账号池/下播记录表格。HTMX局部刷新（每30秒自动刷新摘要，趋势
-区间切换无整页刷新）。前端样式经CDN加载Tailwind + HTMX。
-默认监听127.0.0.1（仅本机访问），无鉴权——请勿直接暴露到公网。
+动态订阅/账号池/下播记录表格。HTMX局部刷新（趋势区间切换无整页刷新）。
+前端样式经CDN加载Tailwind + HTMX。
+默认监听127.0.0.1（仅本机访问）。
+鉴权模型：打开默认游客（只读，动作接口全部拒绝）；前台用户登录后可控
+（账号由后台管理，存web_user表）；管理员来自Setting.web_admin_user/
+web_admin_password（口令非空才启用后台），可管用户/全局推送开关/导出数据；
+Setting.web_token保留为管理员快捷令牌（?token=即管理员登录）。
 通过Setting.web_panel开关，web_host/web_port配置监听。
 """
 
 import asyncio
+import hashlib
+import io
 import json
+import secrets
+import zipfile
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -36,6 +44,43 @@ _env = Environment(
     loader=FileSystemLoader(str(_TEMPLATES_DIR)),
     autoescape=True,
 )
+
+_SESSION_COOKIE = "blivepost_sid"
+_SESSION_TTL = timedelta(days=7)
+_PBKDF2_ITERATIONS = 120_000
+
+# 全局推送开关注册表：name -> (显示名, config默认值字段)
+SWITCH_DEFS = [
+    ("anchor", "天选时刻"),
+    ("guard_achievement", "大航海成就"),
+    ("system_event", "系统事件"),
+    ("room_change", "房间变更"),
+    ("dynamic_monitor", "动态监控"),
+    ("daily_report", "每日结算"),
+    ("weekly_report", "每周结算"),
+    ("monthly_report", "每月结算"),
+]
+
+
+def hash_password(password: str) -> str:
+    """pbkdf2口令哈希（随机盐，格式 pbkdf2$iterations$salt$hash）"""
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                 bytes.fromhex(salt), _PBKDF2_ITERATIONS)
+    return f"pbkdf2${_PBKDF2_ITERATIONS}${salt}${digest.hex()}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    """校验口令哈希（格式不合法/不匹配返回False）"""
+    try:
+        algo, iterations, salt, digest = stored.split("$")
+        if algo != "pbkdf2":
+            return False
+        calc = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                   bytes.fromhex(salt), int(iterations))
+        return secrets.compare_digest(calc.hex(), digest)
+    except (ValueError, TypeError):
+        return False
 
 
 class WebPanel:
@@ -65,6 +110,8 @@ class WebPanel:
         bot_client=None,
         group_refresher=None,
         message_settings=None,
+        admin_user: str = "admin",
+        admin_password: str = "",
     ):
         self.cookie_pool = cookie_pool
         self.monitor_manager = monitor_manager
@@ -77,6 +124,11 @@ class WebPanel:
         self.bot_client = bot_client
         self.group_refresher = group_refresher
         self.message_settings = message_settings
+        # 后台管理员（config设置；口令非空才启用管理员登录）
+        self.admin_user = admin_user or "admin"
+        self.admin_password = admin_password
+        # 内存会话：sid -> {"user", "admin", "exp"}
+        self._sessions: dict = {}
         self._runner: Optional[web.AppRunner] = None
         # 扫码登录状态（单会话）：{"status", "message", "qr", "result"}
         self._login_state: Optional[dict] = None
@@ -85,14 +137,27 @@ class WebPanel:
     async def start(self) -> None:
         """启动HTTP服务"""
         app = web.Application()
-        # 页面（HTMX请求返回内容片段，普通请求返回完整布局）
+        # 页面（HTMX请求返回内容片段，普通请求返回完整布局；游客只读可浏览）
         for key, (path, _title) in self.PAGES.items():
             app.router.add_get(path, self._make_page_handler(key))
+        # 登录/登出
+        app.router.add_get("/login", self._handle_login_page)
+        app.router.add_post("/web/login", self._action_web_login)
+        app.router.add_post("/web/logout", self._action_web_logout)
+        # 后台（管理员）
+        app.router.add_get("/admin", self._handle_admin_page)
+        app.router.add_post("/web/admin/user/add", self._action_admin_user_add)
+        app.router.add_post("/web/admin/user/password", self._action_admin_user_password)
+        app.router.add_post("/web/admin/user/delete", self._action_admin_user_delete)
+        app.router.add_post("/web/admin/switch", self._action_admin_switch)
+        app.router.add_get("/web/admin/export", self._handle_admin_export)
+        # 全局开关（前台可改项：登录用户；管理员不受限）
+        app.router.add_post("/web/switch/toggle", self._action_switch_toggle)
         # 局部/数据
         app.router.add_get("/panel/trend", self._handle_trend)
         app.router.add_get("/api/status", self._handle_api)
         app.router.add_get("/api/history", self._handle_history)
-        # 写操作
+        # 写操作（游客拒绝；登录用户可用）
         app.router.add_post("/web/room/add", self._action_room_add)
         app.router.add_post("/web/room/push", self._action_room_push)
         app.router.add_post("/web/room/delete", self._action_room_delete)
@@ -119,23 +184,80 @@ class WebPanel:
             await self._runner.cleanup()
             self._runner = None
 
-    def _check_token(self, request) -> bool:
-        """访问令牌校验（未配置token时不鉴权；支持query/头/cookie三种携带）"""
+    # ========== 会话与鉴权（游客只读/用户可控/管理员可管） ==========
+
+    def _create_session(self, user: str, is_admin: bool) -> str:
+        """新建会话（7天有效），返回会话ID"""
+        self._prune_sessions()
+        sid = secrets.token_urlsafe(32)
+        self._sessions[sid] = {
+            "user": user, "admin": bool(is_admin),
+            "exp": (datetime.now() + _SESSION_TTL).timestamp(),
+        }
+        return sid
+
+    def _prune_sessions(self) -> None:
+        now = datetime.now().timestamp()
+        for sid in [s for s, v in self._sessions.items() if v["exp"] < now]:
+            self._sessions.pop(sid, None)
+
+    def _session(self, request) -> Optional[dict]:
+        """当前会话（None=游客）"""
+        sid = request.cookies.get(_SESSION_COOKIE, "")
+        sess = self._sessions.get(sid)
+        if sess is None or sess["exp"] < datetime.now().timestamp():
+            return None
+        return sess
+
+    def _current_user(self, request) -> Optional[str]:
+        sess = self._session(request)
+        return sess["user"] if sess else None
+
+    def _is_admin(self, request) -> bool:
+        sess = self._session(request)
+        return bool(sess and sess["admin"])
+
+    def _web_token_ok(self, request) -> bool:
+        """管理员快捷令牌校验（未配置token时不可用）"""
         if not self.token:
-            return True
+            return False
         provided = (request.query.get("token")
                     or request.headers.get("X-Web-Token")
                     or request.cookies.get("web_token")
                     or "")
         return provided == self.token
 
-    def _html_response(self, request, html: str) -> web.Response:
-        """HTML响应；经query/头鉴权成功时下发cookie供HTMX局部请求携带"""
-        resp = web.Response(text=html, content_type="text/html", charset="utf-8")
-        if self.token and (request.query.get("token")
-                           or request.headers.get("X-Web-Token")) == self.token:
-            resp.set_cookie("web_token", self.token, httponly=True, samesite="Lax")
+    def _set_session_cookie(self, resp: web.Response, sid: str) -> None:
+        resp.set_cookie(_SESSION_COOKIE, sid, max_age=int(_SESSION_TTL.total_seconds()),
+                        httponly=True, samesite="Lax", path="/")
+
+    async def _auth_token_to_admin(self, request):
+        """?token=管理员快捷令牌→创建管理员会话并重定向到干净URL（无令牌返回None）"""
+        if not (self.token and request.query.get("token") == self.token):
+            return None
+        sid = self._create_session(self.admin_user, is_admin=True)
+        target = request.path or "/"
+        resp = web.HTTPFound(target)
+        self._set_session_cookie(resp, sid)
+        resp.set_cookie("web_token", self.token, httponly=True, samesite="Lax")
+        logger.info(f"Web面板令牌登录（管理员）：{request.remote}")
         return resp
+
+    async def _require_login(self, request) -> Optional[web.Response]:
+        """动作接口鉴权：游客拒绝（登录用户与管理员放行）"""
+        if self._session(request) is None and not self._web_token_ok(request):
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
+        return None
+
+    async def _require_admin(self, request) -> Optional[web.Response]:
+        """后台接口鉴权：仅管理员会话（web_token快捷令牌视同管理员）"""
+        if not self._is_admin(request) and not self._web_token_ok(request):
+            return web.Response(status=403, text="forbidden: 需要管理员权限")
+        return None
+
+    def _html_response(self, request, html: str) -> web.Response:
+        """HTML响应"""
+        return web.Response(text=html, content_type="text/html", charset="utf-8")
 
     def _render(self, template: str, **ctx) -> str:
         return _env.get_template(template).render(**ctx)
@@ -157,12 +279,13 @@ class WebPanel:
         # 数据库体积（主库+全部房间子库+动态子库；永久保留策略下的增长监控）
         db_size_mb = 0.0
         try:
-            db_size_mb = await self.db_service.get_storage_size_mb()
+            if self.db_service is not None:
+                db_size_mb = await self.db_service.get_storage_size_mb()
         except Exception as e:
             logger.warning(f"统计存储体积失败: {e}")
 
         accounts = []
-        for a in self.cookie_pool.accounts:
+        for a in (self.cookie_pool.accounts if self.cookie_pool else []):
             rooms = self.monitor_manager.get_account_rooms(a.uid) if self.monitor_manager else []
             days_left = None
             if a.sessdata_expires_at is not None:
@@ -178,7 +301,8 @@ class WebPanel:
 
         rooms = []
         for rid in self.monitor_manager.room_ids() if self.monitor_manager else []:
-            s = await self.db_service.get_daily_summary(rid, day=now)
+            s = await self.db_service.get_daily_summary(rid, day=now)                 if self.db_service else {"danmaku_count": 0, "gift_gold": 0,
+                                         "ship_total": 0, "sc_total": 0}
             rooms.append({
                 "room_id": rid,
                 "alive": self.monitor_manager.has(rid),
@@ -189,7 +313,7 @@ class WebPanel:
             })
 
         dynamics = []
-        for uid in self.binding_store.get_dynamic_up_uids():
+        for uid in self.binding_store.get_dynamic_up_uids()                 if self.binding_store else []:
             dynamics.append({
                 "up_uid": uid,
                 "name": self.binding_store.get_dynamic_up_name(uid),
@@ -197,7 +321,7 @@ class WebPanel:
                 "groups": len(self.binding_store.get_dynamic_groups(uid)),
             })
 
-        recent = await self.db_service.get_recent_live_status(limit=10)
+        recent = await self.db_service.get_recent_live_status(limit=10)             if self.db_service else []
         return {
             "now": now.strftime("%Y-%m-%d %H:%M:%S"),
             "bot": token_state,
@@ -226,14 +350,17 @@ class WebPanel:
     # ========== 页面与局部渲染 ==========
 
     def _make_page_handler(self, key: str):
-        """生成页面GET处理器（HTMX请求返回内容片段，普通请求返回完整布局）"""
+        """生成页面GET处理器（HTMX请求返回内容片段，普通请求返回完整布局；游客可浏览）"""
         nav = [(path, key_, title) for key_, (path, title) in self.PAGES.items()]
 
         async def _handler(request):
-            if not self._check_token(request):
-                return web.Response(status=401, text="unauthorized: token required")
+            # ?token=管理员快捷令牌：建管理员会话并重定向到干净URL
+            token_resp = await self._auth_token_to_admin(request)
+            if token_resp is not None:
+                return token_resp
             ctx = await self._page_context(key)
-            ctx.update(page=key, nav=nav)
+            ctx.update(page=key, nav=nav, current_user=self._current_user(request),
+                       is_admin=self._is_admin(request))
             if request.headers.get("HX-Request"):
                 html = self._render(f"pages/{key}.html", **ctx)
             else:
@@ -241,6 +368,226 @@ class WebPanel:
             return self._html_response(request, html)
         _handler.__name__ = f"page_{key}"
         return _handler
+
+    # ========== 登录/登出/后台页面 ==========
+
+    async def _handle_login_page(self, request):
+        """登录页（游客可访问；已登录重定向首页）"""
+        token_resp = await self._auth_token_to_admin(request)
+        if token_resp is not None:
+            return token_resp
+        if self._session(request) is not None:
+            raise web.HTTPFound("/")
+        ctx = {
+            "page": "login", "nav": [], "current_user": None, "is_admin": False,
+            "error": request.query.get("err", ""),
+            "admin_enabled": bool(self.admin_password),
+        }
+        html = self._render("base.html", page_template="pages/login.html", **ctx)
+        return self._html_response(request, html)
+
+    async def _action_web_login(self, request):
+        """登录：先匹配config管理员，再匹配web_user表；成功建会话重定向首页"""
+        form = await request.post()
+        username = str(form.get("username", "")).strip()
+        password = str(form.get("password", ""))
+        user, is_admin = None, False
+        if self.admin_password and username == self.admin_user \
+                and secrets.compare_digest(password, self.admin_password):
+            user, is_admin = self.admin_user, True
+        else:
+            record = await self.db_service.get_web_user(username) \
+                if self.db_service is not None else None
+            if record is not None and verify_password(password, record["password_hash"]):
+                user = username
+        if user is None:
+            logger.warning(f"Web面板登录失败：{username}（{request.remote}）")
+            raise web.HTTPFound("/login?err=1")
+        sid = self._create_session(user, is_admin)
+        resp = web.HTTPFound("/admin" if is_admin else "/")
+        self._set_session_cookie(resp, sid)
+        logger.info(f"Web面板登录：{user}（{'管理员' if is_admin else '用户'}，{request.remote}）")
+        return resp
+
+    async def _action_web_logout(self, request):
+        """登出：销毁会话回到游客"""
+        sid = request.cookies.get(_SESSION_COOKIE, "")
+        self._sessions.pop(sid, None)
+        raise web.HTTPFound("/")
+
+    def _require_admin_page(self, request) -> Optional[web.Response]:
+        """后台页面鉴权：管理员会话/web_token放行，否则跳登录页"""
+        if self._is_admin(request) or self._web_token_ok(request):
+            return None
+        return web.HTTPFound("/login?err=2")
+
+    async def _handle_admin_page(self, request):
+        """管理后台：用户管理/推送开关/数据导出"""
+        denied = self._require_admin_page(request)
+        if denied is not None:
+            raise denied
+        nav = [(path, key_, title) for key_, (path, title) in self.PAGES.items()]
+        users = await self.db_service.list_web_users() \
+            if self.db_service is not None else []
+        switches = await self.db_service.get_push_switches() \
+            if self.db_service is not None else {}
+        admin_ctx = {
+            "users": users,
+            "switches": [
+                {"name": name, "label": label,
+                 "enabled": switches.get(name, {}).get("enabled", False),
+                 "allow_modify": switches.get(name, {}).get("allow_modify", False)}
+                for name, label in SWITCH_DEFS
+            ],
+            "sqlite_export": True,
+        }
+        ctx = {"page": "admin", "nav": nav, "current_user": self._current_user(request),
+               "is_admin": True, **admin_ctx}
+        html = self._render("base.html", page_template="pages/admin.html", **ctx)
+        return self._html_response(request, html)
+
+    # ========== 后台动作（仅管理员） ==========
+
+    async def _action_admin_user_add(self, request):
+        denied = await self._require_admin(request)
+        if denied is not None:
+            return denied
+        form = await request.post()
+        username = str(form.get("username", "")).strip()
+        password = str(form.get("password", ""))
+        if not username or len(password) < 4:
+            return self._action_response()
+        created = await self.db_service.create_web_user(username, hash_password(password))
+        logger.info(f"后台{'添加' if created else '添加失败(已存在?)'}用户：{username}")
+        return self._action_response()
+
+    async def _action_admin_user_password(self, request):
+        denied = await self._require_admin(request)
+        if denied is not None:
+            return denied
+        form = await request.post()
+        username = str(form.get("username", "")).strip()
+        password = str(form.get("password", ""))
+        if not username or len(password) < 4:
+            return self._action_response()
+        updated = await self.db_service.update_web_user_password(
+            username, hash_password(password))
+        logger.info(f"后台{'重置' if updated else '重置失败(不存在?)'}用户口令：{username}")
+        return self._action_response()
+
+    async def _action_admin_user_delete(self, request):
+        denied = await self._require_admin(request)
+        if denied is not None:
+            return denied
+        form = await request.post()
+        username = str(form.get("username", "")).strip()
+        if not username:
+            return self._action_response()
+        deleted = await self.db_service.delete_web_user(username)
+        logger.info(f"后台{'删除' if deleted else '删除失败(不存在?)'}用户：{username}")
+        return self._action_response()
+
+    async def _action_admin_switch(self, request):
+        """更新推送开关（状态/允许前台修改）；动态监控联动轮询进程启停"""
+        denied = await self._require_admin(request)
+        if denied is not None:
+            return denied
+        form = await request.post()
+        name = str(form.get("name", ""))
+        if name not in {n for n, _ in SWITCH_DEFS}:
+            return self._action_response()
+        enabled = form.get("enabled", "")
+        allow = form.get("allow_modify", "")
+        try:
+            await self.db_service.set_push_switch(
+                name,
+                enabled=bool(int(enabled)) if enabled != "" else None,
+                allow_modify=bool(int(allow)) if allow != "" else None)
+        except Exception as e:
+            logger.error(f"后台更新推送开关失败({name}): {e}")
+            return self._action_response()
+        # 动态监控开关联动：关→停全部轮询；开→恢复全部订阅UP轮询
+        if name == "dynamic_monitor" and enabled != "":
+            await self._apply_dynamic_switch(bool(int(enabled)))
+        logger.info(f"后台更新推送开关：{name} enabled={enabled} allow_modify={allow}")
+        return self._action_response()
+
+    async def _apply_dynamic_switch(self, on: bool) -> None:
+        """动态监控开关生效：关闭停全部轮询进程，开启恢复全部订阅UP"""
+        if self.dynamic_manager is None or self.binding_store is None:
+            return
+        if not on:
+            await self.dynamic_manager.stop_all()
+            return
+        for up_uid in self.binding_store.get_dynamic_up_uids():
+            try:
+                await self.dynamic_manager.ensure(up_uid)
+            except Exception as e:
+                logger.error(f"恢复UP主{up_uid}动态轮询失败: {e}")
+
+    async def _handle_admin_export(self, request):
+        """导出数据：主库+全部房间子库+动态子库打包zip下载（仅SQLite）"""
+        denied = await self._require_admin(request)
+        if denied is not None:
+            return denied
+        db_path = Path(self._sqlite_path())
+        if db_path is None:
+            return web.Response(status=409, text="仅SQLite存储支持导出")
+        if not db_path.exists():
+            return web.Response(status=404, text="数据库文件不存在")
+        data_dir = db_path.parent
+        buf = await asyncio.get_running_loop().run_in_executor(
+            None, self._build_export_zip, db_path, data_dir)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return web.Response(
+            body=buf.getvalue(), content_type="application/zip",
+            headers={"Content-Disposition":
+                     f'attachment; filename="blivepost_export_{stamp}.zip"'})
+
+    def _sqlite_path(self) -> Optional[str]:
+        """当前主库文件路径（非SQLite配置返回None）"""
+        getter = getattr(self.db_service, "sqlite_path", None) \
+            if self.db_service is not None else None
+        return getter() if callable(getter) else None
+
+    @staticmethod
+    def _build_export_zip(db_path: Path, data_dir: Path) -> "io.BytesIO":
+        """打包主库+rooms/+dynamics/全部sqlite文件"""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(db_path, arcname=f"data/{db_path.name}")
+            for sub in ("rooms", "dynamics"):
+                root = data_dir / sub
+                if not root.exists():
+                    continue
+                for f in sorted(root.rglob("*.db")):
+                    zf.write(f, arcname=str(f.relative_to(data_dir).as_posix()))
+        return buf
+
+    # ========== 全局开关（前台可改项） ==========
+
+    async def _action_switch_toggle(self, request):
+        """切换推送开关状态：管理员任意改；前台用户仅改allow_modify=开的项"""
+        denied = await self._require_login(request)
+        if denied is not None:
+            return denied
+        form = await request.post()
+        name = str(form.get("name", ""))
+        if name not in {n for n, _ in SWITCH_DEFS}:
+            return self._action_response()
+        switches = await self.db_service.get_push_switches() \
+            if self.db_service is not None else {}
+        info = switches.get(name, {})
+        if not self._is_admin(request) and not self._web_token_ok(request) \
+                and not info.get("allow_modify", False):
+            return web.Response(status=403, text="forbidden: 该开关不允许前台修改")
+        new_state = not info.get("enabled", False)
+        await self.db_service.set_push_switch(name, enabled=new_state)
+        if name == "dynamic_monitor":
+            await self._apply_dynamic_switch(new_state)
+        logger.info(f"面板切换推送开关：{name} → {'开' if new_state else '关'}"
+                    f"（{'管理员' if self._is_admin(request) else '用户'}）")
+        return self._action_response()
 
     async def _page_context(self, key: str) -> dict:
         """各页面公共上下文（概览=全量；子页面按需子集）"""
@@ -290,7 +637,7 @@ class WebPanel:
                     "room_id": rec.room_id,
                 })
             ctx["bindings"] = bindings
-            ctx["push_settings"] = self._push_settings()
+            ctx["push_settings"] = await self._push_settings()
         if key == "dynamics":
             # 下半段：动态订阅的群绑定关系（群×UP，含群详情）
             groups_by_openid = {}
@@ -308,25 +655,27 @@ class WebPanel:
                             "up_name": up_name,
                         })
             ctx["dyn_bindings"] = dyn_bindings
-            ctx["push_settings"] = self._push_settings()
+            ctx["push_settings"] = await self._push_settings()
         if key == "trend":
             ctx.update(await self._trend_context("d30", ""))
         return ctx
 
-    def _push_settings(self) -> list:
-        """全局推送开关徽标（直播/动态两页的群详情共用）"""
+    async def _push_settings(self) -> list:
+        """全局推送开关徽标（直播/动态两页的群详情共用；DB运行时值优先）"""
         ms = self.message_settings
-        def _on(attr):
+        def _default(attr):
             return bool(getattr(ms, attr, False)) if ms is not None else False
+        switches = {}
+        if self.db_service is not None:
+            try:
+                switches = await self.db_service.get_push_switches()
+            except Exception:
+                switches = {}
         return [
-            {"label": "天选时刻", "on": _on("anchor")},
-            {"label": "大航海成就", "on": _on("guard_achievement")},
-            {"label": "系统事件", "on": _on("system_event")},
-            {"label": "房间变更", "on": _on("room_change")},
-            {"label": "动态监控", "on": _on("dynamic_monitor")},
-            {"label": "每日结算", "on": _on("daily_report")},
-            {"label": "每周结算", "on": _on("weekly_report")},
-            {"label": "每月结算", "on": _on("monthly_report")},
+            {"name": name, "label": label,
+             "on": switches.get(name, {}).get("enabled", _default(name)),
+             "allow_modify": switches.get(name, {}).get("allow_modify", False)}
+            for name, label in SWITCH_DEFS
         ]
 
     @staticmethod
@@ -354,8 +703,8 @@ class WebPanel:
         return web.Response(headers={"HX-Refresh": "true"})
 
     async def _read_action(self, request):
-        """读取动作参数并鉴权；未授权返回None"""
-        if not self._check_token(request):
+        """读取动作参数并鉴权（登录用户/管理员/web_token；游客拒绝）；未授权返回None"""
+        if await self._require_login(request) is not None:
             return None
         form = await request.post()
         return form
@@ -376,7 +725,7 @@ class WebPanel:
         """添加直播间：归一化房间号并登记注册表（不启动监控）"""
         form = await self._read_action(request)
         if form is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         room_id = self._form_room(form)
         if room_id is None:
             return self._action_response()
@@ -399,7 +748,7 @@ class WebPanel:
         """同步直播间推送群：保存后有推送群则启用监控，无则停止"""
         form = await self._read_action(request)
         if form is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         room_id = self._form_room(form)
         if room_id is None:
             return self._action_response()
@@ -425,7 +774,7 @@ class WebPanel:
         """删除直播间：解除全部群绑定、停止监控、移除注册（子库数据保留）"""
         form = await self._read_action(request)
         if form is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         room_ids = [int(v) for v in form.getall("room_id", []) if str(v).isdigit()]
         for rid in room_ids:
             try:
@@ -444,7 +793,7 @@ class WebPanel:
     async def _action_dynamic_bind(self, request):
         form = await self._read_action(request)
         if form is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         group = str(form.get("group_openid", ""))
         up_uid = self._form_uid(form)
         if not group or up_uid is None:
@@ -461,7 +810,7 @@ class WebPanel:
     async def _action_dynamic_unbind(self, request):
         form = await self._read_action(request)
         if form is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         group = str(form.get("group_openid", ""))
         up_uid = self._form_uid(form)
         if not group or up_uid is None:
@@ -478,7 +827,7 @@ class WebPanel:
     async def _action_account_refresh(self, request):
         form = await self._read_action(request)
         if form is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         uid = self._form_uid(form)
         if uid is None:
             return self._action_response()
@@ -508,7 +857,7 @@ class WebPanel:
 
     async def _action_login_start(self, request):
         if await self._read_action(request) is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         if self._login_task is not None and not self._login_task.done():
             return self._action_response()
         from .bili_login import BiliLoginService
@@ -550,13 +899,13 @@ class WebPanel:
 
     async def _action_login_cancel(self, request):
         if await self._read_action(request) is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         if self._login_task is not None and not self._login_task.done():
             self._login_task.cancel()
         return self._action_response()
 
     async def _handle_login_qr(self, request):
-        if not self._check_token(request):
+        if await self._require_login(request) is not None:
             return web.Response(status=401, text="unauthorized")
         qr = (self._login_state or {}).get("qr")
         if not qr:
@@ -564,7 +913,7 @@ class WebPanel:
         return web.Response(body=qr, content_type="image/png")
 
     async def _handle_login_status(self, request):
-        if not self._check_token(request):
+        if await self._require_login(request) is not None:
             return web.Response(status=401, text="unauthorized")
         state = self._login_state or {}
         return web.json_response({"status": state.get("status", ""),
@@ -574,7 +923,7 @@ class WebPanel:
         """批量取消动态订阅：按up_uid解除全部群绑定并停止轮询进程"""
         form = await self._read_action(request)
         if form is None:
-            return web.Response(status=401, text="unauthorized: token required")
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         up_uids = [int(v) for v in form.getall("up_uid", []) if str(v).isdigit()]
         for up_uid in up_uids:
             try:
@@ -589,16 +938,14 @@ class WebPanel:
         return self._action_response()
 
     async def _action_groups_refresh(self, request):
-        if not self._check_token(request):
-            return web.Response(status=401, text="unauthorized: token required")
+        if await self._require_login(request) is not None:
+            return web.Response(status=401, text="unauthorized: 请先登录（游客只读）")
         if self.group_refresher is not None:
             count = await self.group_refresher.refresh_once()
             logger.info(f"面板触发群信息刷新：{count}个群")
         return self._action_response()
 
     async def _handle_trend(self, request):
-        if not self._check_token(request):
-            return web.Response(status=401, text="unauthorized: token required")
         room_raw = (request.query.get("room") or "").strip()
         room_id = int(room_raw) if room_raw.isdigit() else None
         ctx = await self._trend_context(
@@ -697,18 +1044,14 @@ class WebPanel:
     # ========== JSON接口 ==========
 
     async def _handle_history(self, request):
-        if not self._check_token(request):
-            return web.Response(status=401, text="unauthorized: token required")
         try:
             days = max(min(int(request.query.get("days", 30)), 365), 1)
         except ValueError:
             days = 30
-        history = await self.db_service.get_daily_history(days=days)
+        history = await self.db_service.get_daily_history(days=days)             if self.db_service else []
         return web.json_response({"days": days, "history": history})
 
     async def _handle_api(self, request):
-        if not self._check_token(request):
-            return web.Response(status=401, text="unauthorized: token required")
         data = await self._collect()
         return web.json_response(data)
 

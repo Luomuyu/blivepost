@@ -195,7 +195,30 @@ window.renderTrend = function(data, mode){
         <span class="w-2.5 h-2.5 rounded-full bg-pink-500 shadow-[0_0_8px_rgba(236,72,153,.8)] shrink-0"></span>
         <span class="text-lg font-bold tracking-wide truncate">BLivePost <span class="text-slate-500 font-normal text-sm">面板</span></span>
       </a>
-      <span class="hidden sm:inline text-xs text-slate-500 shrink-0">只读数据 · 操作需谨慎</span>
+      <div class="flex items-center gap-2 shrink-0">
+        <span class="hidden sm:inline text-xs text-slate-500">只读数据 · 操作需谨慎</span>
+        {% if current_user %}
+        <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs {{ 'bg-emerald-500/10 text-emerald-400' if is_admin else 'bg-blue-500/10 text-blue-400' }}">
+          <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+          {{ current_user }}{{ '（管理员）' if is_admin }}
+        </span>
+        {% if is_admin %}
+        <a href="/admin" class="px-2.5 py-1 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700">后台</a>
+        {% endif %}
+        <button onclick="webLogout()" class="px-2.5 py-1 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700">退出</button>
+        <script>
+        function webLogout(){
+          fetch('/web/logout', {method: 'POST'}).then(() => { location.href = '/'; location.reload(); });
+        }
+        </script>
+        {% else %}
+        <a href="/login" title="点击登录"
+           class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs bg-slate-700/50 text-slate-300 hover:bg-slate-700 hover:text-slate-100">
+          <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+          游客（只读）
+        </a>
+        {% endif %}
+      </div>
     </div>
   </div>
 </header>
