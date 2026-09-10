@@ -135,6 +135,12 @@ async def run_migrations(engine: AsyncEngine) -> int:
     return applied
 
 
+@migration_handler(6, "group_binding清理已停止(monitored=0)行")
+async def _migrate_v6_purge_stopped_bindings(conn, db_type: str) -> None:
+    """推送关系表不再存储已停止状态：清理历史遗留的monitored=0行"""
+    await conn.execute(text("DELETE FROM group_binding WHERE monitored = 0"))
+
+
 @migration_handler(5, "group_binding.monitored BOOLEAN→INTEGER")
 async def _migrate_v5_monitored_integer(conn, db_type: str) -> None:
     """

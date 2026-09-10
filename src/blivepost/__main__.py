@@ -339,6 +339,7 @@ async def main_async(
                 binding_store=binding_store, db_service=db_service,
                 host=settings.message.web_host, port=settings.message.web_port,
                 token=settings.message.web_token, bot_client=qqbot,
+                message_settings=settings.message,
             )
             await web_panel.start()
 
