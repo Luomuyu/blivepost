@@ -160,14 +160,17 @@ function editorRow(roomId){
 function togglePushEditor(roomId){
   const row = editorRow(roomId);
   if(!row) return;
-  /* 只允许一个展开：先收起其他编辑行并同步状态集合；编辑期间暂停自动刷新 */
-  document.querySelectorAll('tr.push-editor').forEach(r => { if (r !== row) { r.classList.add('hidden'); window.__liveOpenEditors.delete(String(r.dataset.editor)); } });
-  const opening = row.classList.contains('hidden');
-  if(opening){
-    row.classList.remove('hidden');
-    window.__liveOpenEditors.add(String(roomId));
+  /* toggle：已展开则收起，未展开则展开（同时仅一个展开） */
+  const isOpen = !row.classList.contains('hidden');
+  if(isOpen){
+    row.classList.add('hidden');
+    document.body.classList.remove('ui-busy');
+    return;
   }
-  document.body.classList.toggle('ui-busy', window.__liveOpenEditors.size > 0);
+  /* 收起其他编辑行 */
+  document.querySelectorAll('tr.push-editor').forEach(r => { if (r !== row) r.classList.add('hidden'); });
+  row.classList.remove('hidden');
+  document.body.classList.add('ui-busy');
 }
 function collapsePushEditor(roomId){
   const row = editorRow(roomId);
