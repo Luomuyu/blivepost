@@ -279,12 +279,12 @@ class WebPanel:
             for rec in await self.db_service.list_bindings():
                 g = groups_by_openid.get(rec.group_openid)
                 tags = None
-                if rec.tags:
+                if g is not None and g.tags:
                     try:
-                        tag_list = json.loads(rec.tags)
+                        tag_list = json.loads(g.tags)
                         tags = "、".join(str(t) for t in tag_list) or None
                     except ValueError:
-                        tags = rec.tags
+                        tags = g.tags
                 bindings.append({
                     "group_openid": rec.group_openid,
                     "group_name": g.group_name if g else None,

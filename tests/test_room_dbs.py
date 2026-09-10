@@ -240,3 +240,45 @@ async def test_migration_v4_adds_group_info_columns():
     missing = await svc.list_groups_missing_info()
     assert missing == ["G9"]
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_live_page_bindings_carry_group_details(tmp_path):
+    """回归：直播页绑定状态携带群信息（此前误读GroupBindingRecord触发AttributeError）"""
+    from blivepost.services.bindings import BindingStore
+    from blivepost.services.webpanel import WebPanel
+
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    await svc.update_group_info("G1", {
+        "group_name": "测试一群", "group_finger_memo": "简介文本",
+        "group_class_text": "游戏", "group_tags": ["手游", "公会"],
+        "group_member_num": 42,
+    })
+    await svc.save_live_room_info(9646546, uid=91156053, title="标题")
+
+    class Pool:
+        accounts = []
+    class MM:
+        def room_ids(self): return []
+        def has(self, rid): return False
+        def get_cookie_uid(self, rid): return None
+        def get_account_rooms(self, uid): return []
+    store = BindingStore(svc)
+    await store.bind("G1", 9646546, 91156053)
+    await store.set_monitored("G1", 9646546, True)
+    panel = WebPanel(Pool(), MM(), None, store, svc,
+                     bot_client=None)
+
+    ctx = await panel._page_context("live")
+    assert ctx["rooms"][0]["room_id"] == 9646546
+    b = ctx["bindings"][0]
+    assert b["group_name"] == "测试一群"
+    assert b["group_desc"] == "简介文本"
+    assert b["category"] == "游戏"
+    assert b["tags"] == "手游、公会"  # JSON解析为顿号串展示
+    assert b["member_count"] == 42
+    await db.close()
