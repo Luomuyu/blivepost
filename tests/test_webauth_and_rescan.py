@@ -686,3 +686,27 @@ async def test_screen_requires_login_and_renders(tmp_path):
     resp2 = await panel._handle_screen_data(req2)
     assert resp2.status == 200
     assert "screen-trend" in resp2.text and "房间今日排行" in resp2.text
+
+
+def test_logger_debug_gating(capsys):
+    """DEBUG日志仅在debug开关开启时输出；jieba日志级别随开关联动"""
+    import logging
+
+    from blivepost.utils.logger import Logger
+
+    logger = Logger().setup(name="blivepost", console=True, debug=False)
+    logger.debug("debug隐藏")
+    logger.info("info显示")
+    out = capsys.readouterr().out
+    assert "debug隐藏" not in out and "info显示" in out
+
+    Logger().apply_debug(True)
+    logger.debug("debug显示")
+    out2 = capsys.readouterr().out
+    assert "debug显示" in out2
+    assert logger.level == logging.DEBUG
+    assert logging.getLogger("jieba").level == logging.DEBUG
+
+    Logger().apply_debug(False)
+    assert logger.level == logging.INFO
+    assert logging.getLogger("jieba").level == logging.WARNING

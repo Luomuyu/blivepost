@@ -6,6 +6,7 @@
 供Web面板词云页渲染。
 """
 
+import logging
 import re
 from collections import Counter
 from typing import Iterable, List
@@ -40,6 +41,9 @@ try:  # jieba为可选优化依赖：缺失时退回二元组切分
 except ImportError:  # pragma: no cover
     jieba = None
     _HAS_JIEBA = False
+# 静默jieba词典构建日志（"Building prefix dict..."等刷屏噪音）；
+# 应用debug开关为Y时由Logger.apply_debug放开
+logging.getLogger("jieba").setLevel(logging.WARNING)
 
 
 def _extract_tokens(text: str, use_jieba: bool) -> Iterable[str]:

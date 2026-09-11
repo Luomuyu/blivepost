@@ -194,6 +194,8 @@ async def main_async(
     try:
         # 加载配置（文件不存在时自动生成默认配置）
         settings = Settings.load(config_path)
+        # debug开关决定DEBUG日志是否输出（默认INFO；同时约束jieba等第三方库日志）
+        Logger().apply_debug(settings.message.debug)
 
         # 初始化数据库
         logger.info(f"正在初始化数据库 ({settings.database.type})...")

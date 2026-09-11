@@ -77,6 +77,7 @@ class Logger:
 
     _instance: Optional["Logger"] = None
     _logger: Optional[logging.Logger] = None
+    _debug: bool = False
 
     def __new__(cls) -> "Logger":
         if cls._instance is None:
@@ -86,22 +87,27 @@ class Logger:
     def setup(
         self,
         name: str = "blivepost",
-        level: int = logging.INFO,
+        level: Optional[int] = None,
         log_dir: Optional[str] = None,
         console: bool = True,
+        debug: bool = False,
     ) -> logging.Logger:
         """
         设置日志系统
 
         Args:
             name: 日志名称
-            level: 日志级别
+            level: 日志级别（None时按debug开关取DEBUG/INFO）
             log_dir: 日志文件目录
             console: 是否输出到控制台
+            debug: 调试开关（debug=True时DEBUG日志才输出）
 
         Returns:
             logging.Logger: 配置好的日志器
         """
+        self._debug = bool(debug)
+        if level is None:
+            level = logging.DEBUG if self._debug else logging.INFO
         self._logger = logging.getLogger(name)
         self._logger.setLevel(level)
         # 关闭向root传播：避免botpy等第三方配置的root handler造成重复输出
@@ -149,6 +155,22 @@ class Logger:
         if self._logger is None:
             return self.setup()
         return self._logger
+
+    def apply_debug(self, debug: bool) -> None:
+        """配置加载后应用debug开关：调整主日志与第三方库（jieba）日志级别
+
+        debug=False（默认）：级别INFO，DEBUG日志不出现在终端；
+        debug=True：级别DEBUG，排障明细（推送丢弃/分片上传等）才输出。
+        jieba词典构建日志随同一开关（默认静默，避免污染终端）。
+        """
+        self._debug = bool(debug)
+        level = logging.DEBUG if self._debug else logging.INFO
+        if self._logger is not None:
+            self._logger.setLevel(level)
+            for h in self._logger.handlers:
+                h.setLevel(level)
+        jieba_logger = logging.getLogger("jieba")
+        jieba_logger.setLevel(logging.DEBUG if self._debug else logging.WARNING)
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
