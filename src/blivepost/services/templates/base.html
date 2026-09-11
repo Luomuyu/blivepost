@@ -113,13 +113,10 @@ window.renderWordCloud = function(){
   if(!box) return;
   var spans = [...box.querySelectorAll('.wc-word')];
   box.style.position = 'relative';
-  box.classList.add('justify-start');
-  box.classList.remove('items-center', 'justify-center');
-  if(!spans.length){ window.__wcLayout = null; return; }
+  if(!spans.length){ window.__wcLayout = null; box.style.height = ''; return; }
 
   var W = box.clientWidth || 800;
-  var H = Math.max(300, Math.min(520, Math.round(W * 0.45)));
-  box.style.height = H + 'px';
+  var H = Math.max(300, Math.min(520, Math.round(W * 0.45)));  /* 螺旋布局场高度 */
 
   var counts = spans.map(w => +w.dataset.count || 1);
   var max = Math.max(...counts), min = Math.min(...counts);
@@ -142,7 +139,7 @@ window.renderWordCloud = function(){
     w.style.left = '0'; w.style.top = '0';
   });
 
-  var placed = [];   // {x,y,w,h} 左上角矩形
+  var placed = [];   /* 与spans同序的矩形 {x,y,w,h} */
   function overlaps(r){
     for(var i = 0; i < placed.length; i++){
       var q = placed[i];
@@ -160,7 +157,7 @@ window.renderWordCloud = function(){
   spans.forEach((w, i) => {
     var cw = w.offsetWidth, ch = w.offsetHeight;
     var px = fontOf(counts[i]);
-    var theta = i * 2.39996;               // 黄金角：均匀散开
+    var theta = i * 2.39996;               /* 黄金角：均匀散开 */
     var r = i === 0 ? 0 : 4;
     var rect = null, scale = 1;
     for(var attempt = 0; attempt < 2 && !rect; attempt++){
@@ -182,7 +179,7 @@ window.renderWordCloud = function(){
                        w: cw, h: ch}; }
     placed.push(rect);
     w.style.visibility = 'visible';
-    w.style.left = rect.x + 'px'; w.style.top = rect.y + 'px';
+    w.style.left = rect.x + 'px';
     var color = palette[i % palette.length];
     w.style.color = color;
     layout.push({word: w.textContent, count: counts[i], px: px,
@@ -190,9 +187,18 @@ window.renderWordCloud = function(){
                  color: color, weight: px > 28 ? '700' : '500'});
   });
 
+  /* 容器高度自适应词云实际铺开范围：整体上移贴合顶部，卡片随内容伸缩 */
+  var minTop = Math.min.apply(null, placed.map(function(r){ return r.y; }));
+  var maxBottom = Math.max.apply(null, placed.map(function(r){ return r.y + r.h; }));
+  var dy = 6 - minTop;
+  spans.forEach((w, i) => { w.style.top = (placed[i].y + dy) + 'px'; });
+  layout.forEach(it => { it.y += dy; });
+  var contentH = Math.round(maxBottom - minTop + 12);
+  box.style.height = contentH + 'px';
+
   var labelEl = document.querySelector('#wordcloud-panel h2');
   window.__wcLayout = layout;
-  window.__wcMeta = {W: W, H: H,
+  window.__wcMeta = {W: W, H: contentH,
                      label: labelEl ? labelEl.textContent.replace(/\s+/g, ' ').trim() : ''};
 };
 
