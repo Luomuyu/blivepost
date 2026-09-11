@@ -343,6 +343,8 @@ window.renderTrend = function(data, mode){
           <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
           {{ current_user }}{{ '（管理员）' if is_admin }}
         </span>
+        <a href="/screen" target="_blank" title="数据大屏（新窗口打开）"
+           class="px-2.5 py-1 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700">大屏</a>
         {% if is_admin %}
         <a href="/admin" class="px-2.5 py-1 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700">后台</a>
         {% endif %}

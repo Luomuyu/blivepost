@@ -1,0 +1,102 @@
+<!-- 核心指标行 -->
+<div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3 mb-4">
+  <div class="card p-4">
+    <p class="text-xs text-slate-500 mb-1">机器人</p>
+    <p class="text-xl font-bold kpi-num {{ 'text-emerald-400' if bot.get('client_started') and bot.get('token_ready') else 'text-red-400' }}">
+      {{ '在线' if bot.get('client_started') and bot.get('token_ready') else '离线' }}</p>
+    <p class="text-xs text-slate-500 mt-1 truncate">{{ me.get('username', '') or '未获取' }}</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-slate-500 mb-1">监控房间</p>
+    <p class="text-3xl font-bold kpi-num text-blue-400 glow-blue">{{ alive_rooms }}<span class="text-base text-slate-500 font-normal"> / {{ room_count }}</span></p>
+    <p class="text-xs text-slate-500 mt-1">存活 / 已登记</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-slate-500 mb-1">动态订阅</p>
+    <p class="text-3xl font-bold kpi-num text-amber-400 glow-amber">{{ dyn_alive }}<span class="text-base text-slate-500 font-normal"> / {{ dyn_count }}</span></p>
+    <p class="text-xs text-slate-500 mt-1">轮询中 / 已订阅</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-slate-500 mb-1">绑定群</p>
+    <p class="text-3xl font-bold kpi-num text-emerald-400">{{ group_count }}</p>
+    <p class="text-xs text-slate-500 mt-1">推送关系 {{ monitored_bindings }} 条</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-slate-500 mb-1">账号池</p>
+    <p class="text-3xl font-bold kpi-num {{ 'text-emerald-400' if pool_active else 'text-red-400' }}">{{ pool_active }}<span class="text-base text-slate-500 font-normal"> / {{ pool_total }}</span></p>
+    <p class="text-xs text-slate-500 mt-1">可用 / 总数</p>
+  </div>
+  <div class="card p-4">
+    <p class="text-xs text-slate-500 mb-1">数据库</p>
+    <p class="text-3xl font-bold kpi-num text-slate-300">{{ db_size_mb }}<span class="text-base text-slate-500 font-normal"> MB</span></p>
+    <p class="text-xs text-slate-500 mt-1">主库+全部子库</p>
+  </div>
+</div>
+
+<!-- 趋势 + 排行 -->
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-3 mb-4">
+  <div class="card p-4 xl:col-span-2">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="font-semibold text-sm text-slate-300">近7天趋势 <span class="text-slate-500 font-normal text-xs">柱=弹幕 · 线=礼物(元)</span></h2>
+      <span class="text-xs text-slate-500">30秒自动刷新</span>
+    </div>
+    <div id="screen-trend" data-rows='{{ trend7 | tojson }}'></div>
+  </div>
+
+  <div class="card p-4">
+    <h2 class="font-semibold text-sm text-slate-300 mb-3">房间今日排行 <span class="text-slate-500 font-normal text-xs">按收入</span></h2>
+    {% if rooms_today %}
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-xs text-slate-500 text-left bg-slate-900/60">
+          <th class="px-2 py-2 font-medium">房间</th>
+          <th class="px-2 py-2 font-medium">弹幕</th>
+          <th class="px-2 py-2 font-medium">礼物(元)</th>
+          <th class="px-2 py-2 font-medium">上舰(元)</th>
+          <th class="px-2 py-2 font-medium">SC(元)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rooms_today %}
+        <tr class="border-t border-slate-800">
+          <td class="px-2 py-2.5 font-mono">{{ r.room_id }}<span class="text-slate-500 text-xs ml-1">{{ r.streamer }}</span></td>
+          <td class="px-2 py-2.5 kpi-num text-blue-400">{{ r.danmaku }}</td>
+          <td class="px-2 py-2.5 kpi-num text-amber-400">{{ r.gold }}</td>
+          <td class="px-2 py-2.5 kpi-num text-emerald-400">{{ r.ship }}</td>
+          <td class="px-2 py-2.5 kpi-num text-red-400">{{ r.sc }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="px-2 py-6 text-center text-slate-500">暂无登记房间</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="py-10 text-center text-sm text-slate-500">暂无登记房间</p>
+    {% endif %}
+  </div>
+</div>
+
+<!-- 下播记录 -->
+<div class="card p-4">
+  <h2 class="font-semibold text-sm text-slate-300 mb-3">最近下播</h2>
+  {% if recent %}
+  <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+    {% for r in recent %}
+    <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+      <div class="flex items-center justify-between mb-1.5">
+        <span class="font-mono text-sm">{{ r.room_id }}</span>
+        <span class="text-xs text-slate-500">{{ r.end_time.strftime('%m-%d %H:%M') if r.end_time else '-' }}</span>
+      </div>
+      <div class="grid grid-cols-4 gap-1 text-xs kpi-num">
+        <span class="text-slate-500">时长</span><span>{{ '%dh%02dm' | format(r.duration // 3600, (r.duration % 3600) // 60) if r.duration else '-' }}</span>
+        <span class="text-slate-500">弹幕</span><span class="text-blue-400">{{ r.danmaku_count }}</span>
+        <span class="text-slate-500">礼物</span><span class="text-amber-400">{{ r.gold_count }}元</span>
+        <span class="text-slate-500">SC</span><span class="text-red-400">{{ r.sc_count }}</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="py-8 text-center text-sm text-slate-500">暂无下播记录</p>
+  {% endif %}
+</div>

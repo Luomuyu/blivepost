@@ -640,3 +640,49 @@ async def test_push_switch_seed_and_consumer_gate(tmp_path):
     assert received[-1] == "x"
     assert Push.last_allowed is None
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_screen_requires_login_and_renders(tmp_path):
+    """数据大屏：游客拒绝（HTMX返回HX-Redirect/普通302），登录后可访问并渲染各区块"""
+    from aiohttp.test_utils import make_mocked_request
+
+    from blivepost.services.webpanel import WebPanel
+
+    async def _fake_collect():
+        return {"now": "t", "bot": {"client_started": True, "token_ready": True,
+                "token_expires_in": 3600},
+                "me": {"id": "9", "username": "bot", "avatar": "", "share_url": ""},
+                "app_id": "100", "db_size_mb": 1.2,
+                "accounts": [], "rooms": [{"room_id": 100, "alive": True, "uid": 1,
+                "streamer": "s", "danmaku": 1, "gold": 0, "ship": 0, "sc": 0}],
+                "dynamics": [{"up_uid": 1, "name": "u", "alive": True, "groups": 1}],
+                "recent": []}
+    panel = WebPanel(None, None, None, None, None, bot_client=None)
+    panel._collect = _fake_collect
+
+    # 游客访问整页 → 302登录页；HTMX局部 → HX-Redirect
+    resp_denied = await panel._handle_screen_page(make_mocked_request("GET", "/screen"))
+    assert resp_denied.status == 302 and "/login" in resp_denied.location
+    req_hx = make_mocked_request("GET", "/panel/screen",
+                                 headers={"HX-Request": "true"})
+    resp_hx = await panel._handle_screen_data(req_hx)
+    assert resp_hx.headers.get("HX-Redirect") == "/login?err=2"
+
+    # 登录会话 → 大屏整页渲染（标题/指标/趋势容器）
+    sid = panel._create_session("alice", is_admin=False)
+    req = make_mocked_request("GET", "/screen",
+                              headers={"Cookie": f"blivepost_sid={sid}"})
+    resp = await panel._handle_screen_page(req)
+    assert resp.status == 200
+    body = resp.text
+    assert "数据大屏" in body and "screen-clock" in body
+    assert "screen-trend" in body and "renderScreenTrend" in body
+    assert "监控房间" in body and "账号池" in body
+    # HTMX局部渲染
+    req2 = make_mocked_request("GET", "/panel/screen",
+                               headers={"Cookie": f"blivepost_sid={sid}",
+                                        "HX-Request": "true"})
+    resp2 = await panel._handle_screen_data(req2)
+    assert resp2.status == 200
+    assert "screen-trend" in resp2.text and "房间今日排行" in resp2.text
