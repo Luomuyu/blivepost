@@ -2,6 +2,13 @@
   <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
     <h2 class="font-semibold">弹幕词云 <span class="text-slate-500 text-sm font-normal">{{ label }} · {{ danmaku_count }}条弹幕</span></h2>
     <div class="flex flex-wrap items-center gap-1.5 text-xs">
+      {% if words %}
+      <button onclick="exportWordCloud()" title="导出词云为PNG图片"
+              class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium">
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3"/></svg>
+        导出图片
+      </button>
+      {% endif %}
       <select name="room" aria-label="选择直播间"
               hx-get="/panel/wordcloud?range={{ active }}&day={{ day_value }}&month={{ month_value }}&year={{ year_value }}"
               hx-trigger="change" hx-target="#wordcloud-panel" hx-swap="outerHTML" hx-include="this"
@@ -58,7 +65,7 @@
   </div>
 
   <!-- 词云主体 -->
-  <div id="wordcloud" class="mt-4 min-h-[220px] flex flex-wrap items-center justify-center gap-x-3 gap-y-1 leading-tight">
+  <div id="wordcloud" class="mt-4 leading-tight" style="min-height:220px">
     {% if words %}
     {% for w in words %}
     <span class="wc-word cursor-default" data-count="{{ w.count }}"

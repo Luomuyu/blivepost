@@ -104,27 +104,146 @@
   }
 </style>
 <script>
-/* 弹幕词云（原生JS）：按词频映射字号与主题配色，无外部依赖 */
+/* 弹幕词云（原生JS）：圆形布局——频率越高字号越大越靠圆心；无外部依赖 */
+window.__wcLayout = null;   // 当前布局（导出图片用）：[{word,count,px,x,y,color}]
+window.__wcMeta = null;     // {W,H,label}
+
 window.renderWordCloud = function(){
   var box = document.getElementById('wordcloud');
   if(!box) return;
-  var words = box.querySelectorAll('.wc-word');
-  if(!words.length) return;
-  var counts = [...words].map(w => +w.dataset.count || 1);
+  var spans = [...box.querySelectorAll('.wc-word')];
+  box.style.position = 'relative';
+  box.classList.add('justify-start');
+  box.classList.remove('items-center', 'justify-center');
+  if(!spans.length){ window.__wcLayout = null; return; }
+
+  var W = box.clientWidth || 800;
+  var H = Math.max(300, Math.min(520, Math.round(W * 0.45)));
+  box.style.height = H + 'px';
+
+  var counts = spans.map(w => +w.dataset.count || 1);
   var max = Math.max(...counts), min = Math.min(...counts);
   var minPx = 13, maxPx = 40;
   var palette = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches
     ? ['#2563eb', '#d97706', '#059669', '#dc2626', '#7c3aed', '#0f766e', '#be185d']
     : ['#60a5fa', '#f59e0b', '#34d399', '#f87171', '#a78bfa', '#2dd4bf', '#f472b6'];
-  words.forEach((w, i) => {
-    var c = +w.dataset.count || 1;
+  function fontOf(c){
     var t = max === min ? 0.5 : (Math.log(c) - Math.log(min)) / (Math.log(max) - Math.log(min));
-    w.style.fontSize = Math.round(minPx + t * (maxPx - minPx)) + 'px';
-    w.style.color = palette[i % palette.length];
-    w.style.fontWeight = t > 0.6 ? '700' : '500';
+    return Math.round(minPx + t * (maxPx - minPx));
+  }
+
+  /* 测量：隐藏绝对定位后读实际宽高 */
+  spans.forEach((w, i) => {
+    w.style.fontSize = fontOf(counts[i]) + 'px';
+    w.style.fontWeight = fontOf(counts[i]) > 28 ? '700' : '500';
+    w.style.position = 'absolute';
+    w.style.visibility = 'hidden';
+    w.style.whiteSpace = 'nowrap';
+    w.style.left = '0'; w.style.top = '0';
   });
+
+  var placed = [];   // {x,y,w,h} 左上角矩形
+  function overlaps(r){
+    for(var i = 0; i < placed.length; i++){
+      var q = placed[i];
+      if(r.x < q.x + q.w + 3 && r.x + r.w + 3 > q.x &&
+         r.y < q.y + q.h + 2 && r.y + r.h + 2 > q.y) return true;
+    }
+    return false;
+  }
+  function within(r){
+    return r.x >= 2 && r.y >= 2 && r.x + r.w <= W - 2 && r.y + r.h <= H - 2;
+  }
+
+  var cx = W / 2, cy = H / 2;
+  var layout = [];
+  spans.forEach((w, i) => {
+    var cw = w.offsetWidth, ch = w.offsetHeight;
+    var px = fontOf(counts[i]);
+    var theta = i * 2.39996;               // 黄金角：均匀散开
+    var r = i === 0 ? 0 : 4;
+    var rect = null, scale = 1;
+    for(var attempt = 0; attempt < 2 && !rect; attempt++){
+      theta = i * 2.39996; r = i === 0 ? 0 : 4;
+      for(var step = 0; step < 900; step++){
+        var x = cx + (r * 1.5) * Math.cos(theta);
+        var y = cy + (r * 0.62) * Math.sin(theta);
+        var cand = {x: x - cw * scale / 2, y: y - ch * scale / 2,
+                    w: cw * scale, h: ch * scale};
+        if(within(cand) && !overlaps(cand)){ rect = cand; break; }
+        theta += 0.45; r += 0.7;
+        if(r > Math.max(W, H)) break;
+      }
+      if(!rect){ scale = 0.72; w.style.fontSize = Math.round(px * scale) + 'px';
+                 cw = w.offsetWidth; ch = w.offsetHeight; }
+    }
+    if(!rect){ rect = {x: Math.max(2, Math.min(W - cw - 2, cx - cw / 2)),
+                       y: Math.max(2, Math.min(H - ch - 2, cy - ch / 2)),
+                       w: cw, h: ch}; }
+    placed.push(rect);
+    w.style.visibility = 'visible';
+    w.style.left = rect.x + 'px'; w.style.top = rect.y + 'px';
+    var color = palette[i % palette.length];
+    w.style.color = color;
+    layout.push({word: w.textContent, count: counts[i], px: px,
+                 x: rect.x + rect.w / 2, y: rect.y + rect.h / 2,
+                 color: color, weight: px > 28 ? '700' : '500'});
+  });
+
+  var labelEl = document.querySelector('#wordcloud-panel h2');
+  window.__wcLayout = layout;
+  window.__wcMeta = {W: W, H: H,
+                     label: labelEl ? labelEl.textContent.replace(/\s+/g, ' ').trim() : ''};
 };
-</script>
+
+var __wcRt = null;
+window.addEventListener('resize', function(){
+  clearTimeout(__wcRt);
+  __wcRt = setTimeout(function(){ if(document.getElementById('wordcloud')) renderWordCloud(); }, 200);
+});
+
+/* 导出词云图片：布局→SVG→Canvas→PNG下载（含标签与主题底色） */
+window.exportWordCloud = function(){
+  var layout = window.__wcLayout, meta = window.__wcMeta;
+  if(!layout || !layout.length){ alert('暂无词云数据'); return; }
+  function esc(t){ return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  var bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#020617';
+  var fg = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || '#64748b';
+  var parts = ['<svg xmlns="http://www.w3.org/2000/svg" width="' + meta.W + '" height="' + meta.H + '">',
+               '<rect width="100%" height="100%" fill="' + esc(bg) + '"/>'];
+  layout.forEach(it => {
+    parts.push('<text x="' + it.x.toFixed(1) + '" y="' + it.y.toFixed(1) + '" ' +
+               'font-family="system-ui, sans-serif" ' +
+               'font-size="' + it.px + '" font-weight="' + it.weight + '" ' +
+               'fill="' + it.color + '" text-anchor="middle" dominant-baseline="central">' +
+               esc(it.word) + '</text>');
+  });
+  parts.push('</svg>');
+  var svg = parts.join('');
+  var url = URL.createObjectURL(new Blob([svg], {type: 'image/svg+xml;charset=utf-8'}));
+  var img = new Image();
+  img.onload = function(){
+    var scale = 2;
+    var cv = document.createElement('canvas');
+    cv.width = meta.W * scale; cv.height = meta.H * scale + 0;
+    var ctx = cv.getContext('2d');
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = fg;
+    ctx.fillText(meta.label, 10, 16);
+    cv.toBlob(function(blob){
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = '词云_' + meta.label.replace(/[\/:*?"<>|\s]+/g, '_') + '.png';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }, 'image/png');
+  };
+  img.onerror = function(){ URL.revokeObjectURL(url); alert('导出失败，请重试'); };
+  img.src = url;
+};</script>
 <script>
 /* 收入趋势图（原生JS，无外部依赖）：按容器宽度绘制SVG，resize重绘；悬停/触摸显示各日明细 */
 window.renderTrend = function(data, mode){
