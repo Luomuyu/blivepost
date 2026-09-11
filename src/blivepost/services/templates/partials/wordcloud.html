@@ -65,7 +65,7 @@
   </div>
 
   <!-- 词云主体 -->
-  <div id="wordcloud" class="mt-4 leading-tight" style="min-height:220px">
+  <div id="wordcloud" class="mt-4 leading-tight" style="position:relative;min-height:240px">
     {% if words %}
     {% for w in words %}
     <span class="wc-word cursor-default" data-count="{{ w.count }}"
@@ -76,5 +76,19 @@
     {% endif %}
   </div>
   <p class="mt-3 text-xs text-slate-500">字号越大出现次数越多 · 悬停查看具体次数 · 已过滤停用词、单字与纯数字</p>
-  <script>renderWordCloud();</script>
+  <script>
+  /* 布局延迟到样式与布局稳定后执行（Tailwind CDN异步注入/HTMX交换时序竞争会导致
+     绝对定位词锚定错位）；rAF×2立即校正，load与htmx settle后再各兜底重排一次（幂等） */
+  function __runWcLayout(){
+    if(document.getElementById('wordcloud')) renderWordCloud();
+  }
+  requestAnimationFrame(function(){ requestAnimationFrame(__runWcLayout); });
+  window.addEventListener('load', __runWcLayout);
+  if(!window.__wcSettleBound){
+    window.__wcSettleBound = true;
+    document.body.addEventListener('htmx:afterSettle', function(e){
+      if(e.target && e.target.id === 'page') __runWcLayout();
+    });
+  }
+  </script>
 </div>
