@@ -67,6 +67,9 @@ class _DbServiceStub:
     async def clear_group_at_all(self, group_openid):
         return True
 
+    async def refund_group_at_all(self, group_openid):
+        return True
+
     async def seed_push_switches(self, defaults):
         return None
 
@@ -403,9 +406,12 @@ async def test_main_async_full_startup_ordered_shutdown(monkeypatch):
                 "monitor_manager.restore:[23058]", "monitor_manager.ensure:23058",
                 "bilibili_api.new:cfg-sessdata"):  # Redis无凭证回落配置文件
         assert sig in rec.calls
+    # v1.2.0审查修复：dynamic_manager先于consumer停（消费者在时动态子进程
+    # 仍在入队，停止间隙的最后一批上报会无人消费而丢弃）
     expected_stops = [
-        "monitor_manager.stop_all", "admin_handler.stop", "consumer.stop",
-        "web_panel.stop", "dynamic_manager.stop_all", "daily_report.stop",
+        "monitor_manager.stop_all", "admin_handler.stop",
+        "dynamic_manager.stop_all", "consumer.stop",
+        "web_panel.stop", "daily_report.stop",
         "live_watcher.stop", "maintainer.stop", "streamer_refresher.stop",
         "group_refresher.stop", "qqbot.stop", "db_service.aclose",
         "db_manager.close",
@@ -424,8 +430,9 @@ async def test_main_async_midtry_failure_still_stops_started(monkeypatch):
     assert "streamer_refresher.start" not in rec.calls
     # 失败点之后两个刷新器保持None被跳过，其余stop一个不少
     expected_stops = [
-        "monitor_manager.stop_all", "admin_handler.stop", "consumer.stop",
-        "web_panel.stop", "dynamic_manager.stop_all", "daily_report.stop",
+        "monitor_manager.stop_all", "admin_handler.stop",
+        "dynamic_manager.stop_all", "consumer.stop",
+        "web_panel.stop", "daily_report.stop",
         "live_watcher.stop", "maintainer.stop",
         "qqbot.stop", "db_service.aclose", "db_manager.close",
     ]

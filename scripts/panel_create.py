@@ -38,7 +38,8 @@ IDS_FILE = Path(__file__).resolve().parent / "panel_ids.json"
 #   - 指令说明 desc 限 30 宽度单位：半角（字母/数字/半角标点）算1，
 #     中文与全角标点算2（含标点；超限接口报错，运行前有本地校验拦截）
 # 注意：/绑定 /解绑 指令已移除（直播间绑定改Web面板操作），不得再加入面板；
-# /绑定列表 指令保留但不上面板（与 /状态 职责重叠，为腾条目移出）。
+# /绑定列表 指令保留但不上面板（与 /状态 职责重叠，为腾条目移出）；
+# /艾特全体 指令保留但不上面板（群10条已满，配置类低频指令，/帮助 可发现）。
 
 # 面板平台限制（实测校准）
 PANEL_MAX_ITEMS = 10
@@ -46,25 +47,25 @@ PANEL_DESC_MAX_WIDTH = 30
 
 GROUP_ITEMS = [
     {"type": "command", "name": "/帮助", "desc": "查看全部指令"},
+    {"type": "command", "name": "/状态", "desc": "查看监控状态与绑定"},
     {"type": "command", "name": "/监控 ", "desc": "开始监控推送，补房间号"},
     {"type": "command", "name": "/取消监控 ", "desc": "取消监控推送，补房间号"},
-    {"type": "command", "name": "/状态", "desc": "查看监控状态与绑定"},
     {"type": "command", "name": "/推送设置 ", "desc": "查看/修改推送开关，补房间号"},
     {"type": "command", "name": "/绑定动态 ", "desc": "订阅UP主动态，补UID"},
     {"type": "command", "name": "/取消动态 ", "desc": "取消订阅UP主动态，补UID"},
-    {"type": "command", "name": "/收入 ", "desc": "查询收入汇总，补房间号"},
     {"type": "command", "name": "/SC榜 ", "desc": "查询SC排行，补房间号"},
+    {"type": "command", "name": "/收入 ", "desc": "查询收入汇总，补房间号"},
     {"type": "command", "name": "/汇总", "desc": "全部房间合计，可带周/月"},
 ]
 
 C2C_ITEMS = [
+    {"type": "command", "name": "/我", "desc": "查看你的openid"},
     {"type": "command", "name": "/登录", "desc": "扫码登录B站账号"},
     {"type": "command", "name": "/账号", "desc": "查看账号池状态"},
-    {"type": "command", "name": "/移除账号 ", "desc": "从账号池删除账号，补UID"},
     {"type": "command", "name": "/恢复账号 ", "desc": "恢复失效账号，补UID"},
-    {"type": "command", "name": "/导出 ", "desc": "导出明细数据，补房间号"},
+    {"type": "command", "name": "/移除账号 ", "desc": "从账号池删除账号，补UID"},
     {"type": "command", "name": "/体积", "desc": "查询数据库体积"},
-    {"type": "command", "name": "/我", "desc": "查看你的openid"},
+    {"type": "command", "name": "/导出 ", "desc": "导出明细数据，补房间号"},
 ]
 
 PANELS = [

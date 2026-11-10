@@ -139,8 +139,9 @@ class AdminMixin:
                     continue
             return default
 
-        from datetime import datetime as _dt2, timedelta as _td
-        today = _dt2.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        from datetime import timedelta as _td
+        from ..utils.timeutil import now_local
+        today = now_local().replace(hour=0, minute=0, second=0, microsecond=0)
         start_day = _parse_day(request.query.get("start"), today)
         end_day = _parse_day(request.query.get("end"), today + _td(days=1))
         fmt = (request.query.get("format") or "csv").lower()

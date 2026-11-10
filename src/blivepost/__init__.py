@@ -10,7 +10,7 @@ BLivePost - B站直播监控与推送系统
 - Redis缓存支持
 """
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 __author__ = "Luomuyu"
 
 # 核心模块

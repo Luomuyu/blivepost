@@ -43,7 +43,7 @@
 
 | 项 | 理由 |
 |----|------|
-| `core/monitor.py`（LiveMonitor） | 顶层导出的库API；主流程已不使用。建议下个大版本评估移除 |
+| （已于v1.2.0移除）`core/monitor.py`（LiveMonitor） | 顶层导出的库API；主流程已不使用。建议下个大版本评估移除 |
 | `models/live.py` 的 UserInfo/DanmakuInfo/GiftInfo/SuperChatInfo/GuardInfo/DynamicInfo | 导出的库级数据模型，供库用户 |
 | `services/wbi.py`（WbiSigner/wbi_sign/derive_wbi_key） | 第六轮确认非死代码：`dynamics.py`/`fingerprint.py` 在用，`test_wbi.py` 覆盖。bilibili.py 摘除签名调用不影响其存续 |
 | `push.send_group_image` | 预留API，与单聊files接口对称 |

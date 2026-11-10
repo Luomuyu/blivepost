@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Optional
 
 from ..utils.logger import get_logger
+from ..utils.timeutil import now_local
 
 
 if TYPE_CHECKING:
@@ -94,14 +95,14 @@ class DailyReportJob:
                     retry_wait = None
                 else:
                     await asyncio.sleep(self._seconds_until_next())
-                if last_run_date == datetime.now().date():
+                if last_run_date == now_local().date():
                     # 本运行日已完成过结算（重试跨零点后再次到点）
                     continue
                 if self.daily_enabled:
                     await self.check_once()
                 # 周结（周一）、月结（每月1日）紧随日结执行
                 await self.check_periodic()
-                last_run_date = datetime.now().date()
+                last_run_date = now_local().date()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -110,7 +111,7 @@ class DailyReportJob:
 
     async def check_periodic(self) -> int:
         """按配置执行周结/月结（周一推上周、每月1日推上月；发送前查运行时开关）"""
-        now = datetime.now()
+        now = now_local()  # 与统计分日同时区源（Setting.timezone）
         count = 0
         if self.weekly_enabled and now.weekday() == 0:
             if await self._switch_on("weekly_report"):
@@ -182,8 +183,9 @@ class DailyReportJob:
         return [g for g in groups if (rows.get(g) or {}).get(switch, global_on)]
 
     def _seconds_until_next(self) -> float:
-        """距下一个推送时刻的秒数"""
-        now = datetime.now()
+        """距下一个推送时刻的秒数（按Setting.timezone的00:05调度，
+        与统计分日同时区源）"""
+        now = now_local()
         target = now.replace(hour=self.hour, minute=self.minute,
                              second=0, microsecond=0)
         if target <= now:
@@ -200,7 +202,7 @@ class DailyReportJob:
         Returns:
             int: 推送的房间数
         """
-        day = day or (datetime.now() - timedelta(days=1))
+        day = day or (now_local() - timedelta(days=1))
         if not await self._switch_on("daily_report"):
             logger.info("每日结算推送开关已关闭，跳过")
             return 0

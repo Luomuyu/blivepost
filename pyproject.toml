@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "blivepost"
-version = "1.1.0"
+version = "1.2.0"
 description = "B站直播监控与推送系统"
 readme = "README.md"
 license = {text = "MIT"}
@@ -23,7 +23,6 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.14",
     "Topic :: Communications :: Chat",
     "Topic :: Internet :: WWW/HTTP",
@@ -47,6 +46,7 @@ dependencies = [
     "qq-botpy-v2>=1.0.1",
     "playwright>=1.40.0",
     "qrcode[pil]>=7.4",
+    "Pillow>=10.0.0",  # dyn_fetch动态卡片渲染直接使用（qrcode[pil]仅间接带入，显式声明防脱链）
     "jinja2>=3.1",
     "jieba>=0.42",
 ]

@@ -150,13 +150,17 @@ class PushQueueConsumer:
             # 开播推送：主进程侧执行 Markdown+按钮→富媒体→文本 降级链；
             # 当天首次开播提醒的群自动艾特全体（每群每自然日1次配额）
             at_all_groups = await self._acquire_at_all_groups(item.get("room_id"))
-            self.push_service.push_live_start_from_parts(
+            ok = self.push_service.push_live_start_from_parts(
                 content=item.get("content", ""),
                 media=item.get("media"),
                 room_id=item.get("room_id"),
                 keyboard=item.get("keyboard"),
                 at_all_groups=at_all_groups,
             )
+            if not ok and at_all_groups:
+                # 调度层失败（队列满/无绑定群等）：配额白扣，退还当日额度
+                # （发送层失败由bot层at_all_refund钩子退还）
+                await self._refund_at_all(at_all_groups)
             # 调度可观测：真机排障依赖（发送结果在bot层降级链日志）
             n_groups = len(self.push_service.resolve_push_groups(item.get("room_id")))
             logger.info(f"开播推送已调度：房间{item.get('room_id')} → {n_groups}群"
@@ -353,9 +357,11 @@ class PushQueueConsumer:
             groups, room_id=int(room_id or 0))
         # 自定义bot可能不支持at_all_groups参数（鸭子类型兼容），不支持则原样发送
         if at_all_groups and _supports_kwarg(bot.broadcast, "at_all_groups"):
-            bot.broadcast(groups, content, at_all_groups=at_all_groups)
+            ok = bot.broadcast(groups, content, at_all_groups=at_all_groups)
         else:
-            bot.broadcast(groups, content)  # 同步入口，不可await
+            ok = bot.broadcast(groups, content)  # 同步入口，不可await
+        if not ok and at_all_groups:
+            await self._refund_at_all(at_all_groups)  # 调度层失败退还配额
         logger.info(f"UP主 {up_uid} 开播提醒已推送到 {len(groups)} 个群")
 
     async def _acquire_at_all_groups(self, room_id) -> Optional[list]:
@@ -364,6 +370,18 @@ class PushQueueConsumer:
             return None
         groups = self.push_service.resolve_push_groups(room_id)
         return await self._acquire_at_all_for_groups(groups, room_id=room_id)
+
+    async def _refund_at_all(self, groups) -> None:
+        """调度层失败（入队失败/无目标群）时退还当日艾特配额
+
+        仅清used_date不动群配置（refund_group_at_all）；发送层的失败由
+        bot层at_all_refund钩子负责，此处只覆盖"消息根本没进发送队列"的窗口。
+        """
+        if self.db_service is None:
+            return
+        for g in groups or []:
+            await self.db_service.refund_group_at_all(g)
+        logger.info(f"调度层失败已退还艾特全体配额：{len(groups or [])}群")
 
     async def _acquire_at_all_for_groups(self, groups,
                                          room_id: int = 0) -> Optional[list]:

@@ -13,7 +13,7 @@ from typing import List, Optional, TYPE_CHECKING
 
 from ..utils.contact import extract_sender
 from ..utils.logger import get_logger
-from ..utils.timeutil import ms_to_str, now_ms
+from ..utils.timeutil import ms_to_str, now_local, now_ms
 from .bili_login import BiliLoginService, LoginResult, verify_nav
 from .cookie_pool import CookiePool
 
@@ -337,10 +337,9 @@ class AdminCommandHandler:
             return "导出功能不可用（数据库未连接）"
 
         import csv
-        from datetime import datetime as _dt
         from pathlib import Path
 
-        day = day or _dt.now()
+        day = day or now_local()
         date_text = day.strftime("%Y%m%d")
         data = await self.db_service.export_day_records(room_id, day=day)
 

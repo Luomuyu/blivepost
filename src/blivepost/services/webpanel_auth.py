@@ -16,7 +16,8 @@ i:随机nonce})，signature=HMAC-SHA256(payload, 密钥)。会话不存内存/�
 如需重启保留登录态请配置web_token）。
 
 代价与限制（无状态会话固有）：
-- 无法吊销单个会话：登出仅清除客户端cookie，sid在过期前签名仍有效；
+- 单会话吊销为进程内存级（jti黑名单，v1.2.0起）：登出即吊销、防cookie
+  残留重放；但进程重启后黑名单清空（被窃取的sid重启后恢复可用）；
 - 全量登出手段：修改web_token（或未配置token时重启进程）会使全部旧会话
   验签失败→全员回到游客——顺带成为"紧急全量登出"的后门开关。
 """
@@ -189,7 +190,9 @@ class AuthMixin:
         provided = (request.query.get("token")
                     or request.headers.get("X-Web-Token")
                     or "")
-        return secrets.compare_digest(provided, self.token)
+        # 比较bytes：str入参含非ASCII时compare_digest会抛TypeError
+        return secrets.compare_digest(
+            provided.encode("utf-8"), self.token.encode("utf-8"))
 
     def _set_session_cookie(self, resp: web.Response, sid: str) -> None:
         resp.set_cookie(_SESSION_COOKIE, sid, max_age=int(_SESSION_TTL.total_seconds()),
@@ -199,7 +202,8 @@ class AuthMixin:
         """?token=管理员快捷令牌→创建管理员会话并重定向到干净URL（无令牌返回None）"""
         provided = request.query.get("token") or ""
         if not (self.token and provided and
-                secrets.compare_digest(provided, self.token)):
+                secrets.compare_digest(provided.encode("utf-8"),
+                                        self.token.encode("utf-8"))):
             return None
         sid = self._create_session(self.admin_user, is_admin=True)
         target = request.path or "/"
@@ -302,7 +306,8 @@ class AuthMixin:
             raise web.HTTPFound("/login?err=3")
         user, is_admin = None, False
         if self.admin_password and username == self.admin_user \
-                and secrets.compare_digest(password, self.admin_password):
+                and secrets.compare_digest(password.encode("utf-8"),
+                                           self.admin_password.encode("utf-8")):
             user, is_admin = self.admin_user, True
         else:
             record = await self.db_service.get_web_user(username) \

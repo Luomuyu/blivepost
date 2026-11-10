@@ -35,6 +35,17 @@ def get_default_timezone() -> ZoneInfo:
     return _default_tz
 
 
+def now_local() -> datetime:
+    """当前时刻（Setting.timezone口径的naive datetime）
+
+    日界/窗口输入（今天/昨天/近N天/00:05调度）统一经此取"当前时间"，
+    再传入day_bounds_ms/dt_to_ms（naive按默认时区解释）——与分日统计
+    同一时区源。直接用datetime.now()（机器时区）在机器时区≠
+    Setting.timezone时（如海外VPS默认UTC）会使所有日界整体平移。
+    """
+    return datetime.now(_default_tz).replace(tzinfo=None)
+
+
 def now_ms() -> int:
     """当前13位毫秒Unix时间戳"""
     return int(datetime.now(dt_timezone.utc).timestamp() * 1000)

@@ -8,8 +8,13 @@
     BLIVEPOST_ADMIN_OPENIDS / BLIVEPOST_ADMIN_MAIN_OPENIDS  (逗号分隔)
     BLIVEPOST_SESSDATA
     BLIVEPOST_WEB_TOKEN / BLIVEPOST_WEB_PORT / BLIVEPOST_WEB_HOST
+    BLIVEPOST_WEB_ADMIN_USER / BLIVEPOST_WEB_ADMIN_PASSWORD
+    BLIVEPOST_WEB_API_PUBLIC (Y/N) / BLIVEPOST_WEB_API_TOKEN
+    BLIVEPOST_TIMEZONE
+    BLIVEPOST_BACKUP_HOUR / BLIVEPOST_BACKUP_MINUTE / BLIVEPOST_BACKUP_KEEP
     BLIVEPOST_DB_TYPE / BLIVEPOST_DB_HOST / BLIVEPOST_DB_PORT
     BLIVEPOST_DB_USER / BLIVEPOST_DB_PASSWORD / BLIVEPOST_DB_NAME
+    BLIVEPOST_DB_SQLITE_PATH
     BLIVEPOST_REDIS_HOST / BLIVEPOST_REDIS_PORT / BLIVEPOST_REDIS_PASSWORD
 """
 
@@ -29,6 +34,12 @@ ENV_MAP: Dict[str, str] = {
     "BLIVEPOST_WEB_ADMIN_PASSWORD": "message.web_admin_password",
     "BLIVEPOST_WEB_PORT": "message.web_port",
     "BLIVEPOST_WEB_HOST": "message.web_host",
+    "BLIVEPOST_WEB_API_PUBLIC": "message.web_api_public",
+    "BLIVEPOST_WEB_API_TOKEN": "message.web_api_token",
+    "BLIVEPOST_TIMEZONE": "message.timezone",
+    "BLIVEPOST_BACKUP_HOUR": "message.backup_hour",
+    "BLIVEPOST_BACKUP_MINUTE": "message.backup_minute",
+    "BLIVEPOST_BACKUP_KEEP": "message.backup_keep",
     "BLIVEPOST_DB_TYPE": "database.type",
     "BLIVEPOST_DB_HOST": "database.host",
     "BLIVEPOST_DB_PORT": "database.port",
@@ -88,6 +99,9 @@ def _coerce(dotted: str, raw: str):
     """按目标字段当前类型转换字符串值"""
     if "openids" in dotted:
         return [v.strip() for v in raw.split(",") if v.strip()]
+    if dotted == "message.web_api_public":
+        # Y/N型布尔（与config.yaml同口径；bool不经int分支需在此转换）
+        return raw.strip().upper() in ("Y", "1", "TRUE", "YES", "ON")
     return raw
 
 

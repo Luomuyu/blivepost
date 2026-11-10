@@ -37,7 +37,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ## 工程化（CI/Docker/.env）
 
 - **CI**（.github/workflows/ci.yml）：lint（flake8）/ type-check（mypy非阻塞）/ test（pytest）
-- **Docker**（Dockerfile）：python:3.12-slim + chromium系统依赖；依赖层缓存优化；chromium烘焙至 `/app/ms-playwright`（容器内运行目录）；`/app/data`与`/app/logs`挂载点；`EXPOSE 8080`；配置经挂载`/app/config.yaml`提供
+- **Docker**（Dockerfile）：python:3.14-slim + chromium系统依赖；依赖层缓存优化；chromium烘焙至 `/app/ms-playwright`（容器内运行目录）；`/app/data`与`/app/logs`挂载点；`EXPOSE 8080`；配置经挂载`/app/config.yaml`提供
 - **chromium安装位置**：本地运行装到运行目录 `ms-playwright/`（`PLAYWRIGHT_BROWSERS_PATH`由bili_login模块设默认值，显式环境变量优先）；`.dockerignore`/`.gitignore`已排除该目录
 - **.env与环境变量**（config/env.py）：`.env`文件 + `BLIVEPOST_`前缀环境变量覆盖（`_QQBOT_APP_ID/_APP_SECRET`、`_ADMIN_OPENIDS/_MAIN_OPENIDS`、`_SESSDATA`、`_WEB_TOKEN/_WEB_PORT`、`_DB_*`、`_REDIS_*`）
 - **wheel**：`blivepost-1.1.0-py3-none-any.whl`（含py.typed）
@@ -90,7 +90,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ## 权限组模型（逐级包含：main ⊇ openids ⊇ default）
 
 - **default**：群查询指令（/状态 /绑定列表 /收入 /SC榜 /汇总 /帮助）+ 私聊 /我
-- **管理员组**（`Admin.openids`）：+群控制指令（/绑定 /监控 /取消监控 /解绑 /绑定动态 /取消动态；名单空时不限制）；私聊管理命令（/账号 /移除 /恢复 /导出 /体积）
+- **管理员组**（`Admin.openids`）：+群控制指令（/监控 /取消监控 /推送设置 /艾特全体 /绑定动态 /取消动态；名单空时不限制）；私聊管理命令（/账号 /移除 /恢复 /导出 /体积）
 - **主管理员组**（`Admin.main_openids`）：+敏感通知接收；/登录对 openids∪main 开放
 - 名单配置值：与消息sender提取一致（union_openid或member_openid/user_openid）
 

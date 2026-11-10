@@ -11,7 +11,7 @@ import asyncio
 import json
 import time
 
-from datetime import date, datetime
+from datetime import date
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple
 
 from aiohttp import web
@@ -25,7 +25,7 @@ from .webpanel_common import (
     _parse_month,
     logger,
 )
-from ..utils.timeutil import ms_to_str, now_ms
+from ..utils.timeutil import ms_to_str, now_local, now_ms
 
 
 if TYPE_CHECKING:
@@ -61,6 +61,8 @@ class PagesMixin:
         _current_user: Callable[..., Any]
         _is_admin: Callable[..., Any]
         _require_login: Callable[..., Any]
+        _session: Callable[..., Any]
+        _web_token_ok: Callable[..., Any]
 
     # ========== HTML渲染辅助 ==========
 
@@ -199,7 +201,15 @@ class PagesMixin:
             token_resp = await self._auth_token_to_admin(request)
             if token_resp is not None:
                 return token_resp
+            is_guest = (self._session(request) is None
+                        and not self._web_token_ok(request))
+            if is_guest and key == "accounts":
+                # 账号池页=运营情报（UID/昵称/到期/扫码入池），整页要求登录
+                raise web.HTTPFound("/login")
             ctx = await self._page_context(key)
+            if is_guest:
+                # 游客可见聚合数据，身份标识隐藏（与/api/status脱敏口径一致）
+                ctx["app_id"] = ""
             ctx.update(page=key, nav=nav, current_user=self._current_user(request),
                        is_admin=self._is_admin(request))
             if request.headers.get("HX-Request"):
@@ -374,7 +384,7 @@ class PagesMixin:
         Returns:
             dict: {label, words, total, room_id, active, day/month/year值, room_options}
         """
-        today = datetime.now().date()
+        today = now_local().date()
         start = end = today
         active = range_key or "today"
         label = "今天"
@@ -474,7 +484,7 @@ class PagesMixin:
         Args:
             room_id: 指定直播间（None=全部直播间总和）
         """
-        today = datetime.now().date()
+        today = now_local().date()
         rows: list = []
         mode = "daily"
         active = "d30"

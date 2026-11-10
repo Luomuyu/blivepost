@@ -191,7 +191,7 @@ class QQBotClient:
         self._at_all_unsupported: set = set()
         # 群角色缓存：{group_openid: (过期monotonic, role)}——bot_state仅白名单可用且30QPM
         self._group_role_cache: dict = {}
-        # 艾特全体发送失败时的配额退还钩子（__main__注入db_service.clear_group_at_all）
+        # 艾特全体发送失败时的配额退还钩子（__main__注入db_service.refund_group_at_all）
         self.at_all_refund: Optional[Callable[[str], Any]] = None
         # 主动消息权限拒绝提示的去重：{group_openid: 上次提示的monotonic时刻}
         self._deny_warned: dict = {}
@@ -620,14 +620,18 @@ class QQBotClient:
                 group_content = f"<qqbot-at-everyone /> {content}"
             sent = await _send_pair(group, group_content)
             if not sent and use_at_all:
-                # 艾特全体被拒（无群管理员权限等）→ 去标签降级重发，保证消息必达；
-                # 艾特未送达，退还该群当日配额（发送失败不计入）
+                # 艾特未送达，退还该群当日配额（发送失败不计入）；去标签
+                # 降级重发保证消息必达
                 logger.warning(
                     f"群{group} 艾特全体发送失败（机器人可能无群管理员权限），"
                     f"降级为普通消息重发")
-                self._at_all_unsupported.add(group)
                 await self._refund_at_all(group)
                 sent = await _send_pair(group, content)
+                if sent:
+                    # 同内容去标签后送达→失败确由艾特标签引起，本会话不再
+                    # 尝试；若重发也失败则可能为临时故障（限额/网络），不
+                    # 拉黑以免误禁当日后续艾特
+                    self._at_all_unsupported.add(group)
             if not sent:
                 success = False
             await asyncio.sleep(0.5)  # 避免发送过快

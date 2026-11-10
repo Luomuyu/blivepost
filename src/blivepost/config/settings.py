@@ -209,6 +209,12 @@ class Settings:
                 db_size_warn_mb=int(setting_data.get("db_size_warn_mb", 500)),
                 ignore_cmds=setting_data.get("ignore_cmds", []),
                 debug=setting_data.get("debug", "N") == "Y",
+                backup_hour=int(setting_data.get("backup_hour", 4)),
+                backup_minute=int(setting_data.get("backup_minute", 30)),
+                backup_keep=int(setting_data.get("backup_keep", 7)),
+                web_api_public=setting_data.get("web_api_public", "N") == "Y",
+                web_api_token=str(setting_data.get("web_api_token", "")),
+                timezone=str(setting_data.get("timezone", "Asia/Shanghai")),
             ),
             redis=RedisConfig(
                 host=redis_data.get("host", "localhost"),
@@ -243,7 +249,7 @@ class Settings:
     def _create_default_config(path: Path) -> None:
         """创建默认配置文件"""
         default_config = """# BLivePost 配置文件
-# 版本: 1.0.0
+# 版本: 1.2.0
 
 Admin: # 管理员设置
   openids: [] # 管理员用户openId列表 (私聊命令、普通通知接收者)

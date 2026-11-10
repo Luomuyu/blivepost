@@ -12,6 +12,7 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .models import EventBase
@@ -30,11 +31,25 @@ class RoomDbManager:
         self._session_factory: Optional[async_sessionmaker] = None
 
     async def initialize(self) -> None:
-        """建引擎与表结构（幂等）"""
+        """建引擎与表结构（幂等；WAL+busy_timeout与主库配置一致）"""
         if self._engine is not None:
             return
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        engine = create_async_engine(f"sqlite+aiosqlite:///{self.db_path}")
+        engine = create_async_engine(
+            f"sqlite+aiosqlite:///{self.db_path}",
+            # timeout为秒（sqlite3.connect参数）：弹幕洪峰下并发写等待上限
+            connect_args={"timeout": 15},
+        )
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _set_sqlite_pragma(dbapi_conn, _record):
+            # 每个新连接重放PRAGMA（池复用连接只执行一次不够）：
+            # WAL提升读写并发，NORMAL在WAL下安全且更快
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.close()
+
         async with engine.begin() as conn:
             await conn.run_sync(EventBase.metadata.create_all)
         self._engine = engine

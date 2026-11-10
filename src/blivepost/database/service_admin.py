@@ -1046,6 +1046,24 @@ class AdminMixin:
             logger.error(f"清理艾特全体配额记录失败({group_openid}): {e}")
             return False
 
+    async def refund_group_at_all(self, group_openid: str) -> bool:
+        """退还当日艾特全体配额（仅清used_date；mode/room_ids配置保留）
+
+        发送失败退款用——不可用clear_group_at_all（会连群配置的
+        daily/rooms/off模式一并删掉，次日恢复默认daily违背用户设置）。
+        """
+        try:
+            async with self.db_manager.get_session() as session:
+                record = await session.get(GroupAtAllRecord, group_openid)
+                if record is None or not record.used_date:
+                    return False
+                record.used_date = ""
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"退还艾特全体配额失败({group_openid}): {e}")
+            return False
+
     async def set_group_at_all_mode(self, group_openid: str, mode: str,
                                     room_ids: str = "") -> bool:
         """设置群的at_all模式（daily/rooms/off）；rooms时room_ids逗号分隔"""

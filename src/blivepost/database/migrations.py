@@ -86,14 +86,14 @@ def _convert_sqlite_file(db_path: Path) -> int:
 
     'utc'修饰符：strftime默认把时间串当UTC解析，而旧值是datetime.now()
     写入的机器本地naive时间——'utc'按机器时区换算回UTC，是写入的忠实逆运算。
+
+    失败时抛异常（而非吞掉跳过）：子库被锁/损坏时若静默跳过，v7版本号
+    仍会被记录、永不重试，该库残留text时间值导致统计静默错乱。v7幂等，
+    中断后下次启动重跑对已转换部分无副作用。
     """
     import sqlite3
     converted = 0
-    try:
-        conn = sqlite3.connect(str(db_path), timeout=15)
-    except Exception as e:
-        logger.warning(f"打开子库失败，跳过时间列迁移: {db_path} ({e})")
-        return 0
+    conn = sqlite3.connect(str(db_path), timeout=15)
     try:
         tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")]
@@ -109,7 +109,9 @@ def _convert_sqlite_file(db_path: Path) -> int:
                 converted += cur.rowcount or 0
         conn.commit()
     except Exception as e:
-        logger.warning(f"子库时间列迁移失败({db_path}): {e}")
+        raise RuntimeError(
+            f"子库时间列迁移失败({db_path})：{e}。请确认无残留进程占用该库后"
+            f"重启重试（v7幂等，已转换部分不受影响）") from e
     finally:
         conn.close()
     return converted
@@ -142,12 +144,31 @@ async def _migrate_sqlite_main(conn) -> int:
     return converted
 
 
+def _legacy_tz_offset_seconds() -> int:
+    """旧naive时间值的解释时区偏移（Setting.timezone，与SQLite路径'utc'
+    修饰符同义——旧值由运行机datetime.now()写入）。
+
+    MySQL的UNIX_TIMESTAMP按会话time_zone解释naive值、PG的EXTRACT(EPOCH)
+    一律按UTC解释：远程DB会话时区≠写入机时区时会整体偏移，故转换前显式
+    设置会话时区/附加偏移。注：固定偏移对历史夏令时时段不精确（典型
+    部署中国无夏令时，无影响）。
+    """
+    from datetime import datetime
+    from ..utils.timeutil import get_default_timezone
+    off = datetime.now(get_default_timezone()).utcoffset()
+    return int(off.total_seconds()) if off else 0
+
+
 async def _migrate_mysql_or_pg(conn, db_type: str) -> int:
     """主库（MySQL/PostgreSQL）时间列转换：值换算 + 列类型改BIGINT
 
     幂等依据：information_schema的data_type——已是bigint的列（转换过/
     新建的库）跳过。MySQL的MODIFY会丢列注释（历史列无服务端默认值，
     仅python侧default，无损）；转换经UNIX_TIMESTAMP/EXTRACT按秒×1000。
+
+    MySQL必须"加新列→回填→删旧列→改名"三步：直接向DATETIME列UPDATE
+    13位整数在严格模式下报1292、非严格模式静默清零毁数据。三步在部分
+    失败后重跑也幂等（新列存在则跳过ADD、旧列已删则跳过DROP）。
     """
     schema_cond = "table_schema = DATABASE()" if db_type == "mysql" \
         else "table_schema = current_schema()"
@@ -160,19 +181,44 @@ async def _migrate_mysql_or_pg(conn, db_type: str) -> int:
                                              "timestamp without time zone")
     ]
     converted = 0
+    if targets and db_type == "mysql":
+        # 会话时区对齐写入侧（UNIX_TIMESTAMP按会话时区解释naive值）
+        from ..utils.timeutil import get_default_timezone
+        off = _legacy_tz_offset_seconds()
+        tz_name = str(get_default_timezone())
+        try:
+            await conn.execute(text(
+                "SET SESSION time_zone = :tz"), {"tz": tz_name})
+        except Exception:
+            # 未加载时区表的老库只接受固定偏移（±HH:MM）
+            sign = "-" if off < 0 else "+"
+            off_abs = abs(off)
+            await conn.execute(text(
+                f"SET SESSION time_zone = '{sign}{off_abs // 3600:02d}:"
+                f"{off_abs % 3600 // 60:02d}'"))
     for table, col, nullable in targets:
         if db_type == "mysql":
+            ms_col = f"{col}_ms"
+            cols_now = await _table_columns(conn, "mysql", table)
+            if ms_col not in cols_now:
+                await conn.execute(text(
+                    f"ALTER TABLE `{table}` ADD COLUMN `{ms_col}` BIGINT NULL"))
             await conn.execute(text(
-                f"UPDATE `{table}` SET `{col}` = "
+                f"UPDATE `{table}` SET `{ms_col}` = "
                 f"CAST(UNIX_TIMESTAMP(`{col}`) * 1000 AS SIGNED) "
                 f"WHERE `{col}` IS NOT NULL"))
+            if col in cols_now:
+                await conn.execute(text(
+                    f"ALTER TABLE `{table}` DROP COLUMN `{col}`"))
             await conn.execute(text(
-                f"ALTER TABLE `{table}` MODIFY COLUMN `{col}` BIGINT "
-                f"{'NULL' if nullable == 'YES' else 'NOT NULL'}"))
+                f"ALTER TABLE `{table}` CHANGE COLUMN `{ms_col}` `{col}` BIGINT "
+                f"{'NOT NULL' if nullable == 'NO' else 'NULL'}"))
         else:
+            # PG的EXTRACT(EPOCH FROM naive)按UTC解释：补写入侧偏移秒
             await conn.execute(text(
                 f'ALTER TABLE "{table}" ALTER COLUMN "{col}" TYPE BIGINT '
-                f'USING (EXTRACT(EPOCH FROM "{col}") * 1000)::BIGINT'))
+                f'USING ((EXTRACT(EPOCH FROM "{col}") + :off) * 1000)::BIGINT'),
+                {"off": _legacy_tz_offset_seconds()})
         converted += 1
         logger.info(f"迁移v7: {table}.{col} 已转为毫秒BIGINT")
     return converted

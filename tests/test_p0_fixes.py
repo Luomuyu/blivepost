@@ -159,6 +159,10 @@ class _DbServiceStub:
         self.cleared_at_all.append(group_openid)
         return True
 
+    async def refund_group_at_all(self, group_openid):
+        self.cleared_at_all.append(group_openid)
+        return True
+
 
 class _ContactStoreStub:
     async def save_group(self, group_openid, del_flag=0, receive=1):

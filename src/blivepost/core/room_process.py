@@ -138,11 +138,12 @@ async def _reconcile_loop(
     核对真实直播状态并合成缺失的开播/下播事件。
     """
     while not stop_event.is_set():
-        try:
-            await asyncio.wait_for(asyncio.to_thread(stop_event.wait), timeout=RECONCILE_INTERVAL)
-            break  # stop_event被置位
-        except asyncio.TimeoutError:
-            pass
+        # 注意不可用to_thread(stop_event.wait)+wait_for：线程内无超时的
+        # wait在超时后仍永久阻塞，每轮泄漏一个执行器线程，最终耗尽线程池
+        # 使本进程所有to_thread调用（状态查询/落库）永久挂起
+        await asyncio.sleep(RECONCILE_INTERVAL)
+        if stop_event.is_set():
+            break
 
         try:
             handler = handler_ref()
@@ -203,6 +204,19 @@ async def _parent_watch(interval: float = 30.0) -> None:
         await asyncio.sleep(interval)
 
 
+async def _wait_stop_event(stop_event, poll: float = 1.0) -> None:
+    """等待停止信号（纯异步轮询，poll秒粒度）
+
+    不可用asyncio.to_thread(stop_event.wait)：线程内无超时的wait会永久
+    占用执行器线程——主协程因join/parent先完成而返回后，asyncio.run在
+    收尾shutdown_default_executor时join该线程永久挂起，子进程变僵尸
+    （父进程watcher等不到退出，永不重建）。mp.Event.is_set()开销极低，
+    1秒轮询无感。
+    """
+    while not stop_event.is_set():
+        await asyncio.sleep(poll)
+
+
 async def _room_process_async(
     room_id: int,
     settings: Settings,
@@ -237,7 +251,7 @@ async def _room_process_async(
 
     join_task = asyncio.create_task(client.join(), name=f"join-{room_id}")
     stop_task = asyncio.create_task(
-        asyncio.to_thread(stop_event.wait), name=f"stop-{room_id}"
+        _wait_stop_event(stop_event), name=f"stop-{room_id}"
     )
     # 父进程存活自检：主进程被强杀时stop_event不会置位、子进程泄漏续跑
     # （2026-11-10真机累积多个泄漏进程）——父进程消失则自行退出

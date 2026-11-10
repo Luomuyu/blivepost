@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.0-orange.svg)](https://github.com/luomuyu/blivepost)
+[![Version](https://img.shields.io/badge/version-1.2.0-orange.svg)](https://github.com/luomuyu/blivepost)
 
 B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化Python应用
 
@@ -12,7 +12,7 @@ B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化P
 - 🔴 **直播监控** - 实时监控B站直播间，支持弹幕、礼物、上舰、SC、红包等消息
 - 📢 **消息推送** - 通过QQ官方机器人（自建[qq-botpy-v2](https://github.com/tencent-connect/botpy)适配版，接口兼容官方botpy）主动推送消息到QQ群，开播推送支持图片富媒体（失败自动回退文本）
 - 📊 **数据统计** - 弹幕/礼物/舰长/SC/红包入库，支持群指令查询、跨房间汇总、每日/每周/每月自动结算与CSV/JSON导出；**弹幕词云**（jieba分词，按天/近3/7/14天/按月/按年范围+全部或单独直播间）
-- 🖥️ **Web状态面板** - 多页面控制台：概览/直播监控/动态监控/账号池/下播记录/收入趋势/群列表；**游客默认只读**，登录前台用户后可操作（添加直播间/推送群/动态订阅/扫码登录等），管理员（config账号密码）可进后台管理用户、全局推送开关（状态+是否允许前台修改，即时生效）与数据导出；`web_token`为管理员快捷令牌（`?token=`即管理员登录）
+- 🖥️ **Web状态面板** - 多页面控制台：概览/直播监控/动态监控/账号池/下播记录/收入趋势/观众分析（活跃时段热力图/高频发言榜/弹幕日分布）/词云/群列表；**游客默认只读**（AppID与账号池明细等运营情报需登录），登录前台用户后可操作（添加直播间/推送群/动态订阅/扫码登录等），管理员（config账号密码）可进后台管理用户、全局推送开关（状态+是否允许前台修改，即时生效）与数据导出；`web_token`为管理员快捷令牌（`?token=`即管理员登录）
 
 ### 扩展功能
 - 📱 **动态监控** - 群指令订阅B站UP主动态（`/绑定动态 UP主UID`），独立子进程轮询，新动态推送到订阅群
@@ -21,6 +21,7 @@ B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化P
 - 🤝 **联系人管理** - 自动跟踪好友与群（加/删、入群/退群、消息接收开关8个事件），退群自动解绑监控，发送前过滤未开启接收的目标
 - 💾 **Redis缓存** - 可选Redis缓存支持，提升性能
 - 🔧 **Vendor管理** - 自动化blivedm库依赖管理
+- 🩺 **运维接口** - `/healthz`健康检查（Docker HEALTHCHECK）；定时脱敏备份（`backup_keep`滚动保留）；REST API v1（`/api/v1/rooms|summary|trend|analytics|wordcloud`，默认仅私网，`web_api_public`+`web_api_token`开放公网）
 
 ## 📦 安装
 
@@ -148,7 +149,7 @@ asyncio.run(main_async(config_path="config.yaml", sessdata=""))
 
 # 库级组件也可单独使用
 from blivepost import CookiePool, PushService, WbiSigner, BindingStore
-from blivepost import DatabaseService, DatabaseManager
+from blivepost.database import DatabaseService, DatabaseManager
 ```
 
 > **v1.2.0 破坏性变更**：`LiveMonitor` 早期库API已移除（监控由 `MonitorManager` 子进程承担）。库级扩展推荐 `PushService`（推送链）与 `DatabaseService`（读写门面）两条路径，见下方"扩展开发"。
@@ -164,7 +165,6 @@ blivepost/
 │   │   └── settings.py      # 配置管理（Admin/QQBot/Setting/Template等段）
 │   ├── core/
 │   │   ├── manager.py       # 子进程管理/队列消费/Cookie维护循环
-│   │   ├── monitor.py       # （已于v1.2.0移除——监控由manager.py子进程承担）
 │   │   └── handler.py       # 直播事件处理（日志/统计/落库/推送开关）
 │   ├── services/
 │   │   ├── qqbot.py         # QQ机器人客户端（qq-botpy-v2封装）
@@ -181,11 +181,11 @@ blivepost/
 │   │   ├── fingerprint.py   # 指纹服务
 │   │   ├── wbi.py           # WBI签名
 │   │   └── webpanel.py      # Web状态面板
-│   ├── database/            # 模型/引擎/服务（14张表）+ Schema迁移器
+│   ├── database/            # 模型/引擎/服务（23张表：主库11+房间子库11+动态子库1）+ Schema迁移器
 │   ├── models/live.py       # 数据模型
 │   ├── utils/               # 日志、sender提取（union优先）、TCP预检
 │   └── vendor/              # blivedm下载与补丁
-├── tests/                   # 单元测试（318个）
+├── tests/                   # 单元测试（370+个）
 ├── pyproject.toml
 └── PROJECT.md               # 详细项目信息与审查记录
 ```
@@ -268,7 +268,7 @@ Template:
 
 开播/下播推送始终开启（含封面富媒体），不设开关。注意`daily_report`会消耗主动消息配额（未放量约4条/月/群），按需开启。
 
-开播提醒**自动艾特全体**：每个群每个自然日仅有1次 @全体成员 配额，当天首次开播提醒（房间开播推送或UP主动态开播提醒）会自动在消息前嵌入 `<qqbot-at-everyone />` 艾特全体成员；当日后续开播提醒为普通消息。配额跨进程重启保留（主库 `group_at_all` 表记录）。
+开播提醒**自动艾特全体**：每个群每个自然日仅1次 @全体成员 配额（平台硬性限制），当天首次开播提醒（房间开播推送或UP主动态开播提醒）自动嵌入 `<qqbot-at-everyone />` 艾特全体。艾特模式按群三选一（`/艾特全体`指令配置）：`每日`（默认，当日首次开播艾特）/`仅 房间号...`（指定房间的首次开播才艾特）/`关闭`。仅群主/管理员身份的机器人实际发送；发送失败自动去标签降级重发且**不消耗**当日配额（失败即退还）。配置跨进程重启保留（主库 `group_at_all` 表）。
 
 消息形态说明：下播消息不含直播地址行；开播消息在Markdown形态下仅保留「进入直播间」按钮作为跳转入口（按钮跳转 `https://live.bilibili.com/<房间号>`），富媒体与纯文本形态保留直播地址行。
 
@@ -276,7 +276,7 @@ Template:
 
 在群里@机器人发送以下指令，实现多群绑定与多房间监控。
 
-**权限分级**：控制指令（/监控 /取消监控 /绑定动态 /取消动态 /推送设置）仅 `Admin.openids` ∪ `Admin.main_openids` 名单内的用户可执行（名单为空时不限制）；查询指令（/状态 /我的绑定 /收入 /SC榜 /汇总 /帮助）不受限。直播间的绑定/解绑已移至Web面板操作。
+**权限分级**：控制指令（/监控 /取消监控 /绑定动态 /取消动态 /推送设置 /艾特全体）仅 `Admin.openids` ∪ `Admin.main_openids` 名单内的用户可执行（名单为空时不限制）；查询指令（/状态 /绑定列表 /收入 /SC榜 /汇总 /帮助）不受限。直播间的绑定/解绑已移至Web面板操作。
 
 
 | 指令 | 说明 |
@@ -289,14 +289,16 @@ Template:
 | `/绑定列表` | 查看本群全部绑定关系 |
 | `/汇总 [周/月]` | 全部监控房间合计（今日/近7天/近30天） |
 | `/推送设置 [房间号 [开关名 开/关\|恢复]]` | 查看本群推送开关：无参数=各绑定房间概览，带房间号=该房间7项开关明细（天选/大航海/系统事件/房间信息/日周月报，标注是否跟随全局）；指定开关名与开/关可修改本群独立设置，`恢复`=清除独立设置回落跟随全局 |
-| `/绑定动态 UP主UID` | 订阅UP主动态（需开启`dynamic_monitor`开关），新动态含内容摘要与图片富媒体推送 |
+| `/绑定动态 UP主UID` | 订阅UP主动态（需开启`dynamic_monitor`开关；输入房间号自动归一化为该主播UID），新动态含内容摘要与图片推送（浏览器截图>本地卡片>原图降级） |
 | `/取消动态 UP主UID` | 取消订阅UP主动态（订阅后UP主开播自动提醒到订阅群，无需额外指令） |
+| `/艾特全体 [模式]` | 查看本群艾特模式；`每日`/`关闭`/`仅 房间号...`三模式（发送失败不耗配额） |
 | `/帮助` | 查看全部指令 |
 | `/登录`（私聊） | **仅管理员**：扫码登录B站账号，二维码图片私聊回复，成功后Cookie写入账号池 |
 | `/账号`（私聊） | **仅管理员**：查看账号池状态（账号/状态/过期时间） |
 | `/移除账号 UID`（私聊） | **仅管理员**：从账号池删除账号 |
 | `/恢复账号 UID`（私聊） | **仅管理员**：将失效账号恢复为可用（先验证登录态） |
 | `/导出 房间号 [日期] [json]`（私聊） | **仅管理员**：导出当日明细到exports目录（默认CSV带BOM可直接Excel打开，加json为JSON格式；无数据不生成文件） |
+| `/体积`（私聊） | **仅管理员**：查询主库+全部子库体积合计 |
 | `/我`（私聊） | 回复你的openid（所有人可用，方便收集配置管理员名单） |
 
 说明：
@@ -355,6 +357,20 @@ class MyPushService(PushService):
 ```
 
 ## 📝 更新日志
+
+### v1.2.0 (2026-11)
+
+- ✨ 群内体验：`@全体`模式三选一（每日/仅指定房间/关闭，`/艾特全体`指令），发送前按机器人群内角色门控（群主/管理员才艾特），发送失败不消耗当日配额并退还
+- ✨ 未知指令模糊提示（difflib）；`/帮助`按权限分组
+- ✨ 观众分析页（7天×24小时活跃热力图/高频发言榜/弹幕量日分布）
+- ✨ REST API v1（`/api/v1/rooms|summary|trend|analytics|wordcloud`，默认仅私网；`web_api_public=Y`+`web_api_token`开放公网并强制令牌+限速）
+- ✨ 运维小件：`/healthz`健康检查（Docker HEALTHCHECK）、定时脱敏备份（滚动保留）、按房间×日期范围CSV/JSON导出（MySQL/PG可用）
+- 💥 破坏性清理：移除`LiveMonitor`旧库API（扩展走`PushService`/`DatabaseService`）；botpy私有属性收敛为`botpy_compat`适配层；会话支持jti吊销（登出即失效）
+- 💥 全库13位毫秒时间戳：31处DateTime列改BigInteger(ms)消除时区歧义；查询层统一半开区间`[start,end)`；展示层统一`Setting.timezone`转换
+- 🔧 动态取数升级全局单浏览器（feed+opus渲染+截图+PIL卡片降级链）；动态富媒体经素材管理嵌入Markdown
+- 🔧 配置链修复：`backup_*`/`web_api_*`/`timezone`此前未从YAML读入（静默失效），现已解析并支持环境变量覆盖
+- 🔧 子进程稳定性：房间子进程停等改纯异步轮询（修复线程池耗尽导致的静默失效与僵尸进程）；房间子库启用WAL
+- 🔧 Web面板游客脱敏：账号池页与AppID需登录可见（与`/api/status`口径一致）
 
 ### v1.1.0 (2026-09)
 

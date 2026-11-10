@@ -8,7 +8,8 @@ services:
     restart: unless-stopped
     ports:
       # 面板端口默认仅映射到本机（web_token未配置时不建议暴露到局域网）
-      - "127.0.0.1:8080:8080"
+      # 宿主机端口可按需调整（默认18080避开常见8080占用，如traefik）
+      - "127.0.0.1:18080:8080"
     volumes:
       # 配置文件（必需）：修改后重启容器生效
       - ./config.yaml:/app/config.yaml:ro

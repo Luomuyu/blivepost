@@ -592,11 +592,16 @@ class _DynamicPollSession:
                     info["image"] = info["image"] or item.get("image")
                     info["pub_ts"] = item.get("pub_ts") or info["pub_ts"]
                     break
+        # 先入队后记seen：队列满/消费停滞时put失败→不记判重，下轮重试
+        # 推送（反向顺序会把该条动态判重跳过导致永久丢失）
+        if not self._put({"type": "dynamic", "up_uid": self.up_uid, **info}):
+            logger.error(f"UP主 {self.up_uid} 动态{candidate}入队失败，"
+                         f"下轮轮询重试（未记判重）")
+            return
         self.seen.add(candidate)
         save_seen_dynamic_ids(self.up_uid, [candidate], self.dynamics_dir)
         logger.info(f"UP主 {self.up_uid} 发布新动态 {candidate}"
                     f"（图: {info.get('image_source') or ('原' if info['image'] else '无')}）")
-        self._put({"type": "dynamic", "up_uid": self.up_uid, **info})
 
     def _count_failure(self) -> None:
         """连续异常（请求失败/风控响应）计数，超过阈值经队列告警一次（去重：不重复告警）"""
@@ -614,11 +619,14 @@ class _DynamicPollSession:
             "consecutive": self.fail_streak,
         })
 
-    def _put(self, item: dict) -> None:
+    def _put(self, item: dict) -> bool:
+        """经跨进程队列上报；False=写入失败（队列满/超时），调用方决定重试语义"""
         try:
             self.push_queue.put(item, timeout=5)
+            return True
         except Exception as e:
             logger.error(f"动态上报写入队列失败: {e}")
+            return False
 
 
 def _dynamic_process_main(up_uid: int, push_queue, stop_event,
@@ -730,7 +738,6 @@ class DynamicManager:
         self.fetch_service = fetch_service
 
         self._ctx = multiprocessing.get_context("spawn")
-        self._ups: Dict[int, Any] = {}
         self._stop_events: Dict[int, Any] = {}
         self._processes: Dict[int, Any] = {}
         self._watchers: Dict[int, asyncio.Task] = {}
@@ -766,8 +773,9 @@ class DynamicManager:
                 if account is not None:
                     # 完整cookie（含buvid3等风控必需项；仅SESSDATA实测412）
                     cookie_string = account.cookie_string or ""
-                    # 全局浏览器服务的cookie同步（各UP共用单浏览器实例）
-                    if self.fetch_service is not None:
+                    # 全局浏览器服务的cookie同步（各UP共用单浏览器实例）；
+                    # 池空时不覆盖——空cookie会把共用浏览器的登录态清空
+                    if self.fetch_service is not None and cookie_string:
                         self.fetch_service.set_cookies(cookie_string)
 
             fetch_port = self.fetch_service.port if self.fetch_service else 0
@@ -781,7 +789,6 @@ class DynamicManager:
                 name=f"dynamic-{uid}",
             )
             proc.start()
-            self._ups[uid] = self._ctx
             self._stop_events[uid] = stop_event
             self._processes[uid] = proc
             self._watchers[uid] = asyncio.create_task(
@@ -791,19 +798,25 @@ class DynamicManager:
             return True, ""
 
     async def _watch(self, up_uid: int) -> None:
-        """存活监视：进程意外退出时延迟重建"""
+        """存活监视：进程意外退出时延迟重建
+
+        代际校验：重建前确认_processes中仍是本watcher监视的那个进程——
+        崩溃重建延迟期间用户ensure()新建的进程会顶替槽位，此时旧watcher
+        不得remove（会误杀新建的健康进程），重建交由新watcher负责。
+        """
         proc = self._processes.get(up_uid)
         if proc is None:
             return
         await asyncio.to_thread(proc.join)
-        if up_uid not in self._processes:
-            return  # 已被remove
+        if self._processes.get(up_uid) is not proc:
+            return  # 已被remove或已被新ensure替换
         logger.warning(f"UP主 {up_uid} 动态轮询进程意外退出，{REBUILD_DELAY}秒后重建")
         await asyncio.sleep(REBUILD_DELAY)
-        if up_uid in self._processes:
-            await self.remove(up_uid)
-            # 运行中恢复（崩溃重建）：baseline_first保持默认False，沿用seen表判重
-            await self.ensure(up_uid)
+        if self._processes.get(up_uid) is not proc:
+            return  # 延迟期间被remove/替换
+        await self.remove(up_uid)
+        # 运行中恢复（崩溃重建）：baseline_first保持默认False，沿用seen表判重
+        await self.ensure(up_uid)
 
     async def remove(self, up_uid: int) -> bool:
         """停止并移除UP主的轮询进程"""
@@ -812,7 +825,6 @@ class DynamicManager:
             proc = self._processes.pop(uid, None)
             stop_event = self._stop_events.pop(uid, None)
             watcher = self._watchers.pop(uid, None)
-            self._ups.pop(uid, None)
 
         if proc is None:
             return False

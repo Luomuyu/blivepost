@@ -298,8 +298,9 @@ async def main_async(
             logger.info("正在启动QQ官方机器人...")
             qqbot = QQBotClient(settings.qqbot.app_id, settings.qqbot.app_secret,
                                 debug=settings.message.debug)
-            # 艾特全体发送失败时退还当日配额（bot层降级路径回调）
-            qqbot.at_all_refund = db_service.clear_group_at_all
+            # 艾特全体发送失败时退还当日配额（bot层降级路径回调；只清
+            # used_date——clear会连群配置的daily/rooms/off模式一并删除）
+            qqbot.at_all_refund = db_service.refund_group_at_all
             admin_handler = AdminCommandHandler(
                 cookie_pool, settings.admin.openids, bot_client=qqbot,
                 db_service=db_service, monitor_manager=monitor_manager,
@@ -467,8 +468,11 @@ async def main_async(
         sys.exit(1)
     finally:
         # 停止全部房间监控进程
-        if monitor_manager:
-            await monitor_manager.stop_all()
+        try:
+            if monitor_manager:
+                await monitor_manager.stop_all()
+        except Exception as e:
+            logger.warning(f"停止房间监控进程出错: {e}")
 
         # 取消进行中的登录流程（避免playwright资源与任务残留）
         try:
@@ -484,6 +488,14 @@ async def main_async(
         except Exception:
             pass
 
+        # 停止动态轮询子进程（先于消费者：消费者在时动态子进程仍在入队，
+        # 停止间隙的最后一批动态/落库会无人消费而丢弃）
+        try:
+            if dynamic_manager is not None:
+                await dynamic_manager.stop_all()
+        except Exception:
+            pass
+
         # 停止子进程消息消费者与Web面板
         try:
             if consumer:
@@ -493,13 +505,6 @@ async def main_async(
         try:
             if web_panel:
                 await web_panel.stop()
-        except Exception:
-            pass
-
-        # 停止动态轮询子进程（与房间监控同级，缺此步泄漏轮询任务）
-        try:
-            if dynamic_manager is not None:
-                await dynamic_manager.stop_all()
         except Exception:
             pass
 
@@ -542,8 +547,11 @@ async def main_async(
             pass
 
         # 停止QQ官方机器人
-        if qqbot:
-            await qqbot.stop()
+        try:
+            if qqbot:
+                await qqbot.stop()
+        except Exception as e:
+            logger.warning(f"停止QQ机器人出错: {e}")
 
         # 关闭数据库连接（先释放房间子库engine，再关主库）
         try:
@@ -551,8 +559,11 @@ async def main_async(
                 await db_service.aclose()
         except Exception:
             pass
-        if db_manager:
-            await db_manager.close()
+        try:
+            if db_manager:
+                await db_manager.close()
+        except Exception as e:
+            logger.warning(f"关闭数据库出错: {e}")
 
         logger.info("程序已退出")
 

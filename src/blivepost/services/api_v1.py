@@ -17,6 +17,8 @@ REST API v1（只读，JSON）
 接入方式：WebPanel.start()路由注册时挂载本模块的register_routes()。
 """
 
+import ipaddress
+import secrets
 import time
 from typing import Any
 
@@ -30,6 +32,8 @@ logger = get_logger("api_v1")
 # 限速：60次/分钟/IP
 _RATE_LIMIT = 60
 _RATE_WINDOW = 60.0
+# 限速表容量上限（IPv6海量源地址防无界增长；超限清过期再截断最旧）
+_RATE_MAX_TRACKED = 4096
 
 
 class ApiV1Mixin:
@@ -38,65 +42,72 @@ class ApiV1Mixin:
     if True:
         db_service: Any  # 类型由WebPanel组合时确定，mypy经Any绕行
         monitor_manager: Any
+        message_settings: Any
 
     # 限速计数：IP -> (窗口起点monotonic, 计数)
     _api_rate: dict = {}
 
     def _api_authorized(self, request) -> bool:
-        """API鉴权：私网模式仅本机/私网；公网模式强制token"""
-        api_public = getattr(getattr(self, 'message_settings', None),
-                              'web_api_public', 'N') == 'Y'
+        """API鉴权：私网模式仅本机/私网；公网模式强制token
+
+        注：私网模式依据TCP对端地址（request.remote），不可置于反向代理
+        之后（代理流量对端为127.0.0.1会被全部放行）。
+        """
+        ms = getattr(self, 'message_settings', None)
+        api_public = bool(getattr(ms, 'web_api_public', False))
         if not api_public:
             return self._is_private_ip(request.remote or '')
-        # 公网：强制X-API-Token
-        token = getattr(getattr(self, 'message_settings', None),
-                        'web_api_token', '')
+        # 公网：强制X-API-Token（常量时间比较，防时序侧信道）
+        token = str(getattr(ms, 'web_api_token', '') or '')
         if not token:
             logger.warning("API公网模式但web_api_token未配置，拒绝请求")
             return False
         provided = request.headers.get("X-API-Token", "")
-        return bool(provided) and provided == token
+        return bool(provided) and secrets.compare_digest(
+            provided.encode("utf-8"), token.encode("utf-8"))
 
     @staticmethod
     def _is_private_ip(ip: str) -> bool:
-        """是否本机/私网地址"""
+        """是否本机/私网地址（含IPv4映射/ULA/链路本地；解析失败判公网fail-closed）"""
         if not ip:
             return False
-        if ip.startswith(("127.", "::1", "localhost")):
-            return True
-        parts = ip.split(".")
-        if len(parts) == 4:
-            try:
-                a, b = int(parts[0]), int(parts[1])
-                if a == 10:
-                    return True
-                if a == 172 and 16 <= b <= 31:
-                    return True
-                if a == 192 and b == 168:
-                    return True
-            except ValueError:
-                pass
-        return False
+        try:
+            addr = ipaddress.ip_address(ip.split("%")[0])
+        except ValueError:
+            return False
+        return addr.is_loopback or addr.is_private or addr.is_link_local
 
     def _api_rate_ok(self, request) -> bool:
-        """简单IP限速：每_RATE_WINDOW秒_RATE_LIMIT次"""
+        """简单IP限速：每_RATE_WINDOW秒_RATE_LIMIT次（含过期清扫）"""
         ip = request.remote or "unknown"
         now = time.monotonic()
         rec = self._api_rate.get(ip)
         if rec is None or now - rec[0] > _RATE_WINDOW:
             self._api_rate[ip] = (now, 1)
+            self._prune_api_rate(now)
             return True
         if rec[1] >= _RATE_LIMIT:
             return False
         self._api_rate[ip] = (rec[0], rec[1] + 1)
         return True
 
+    def _prune_api_rate(self, now: float) -> None:
+        """清扫过期限速条目；仍超容量则按插入序截断最旧"""
+        if len(self._api_rate) <= _RATE_MAX_TRACKED:
+            return
+        expired = now - _RATE_WINDOW
+        for k in [k for k, v in self._api_rate.items() if v[0] < expired]:
+            self._api_rate.pop(k, None)
+        while len(self._api_rate) > _RATE_MAX_TRACKED:
+            self._api_rate.pop(next(iter(self._api_rate)))
+
     async def _api_v1_guard(self, request) -> object:
-        """API v1统一守卫：鉴权+限速；通过返回None（否则Response）"""
-        if not self._api_authorized(request):
-            return web.json_response({"error": "unauthorized"}, status=401)
+        """API v1统一守卫：限速+鉴权（限速在前——未认证请求也计额度，
+        防token暴力破解绕过限速）；通过返回None（否则Response）"""
         if not self._api_rate_ok(request):
             return web.json_response({"error": "rate limit exceeded"}, status=429)
+        if not self._api_authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
         return None
 
     async def _handle_api_v1_rooms(self, request):
@@ -125,9 +136,13 @@ class ApiV1Mixin:
         if self.db_service is None:
             return web.json_response({"error": "db unavailable"}, status=503)
         room_id = int(request.query.get("room_id", "0") or 0)
-        summaries = await self.db_service.get_daily_summaries(
-            [room_id] if room_id else
-            (self.db_service.list_room_ids() if hasattr(self.db_service, 'list_room_ids') else []))
+        if room_id:
+            ids = [room_id]
+        elif hasattr(self.db_service, 'list_room_ids'):
+            ids = list(await self.db_service.list_room_ids())
+        else:
+            ids = [rec.room_id for rec in await self.db_service.list_rooms()]
+        summaries = await self.db_service.get_daily_summaries(ids)
         return web.json_response({"summaries": summaries})
 
     async def _handle_api_v1_trend(self, request):

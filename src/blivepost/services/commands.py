@@ -14,6 +14,8 @@ import re
 
 from ..utils.contact import extract_sender
 from datetime import datetime, timedelta
+
+from ..utils.timeutil import now_local
 from typing import Dict, Optional, Tuple, TYPE_CHECKING
 
 from ..database.service_admin import GROUP_PUSH_SWITCHES
@@ -187,8 +189,6 @@ class CommandHandler:
 
         if match is None:
             return self._suggest_command(content)
-
-        cmd, room_str = match.group(1), match.group(2)
 
         cmd, room_str = match.group(1), match.group(2)
         room_id = int(room_str)
@@ -493,8 +493,10 @@ class CommandHandler:
         stripped = content.strip()
         if not stripped.startswith(("/", "／")):
             return None
-        # 提取指令词（去掉/和后续参数）
-        word = re.sub(r"^[/／]\s*", "", stripped).split()[0] if stripped.split() else ""
+        # 提取指令词（去掉/和后续参数）；先sub再取词——单独"/"经sub后
+        # split为空列表，直接索引会IndexError
+        parts = re.sub(r"^[/／]\s*", "", stripped).split()
+        word = parts[0] if parts else ""
         if not word or len(word) < 2:
             return None
         matches = difflib.get_close_matches(word, cls._KNOWN_CMDS, n=1, cutoff=0.5)
@@ -576,7 +578,7 @@ class CommandHandler:
             return "当前没有监控中的房间"
 
         if range_days is not None:
-            end = datetime.now()
+            end = now_local()
             start = end - timedelta(days=range_days)
             s = await self.db_service.get_daily_summary(
                 room_ids, _window=(start, end))
@@ -617,7 +619,7 @@ class CommandHandler:
             return f"直播间{room_id}不存在或查询失败"
 
         if range_days is not None:
-            end = datetime.now()
+            end = now_local()
             start = end - timedelta(days=range_days)
             s = await self.db_service.get_summary_range(rid, start, end)
         else:

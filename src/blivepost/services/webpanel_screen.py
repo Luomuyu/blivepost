@@ -8,11 +8,11 @@ Web状态面板数据大屏混入（ScreenMixin）
 
 import asyncio
 
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict
 
 from aiohttp import web
 
+from ..utils.timeutil import ms_to_str, now_local, now_ms
 from .webpanel_common import _add_days, logger
 
 
@@ -73,7 +73,7 @@ class ScreenMixin:
     async def _screen_context(self) -> dict:
         """大屏数据：核心指标/账号池/绑定统计/近7天趋势/房间今日排行/下播记录"""
         data = await self._collect()
-        today = datetime.now()
+        today = now_local()
         room_ids = []
         try:
             room_ids = await self.db_service.list_room_ids() \
@@ -131,7 +131,7 @@ class ScreenMixin:
         return {
             "bot": data["bot"], "me": data["me"], "app_id": data["app_id"],
             "db_size_mb": data["db_size_mb"],
-            "now": today.strftime("%Y-%m-%d %H:%M:%S"),
+            "now": ms_to_str(now_ms(), "%Y-%m-%d %H:%M:%S"),
             "pool_active": pool_active, "pool_total": len(data["accounts"]),
             "room_count": len(data["rooms"]),
             "alive_rooms": sum(1 for r in data["rooms"] if r["alive"]),

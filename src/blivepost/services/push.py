@@ -7,12 +7,12 @@ import inspect
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
 from typing import Any, List, Optional
 
 from ..config.settings import Settings
 from ..models.live import LiveRoomInfo, LiveStats
 from ..utils.logger import get_logger
+from ..utils.timeutil import ms_to_str, now_ms
 
 
 logger = get_logger("push")
@@ -398,7 +398,7 @@ class PushService:
 
     def _live_start_text(self, room_info: LiveRoomInfo) -> str:
         """开播消息文本（优先使用自定义模板）"""
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = ms_to_str(now_ms(), "%Y-%m-%d %H:%M:%S")
         url = f"https://live.bilibili.com/{room_info.room_id}"
         text = self._render(self.templates.live_start, {
             "name": room_info.name,
@@ -426,7 +426,7 @@ class PushService:
 
     def _live_end_text(self, room_info: LiveRoomInfo, stats: LiveStats) -> str:
         """下播消息文本（优先使用自定义模板）"""
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = ms_to_str(now_ms(), "%Y-%m-%d %H:%M:%S")
         url = f"https://live.bilibili.com/{room_info.room_id}"
         text = self._render(self.templates.live_end, {
             "name": room_info.name,

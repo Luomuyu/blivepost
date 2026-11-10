@@ -204,23 +204,25 @@ class DynFetchService:
     async def _render_opus(self, dynamic_id: str) -> Optional[dict]:
         """opus页渲染提取内容（标题/正文/作者/原图URL列表）；失败None。
 
-        调用方须持有self._prepare_lock（页面导航期间不得被并发取数打断）。
+        调用方须已持有self._holder._lock（渲染与后续截图须在同一持锁
+        区间内完成——中途释放会让并发/dyn-fetch把页面导航走，截图元素
+        不在页面上）。
         """
         url = f"https://www.bilibili.com/opus/{dynamic_id}"
-        async with self._holder._lock:
-            if not await self._holder._ensure():
-                return None
-            try:
-                await self._holder._page.goto(url, timeout=30000)
-                await self._holder._page.wait_for_selector(
-                    ".bili-opus-view", timeout=15000)
-                return await self._holder._page.evaluate(_OPUS_EXTRACT_JS)
-            except Exception as e:
-                logger.warning(f"opus页渲染失败(动态{dynamic_id}): {e}")
-                return None
+        if not await self._holder._ensure():
+            return None
+        try:
+            await self._holder._page.goto(url, timeout=30000)
+            await self._holder._page.wait_for_selector(
+                ".bili-opus-view", timeout=15000)
+            return await self._holder._page.evaluate(_OPUS_EXTRACT_JS)
+        except Exception as e:
+            logger.warning(f"opus页渲染失败(动态{dynamic_id}): {e}")
+            return None
 
     async def _screenshot_view(self) -> Optional[bytes]:
-        """截图.bili-opus-view元素（渲染失败返回None）；调用前须已导航到opus页"""
+        """截图.bili-opus-view元素（渲染失败返回None）；调用前须已导航到
+        opus页且持有self._holder._lock"""
         try:
             locator = self._holder._page.locator(".bili-opus-view").first
             return await locator.screenshot()
@@ -358,17 +360,21 @@ class DynFetchService:
 
         import base64
         async with self._prepare_lock:
-            content = await self._render_opus(dynamic_id) or {}
+            # 渲染+截图同一持锁区间：与并发/dyn-fetch（fetch_json拿同一把
+            # 页面锁导航API地址）互斥，防止渲染与截图之间页面被导航走
+            async with self._holder._lock:
+                content = await self._render_opus(dynamic_id) or {}
+                # ① opus页.bili-opus-view截图（保真美观，用户决策优先）
+                shot = await self._screenshot_view()
             image_url = None
             image_b64 = None
             image_source = "none"
-            # ① opus页.bili-opus-view截图（保真美观，用户决策优先）
-            shot = await self._screenshot_view()
             if shot and len(shot) <= _MAX_DIRECT_BYTES:
                 image_b64 = base64.b64encode(shot).decode("ascii")
                 image_source = "screenshot"
             if image_b64 is None:
-                # ② PIL本地渲染卡片（含作者头像；截图失败/超限时兜底）
+                # ② PIL本地渲染卡片（含作者头像；截图失败/超限时兜底）。
+                # 网络拉头像可能较慢，不占页面锁
                 card = await asyncio.to_thread(
                     self._render_card,
                     content.get("author") or "",
