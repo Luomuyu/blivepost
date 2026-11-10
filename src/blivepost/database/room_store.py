@@ -8,12 +8,13 @@
 主库（config选择的库）仅经room_db表记录直播间→子库文件名的映射。
 """
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from .models import EventBase, set_db_type
+from .models import EventBase
 from ..utils.logger import get_logger
 
 
@@ -33,7 +34,6 @@ class RoomDbManager:
         if self._engine is not None:
             return
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        set_db_type("sqlite")
         engine = create_async_engine(f"sqlite+aiosqlite:///{self.db_path}")
         async with engine.begin() as conn:
             await conn.run_sync(EventBase.metadata.create_all)
@@ -60,15 +60,32 @@ class RoomDbRegistry:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
         self._managers: Dict[str, RoomDbManager] = {}
+        # 并发首建同一子库时保证只初始化一个engine（检查与登记间有await点）
+        self._lock = asyncio.Lock()
 
     async def get(self, db_name: str) -> RoomDbManager:
-        """取（或创建并初始化）指定子库"""
+        """取（或创建并初始化）指定子库（并发首建安全）"""
         manager = self._managers.get(db_name)
-        if manager is None:
-            manager = RoomDbManager(self.base_dir / db_name)
-            await manager.initialize()
-            self._managers[db_name] = manager
+        if manager is not None:
+            return manager
+        async with self._lock:
+            manager = self._managers.get(db_name)
+            if manager is None:
+                manager = RoomDbManager(self.base_dir / db_name)
+                await manager.initialize()
+                self._managers[db_name] = manager
         return manager
+
+    async def close_all(self) -> None:
+        """释放全部子库engine（进程优雅关闭时调用）"""
+        async with self._lock:
+            managers = list(self._managers.values())
+            self._managers.clear()
+        for manager in managers:
+            try:
+                await manager.close()
+            except Exception as e:
+                logger.warning(f"关闭子库 {manager.db_path} 失败: {e}")
 
     async def all(self) -> List[RoomDbManager]:
         """全部已加载的子库管理器"""

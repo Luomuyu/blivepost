@@ -37,6 +37,12 @@ MIGRATIONS: List[Tuple[int, str, str, List[str]]] = [
 # 函数型迁移：版本号 -> (描述, 处理函数(conn, db_type))
 MIGRATION_HANDLERS: Dict[int, Tuple[str, Any]] = {}
 
+# 说明：models.py 的自增主键类型已改为 BigInteger().with_variant(Integer,
+# "sqlite")（SQLite 建表仍渲染 INTEGER，无 schema 漂移）。MySQL 新库建表由此
+# 用 BIGINT；既有 MySQL 老库的表不会被 create_all 重建，主键保持原类型——
+# 属"仅对新库生效"的可接受演进，此处不注册 ALTER 改型迁移（大表 MODIFY
+# 主键列耗时长且锁表风险高，失败会卡死启动迁移）。
+
 SCHEMA_VERSION_TABLE = "schema_version"
 
 
@@ -49,14 +55,23 @@ def migration_handler(version: int, desc: str):
 
 
 async def _table_columns(conn, db_type: str, table: str) -> set:
-    """获取表的列名集合"""
+    """
+    获取表的列名集合
+
+    MySQL/PostgreSQL 必须限定当前库/当前schema：information_schema.columns
+    汇聚服务器上全部库的列，不过滤时其他库的同名表会让本库缺列被误判为
+    "列已存在"而跳过补列。
+    """
     if db_type == "sqlite":
         res = await conn.execute(text(f"PRAGMA table_info({table})"))
         return {row[1] for row in res}
-    res = await conn.execute(
-        text("SELECT column_name FROM information_schema.columns WHERE table_name = :table"),
-        {"table": table},
-    )
+    if db_type == "mysql":
+        sql = ("SELECT column_name FROM information_schema.columns "
+               "WHERE table_name = :table AND table_schema = DATABASE()")
+    else:  # postgresql
+        sql = ("SELECT column_name FROM information_schema.columns "
+               "WHERE table_name = :table AND table_schema = current_schema()")
+    res = await conn.execute(text(sql), {"table": table})
     return {row[0] for row in res}
 
 
@@ -149,7 +164,8 @@ async def _migrate_v5_monitored_integer(conn, db_type: str) -> None:
     - MySQL: MODIFY直接改类型
     - PostgreSQL: ALTER COLUMN TYPE USING布尔转整型
     - SQLite: 不支持改列类型，按模型结构重建表并搬移数据（保留唯一约束
-      uq_binding_group_room与两个索引）
+      uq_binding_group_room与room_id索引；group_openid单列索引已随模型移除
+      ——唯一约束最左前缀已覆盖，不再重建）
     """
     if db_type == "mysql":
         await conn.execute(text(
@@ -174,7 +190,5 @@ async def _migrate_v5_monitored_integer(conn, db_type: str) -> None:
             "monitored, created_at FROM group_binding"))
         await conn.execute(text("DROP TABLE group_binding"))
         await conn.execute(text("ALTER TABLE group_binding_new RENAME TO group_binding"))
-        await conn.execute(text(
-            "CREATE INDEX ix_group_binding_group_openid ON group_binding (group_openid)"))
         await conn.execute(text(
             "CREATE INDEX ix_group_binding_room_id ON group_binding (room_id)"))

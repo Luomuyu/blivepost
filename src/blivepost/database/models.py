@@ -13,34 +13,24 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-# 当前数据库类型，在 DatabaseManager 初始化时设置
-_db_type: str = "sqlite"
 
+def id_pk_type():
+    """
+    自增主键（id）列类型
 
-def set_db_type(db_type: str) -> None:
-    """
-    设置数据库类型，用于动态选择主键类型
-    
-    Args:
-        db_type: 数据库类型 (sqlite, mysql, postgresql)
-    """
-    global _db_type
-    _db_type = db_type.lower()
+    - SQLite 渲染为 INTEGER：自增依赖 INTEGER PRIMARY KEY 的 rowid 别名，
+      渲染为 BIGINT 将导致插入时 NOT NULL 约束失败
+    - MySQL / PostgreSQL 渲染为 BIGINT（新库建表用；见下方历史说明）
 
-
-def primary_key_column():
+    历史说明：原 primary_key_column()/set_db_type() 在类定义（import 时）按
+    _db_type 求值，而 set_db_type() 在 DatabaseManager 初始化时才调用，对已构建
+    的模型无效——"动态主键类型"是永不生效的死代码，已移除，改为静态
+    with_variant 声明。对既有库的影响：SQLite 建表 DDL 与原先完全一致
+    （INTEGER，无 schema 漂移）；MySQL 老库的既有表不会被 create_all 重建
+    （表已存在则跳过，不加列/不改型），仅新建库的主键为 BIGINT，属可接受的
+    新库演进——不为此注册会在大表上失败/长时间锁表的 ALTER 改型迁移。
     """
-    根据数据库类型返回主键列类型
-    
-    SQLite 的 AUTOINCREMENT 只支持 INTEGER 类型
-    MySQL 和 PostgreSQL 支持 BIGINT 自增
-    
-    Returns:
-        主键列类型
-    """
-    if _db_type == "sqlite":
-        return Integer
-    return BigInteger
+    return BigInteger().with_variant(Integer, "sqlite")
 
 
 def local_now() -> datetime:
@@ -65,6 +55,10 @@ class EventBase(DeclarativeBase):
     弹幕/礼物/舰长/SC/天选/红包/大航海成就/系统事件/房间变更/开播下播
     等直播间接收的事件数据，按直播间拆分为独立sqlite子库（见
     database/room_store.py）。
+
+    索引说明：各事件表 room_id 不建单列索引——复合索引 (room_id, timestamp)
+    的最左前缀已覆盖按房间查询，单列索引纯冗余已移除。create_all 不会删除
+    旧库中已存在的冗余索引（无害，仅新库受益）。
     """
     pass
 
@@ -81,9 +75,9 @@ class EventType(enum.Enum):
 class DanmakuRecord(EventBase):
     """弹幕记录表"""
     __tablename__ = "danmaku"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     uid: Mapped[int] = mapped_column(BigInteger, index=True, comment="用户ID")
     uname: Mapped[str] = mapped_column(String(100), comment="用户名")
     msg: Mapped[str] = mapped_column(Text, comment="弹幕内容")
@@ -101,9 +95,9 @@ class DanmakuRecord(EventBase):
 class GiftRecord(EventBase):
     """礼物记录表"""
     __tablename__ = "gift"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     uid: Mapped[int] = mapped_column(BigInteger, index=True, comment="用户ID")
     uname: Mapped[str] = mapped_column(String(100), comment="用户名")
     gift_id: Mapped[int] = mapped_column(Integer, comment="礼物ID")
@@ -122,9 +116,9 @@ class GiftRecord(EventBase):
 class SuperChatRecord(EventBase):
     """醒目留言(SC)记录表"""
     __tablename__ = "super_chat"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     uid: Mapped[int] = mapped_column(BigInteger, index=True, comment="用户ID")
     uname: Mapped[str] = mapped_column(String(100), comment="用户名")
     price: Mapped[int] = mapped_column(Integer, comment="价格(元)")
@@ -140,9 +134,9 @@ class SuperChatRecord(EventBase):
 class GuardRecord(EventBase):
     """舰长记录表"""
     __tablename__ = "guard"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     uid: Mapped[int] = mapped_column(BigInteger, index=True, comment="用户ID")
     uname: Mapped[str] = mapped_column(String(100), comment="用户名")
     guard_level: Mapped[int] = mapped_column(Integer, comment="舰长等级(1总督/2提督/3舰长)")
@@ -159,9 +153,9 @@ class GuardRecord(EventBase):
 class AnchorRecord(EventBase):
     """天选记录表"""
     __tablename__ = "anchor"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     award_name: Mapped[str] = mapped_column(String(200), comment="奖品名称")
     danmu: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="弹幕要求")
     require_text: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="要求文本")
@@ -177,9 +171,9 @@ class AnchorRecord(EventBase):
 class RedPocketRecord(EventBase):
     """红包记录表"""
     __tablename__ = "red_pocket"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     sender_uid: Mapped[int] = mapped_column(BigInteger, comment="发送者ID")
     sender_name: Mapped[str] = mapped_column(String(100), comment="发送者名")
     total_price: Mapped[int] = mapped_column(Integer, comment="总价值(电池)")
@@ -193,9 +187,9 @@ class RedPocketRecord(EventBase):
 class GuardAchievementRecord(EventBase):
     """大航海成就记录表"""
     __tablename__ = "guard_achievement"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     achieve_level: Mapped[int] = mapped_column(Integer, comment="成就等级")
     content: Mapped[str] = mapped_column(String(500), comment="成就内容")
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
@@ -208,9 +202,9 @@ class GuardAchievementRecord(EventBase):
 class SystemEventRecord(EventBase):
     """系统事件记录表(被切断、被警告、被禁言、设为房管、撤销房管)"""
     __tablename__ = "system_event"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     event_type: Mapped[EventType] = mapped_column(Enum(EventType), comment="事件类型")
     uid: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="相关用户ID")
     uname: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="相关用户名")
@@ -225,9 +219,9 @@ class SystemEventRecord(EventBase):
 class RoomChangeRecord(EventBase):
     """房间信息变更记录表"""
     __tablename__ = "room_change"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     title: Mapped[str] = mapped_column(String(200), comment="直播间标题")
     parent_area_id: Mapped[int] = mapped_column(Integer, default=0, comment="父分区ID")
     parent_area_name: Mapped[str] = mapped_column(String(50), comment="父分区名")
@@ -244,8 +238,9 @@ class GroupBindingRecord(Base):
     """QQ群绑定记录表(群openid与直播间的绑定关系)"""
     __tablename__ = "group_binding"
 
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    group_openid: Mapped[str] = mapped_column(String(64), index=True, comment="群openid")
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    # group_openid 无单列索引：唯一约束 (group_openid, room_id) 的最左前缀已覆盖
+    group_openid: Mapped[str] = mapped_column(String(64), comment="群openid")
     room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
     uid: Mapped[int] = mapped_column(BigInteger, default=0, comment="主播UID")
     monitored: Mapped[int] = mapped_column(Integer, default=0, comment="是否处于监控状态(0否/1是)")
@@ -260,7 +255,7 @@ class CookieAccountRecord(Base):
     """B站账号cookie池表"""
     __tablename__ = "cookie_account"
 
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
     uid: Mapped[int] = mapped_column(BigInteger, unique=True, comment="B站用户UID")
     nickname: Mapped[str] = mapped_column(String(100), default="", comment="账号昵称")
     cookie_string: Mapped[str] = mapped_column(Text, comment="完整cookie字符串(k=v;...)")
@@ -284,7 +279,7 @@ class FriendRecord(Base):
     """好友记录表(机器人与用户的联系状态)"""
     __tablename__ = "friend"
 
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
     openid: Mapped[str] = mapped_column(String(64), unique=True, comment="用户openid")
     union_openid: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, comment="UnionID体系标识(跨场景一致)")
@@ -300,7 +295,7 @@ class GroupRecord(Base):
     """群记录表(机器人与群的联系状态)"""
     __tablename__ = "bot_group"
 
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
     group_openid: Mapped[str] = mapped_column(String(64), unique=True, comment="群openid")
     group_name: Mapped[str] = mapped_column(String(200), default="", comment="群名称")
     group_desc: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="群简介")
@@ -337,8 +332,9 @@ class DynamicBindingRecord(Base):
     """动态订阅记录表(群openid与B站UP主的绑定关系)"""
     __tablename__ = "dynamic_binding"
 
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    group_openid: Mapped[str] = mapped_column(String(64), index=True, comment="群openid")
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    # group_openid 无单列索引：唯一约束 (group_openid, up_uid) 的最左前缀已覆盖
+    group_openid: Mapped[str] = mapped_column(String(64), comment="群openid")
     up_uid: Mapped[int] = mapped_column(BigInteger, index=True, comment="UP主UID")
     up_name: Mapped[str] = mapped_column(String(100), default="", comment="UP主昵称")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="绑定时间")
@@ -352,7 +348,7 @@ class StreamerRecord(Base):
     """主播信息表(绑定主播的资料快照：绑定时写入、每日0点get_status_info_by_uids批量刷新)"""
     __tablename__ = "streamer"
 
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
     uid: Mapped[int] = mapped_column(BigInteger, unique=True, comment="主播UID")
     uname: Mapped[str] = mapped_column(String(100), default="", comment="主播昵称")
     face: Mapped[str] = mapped_column(String(255), default="", comment="主播头像url")
@@ -366,7 +362,7 @@ class LiveRoomRecord(Base):
     """直播间信息表(绑定直播间的资料快照，与主播表同源刷新)"""
     __tablename__ = "live_room"
 
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
     room_id: Mapped[int] = mapped_column(BigInteger, unique=True, comment="直播间长号")
     uid: Mapped[int] = mapped_column(BigInteger, index=True, default=0, comment="主播UID")
     title: Mapped[str] = mapped_column(String(200), default="", comment="直播间标题")
@@ -385,9 +381,9 @@ class LiveRoomRecord(Base):
 class LiveStatusRecord(EventBase):
     """开播/下播记录表"""
     __tablename__ = "live_status"
-    
-    id: Mapped[int] = mapped_column(primary_key_column(), primary_key=True, autoincrement=True)
-    room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
+
+    id: Mapped[int] = mapped_column(id_pk_type(), primary_key=True, autoincrement=True)
+    room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     status: Mapped[str] = mapped_column(String(20), comment="状态(live_start/live_end)")
     title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="直播间标题")
     cover: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="封面URL")
@@ -422,6 +418,16 @@ class PushSwitchRecord(Base):
     name: Mapped[str] = mapped_column(String(32), primary_key=True, comment="开关名")
     enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="0关/1开")
     allow_modify: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="前台可改0/1")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+
+
+class GroupAtAllRecord(Base):
+    """群艾特全体使用记录（每群每自然日仅1次：开播提醒首次艾特全体配额）"""
+    __tablename__ = "group_at_all"
+
+    group_openid: Mapped[str] = mapped_column(String(64), primary_key=True, comment="群openid")
+    used_date: Mapped[str] = mapped_column(String(10), nullable=False, comment="最近使用日期YYYY-MM-DD")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=local_now, onupdate=local_now, comment="更新时间")
 

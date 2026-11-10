@@ -5,6 +5,7 @@
 
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession, AsyncEngine, create_async_engine, async_sessionmaker
@@ -14,7 +15,7 @@ from sqlalchemy import inspect as sa_inspect, text
 from ..config.settings import DatabaseConfig
 from ..utils.logger import get_logger
 from .migrations import run_migrations
-from .models import Base, set_db_type
+from .models import Base
 
 
 logger = get_logger("database")
@@ -52,15 +53,16 @@ class DatabaseManager:
             return f"sqlite+aiosqlite:///{db_path}"
         
         elif db_type == "mysql":
+            # 用户/密码percent-encode：含 @:/?# 等特殊字符时直接拼接会破坏URL
             return (
-                f"mysql+aiomysql://{self.config.user}:{self.config.password}"
+                f"mysql+aiomysql://{quote_plus(self.config.user)}:{quote_plus(self.config.password)}"
                 f"@{self.config.host}:{self.config.port}/{self.config.database}"
                 f"?charset=utf8mb4"
             )
-        
+
         elif db_type == "postgresql":
             return (
-                f"postgresql+asyncpg://{self.config.user}:{self.config.password}"
+                f"postgresql+asyncpg://{quote_plus(self.config.user)}:{quote_plus(self.config.password)}"
                 f"@{self.config.host}:{self.config.port}/{self.config.database}"
             )
         
@@ -74,19 +76,32 @@ class DatabaseManager:
         
         db_url = self._get_database_url()
         db_type = self.config.type.lower()
-        
-        # 设置数据库类型，用于动态选择主键类型
-        set_db_type(db_type)
-        
+
         logger.info(f"正在连接数据库: {db_type}")
         
         # 创建异步引擎
         if db_type == "sqlite":
+            # WAL+busy_timeout：多连接并发读写时减少"database is locked"
+            # （主进程多协程+主从库并存场景；WAL对读多写少负载也更友好）
             self._engine = create_async_engine(
                 db_url,
                 echo=False,
                 future=True,
+                connect_args={
+                    "timeout": 15,          # busy_timeout(ms)：锁等待而非立即报错
+                    "check_same_thread": False,
+                },
+                pool_pre_ping=True,
             )
+            # 每个新连接启用WAL（连接池复用时经pool事件重放）
+            from sqlalchemy import event
+
+            @event.listens_for(self._engine.sync_engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, _record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.close()
         else:
             self._engine = create_async_engine(
                 db_url,
