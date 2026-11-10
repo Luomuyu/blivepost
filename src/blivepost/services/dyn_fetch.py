@@ -113,7 +113,7 @@ class _BrowserHolder:
             setattr(self, attr, None)
 
 
-# opus页面正文/标题/图片的DOM提取脚本（在页面上下文执行）
+# opus页面正文/标题/图片/头像的DOM提取脚本（在页面上下文执行）
 _OPUS_EXTRACT_JS = """
 () => {
   const pick = (sels) => {
@@ -123,6 +123,13 @@ _OPUS_EXTRACT_JS = """
   };
   const author = pick(['.opus-module-author__name', '.up-name', '.author-name']);
   const title = pick(['.opus-module-title', 'h1.title', 'h1']);
+  let avatar = '';
+  for (const s of ['.opus-module-author__avatar img', '.up-avatar img',
+                   '.avatar img', '.opus-dyn-author img']) {
+    const el = document.querySelector(s);
+    if (el && (el.src || '') && /hdslb\\.com|biliimg/.test(el.src)
+        && !/emoji/.test(el.src)) { avatar = el.src; break; }
+  }
   let text = '';
   const paras = document.querySelectorAll(
     '.bili-opus-view .opus-module-content p, .bili-opus-view .opus-text-richtext p, ' +
@@ -134,7 +141,7 @@ _OPUS_EXTRACT_JS = """
     .map(i => i.src || '')
     .filter(u => /hdslb\\.com|biliimg/.test(u))
     .filter(u => !/face|avatar|emoji/.test(u));
-  return {author, title, text: text.slice(0, 600),
+  return {author, avatar, title, text: text.slice(0, 600),
           images: [...new Set(images)].slice(0, 9)};
 }
 """
@@ -222,8 +229,14 @@ class DynFetchService:
             return None
 
     @staticmethod
-    def _render_card(author: str, title: str, text: str) -> Optional[bytes]:
-        """PIL本地渲染自定义动态卡片（作者/标题/正文）；无字体/PIL时None"""
+    def _render_card(author: str, title: str, text: str,
+                     avatar_url: str = "") -> Optional[bytes]:
+        """PIL本地渲染自定义动态卡片（头像/作者/标题/正文）；无字体/PIL时None。
+
+        布局严格按存在的分块排（标题为空不产生空行/空白间距——修复
+        2026-11-10反馈"标题为空时两行正文"）；头像圆形裁剪嵌入，拉取
+        失败静默跳过。
+        """
         try:
             from PIL import Image, ImageDraw, ImageFont
         except ImportError:
@@ -235,28 +248,20 @@ class DynFetchService:
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/System/Library/Fonts/PingFang.ttc",       # macOS
         ]
-        font = None
+        name_font = small = None
         for p in font_paths:
             if os.path.exists(p):
                 try:
-                    font = ImageFont.truetype(p, 26)
+                    name_font = ImageFont.truetype(p, 30)
+                    small = ImageFont.truetype(p, 24)
                     break
                 except Exception:
                     continue
-        if font is None:
+        if name_font is None:
             return None
-        small = None
-        for p in font_paths:
-            if os.path.exists(p):
-                try:
-                    small = ImageFont.truetype(p, 20)
-                    break
-                except Exception:
-                    continue
-        small = small or font
+        title_font = name_font
 
-        W = 720
-        PAD = 32
+        W, PAD = 720, 32
 
         def wrap(s: str, f, limit: int) -> list:
             lines, cur = [], ""
@@ -274,35 +279,72 @@ class DynFetchService:
             return lines[:12]
 
         head = author or "B站动态"
-        title_lines = wrap(title, font, W - PAD * 2) if title else []
-        body_lines = wrap(text, small, W - PAD * 2) if text else []
-        H = PAD * 2 + 34 + (16 if title_lines else 0) + \
-            len(title_lines) * 40 + (12 if body_lines else 0) + \
-            len(body_lines) * 32 + 28
+        title_lines = wrap(title, title_font, W - PAD * 2) if title else []
+        body_lines = wrap(text, small, W - PAD * 2 - (56 + 20)) if text else []
+
+        # 头像拉取（失败跳过，不阻塞卡片）
+        avatar = None
+        if avatar_url:
+            try:
+                import requests as _rq
+                import io as _io2
+                resp = _rq.get(avatar_url, timeout=5)
+                resp.raise_for_status()
+                avatar = Image.open(_io2.BytesIO(resp.content)).convert("RGBA")
+            except Exception:
+                avatar = None
+
+        AV = 56  # 头像直径
+        # 高度自底向上计算：页脚 + 正文块 + 标题块 + 头部行
+        H = PAD + max(AV, 40) + 16           # 头部行（头像/作者名）
+        if title_lines:
+            H += len(title_lines) * 42 + 8
+        if body_lines:
+            if title_lines:
+                H += 10                       # 标题与正文间距
+            H += len(body_lines) * 34
+        H += 24 + 30 + PAD                    # 页脚分隔线+落款+底边距
+
         img = Image.new("RGB", (W, H), "#ffffff")
         d = ImageDraw.Draw(img)
-        d.text((PAD, PAD), head, fill="#0f172a", font=font)
-        y = PAD + 40
+        # 头部：头像（圆形）+ 作者名垂直居中
+        if avatar is not None:
+            avatar = avatar.resize((AV, AV))
+            mask = Image.new("L", (AV, AV), 0)
+            md = ImageDraw.Draw(mask)
+            md.ellipse((0, 0, AV, AV), fill=255)
+            img.paste(avatar, (PAD, PAD), mask)
+            d.text((PAD + AV + 20, PAD + (AV - 36) // 2), head,
+                   fill="#0f172a", font=name_font)
+        else:
+            d.text((PAD, PAD + 4), head, fill="#0f172a", font=name_font)
+        y = PAD + max(AV, 40) + 16
+        # 标题块（存在才渲染与占位）
         for ln in title_lines:
-            d.text((PAD, y), ln, fill="#0f172a", font=font)
-            y += 40
-        if body_lines:
-            y += 12
+            d.text((PAD, y), ln, fill="#0f172a", font=title_font)
+            y += 42
+        if title_lines:
+            y += 8
+        # 正文块
+        if body_lines and title_lines:
+            y += 10
         for ln in body_lines:
             d.text((PAD, y), ln, fill="#475569", font=small)
-            y += 32
-        d.line((PAD, H - 36, W - PAD, H - 36), fill="#e2e8f0", width=2)
-        d.text((PAD, H - 28), "BLivePost · B站动态", fill="#94a3b8", font=small)
+            y += 34
+        # 页脚
+        d.line((PAD, H - 52, W - PAD, H - 52), fill="#e2e8f0", width=2)
+        d.text((PAD, H - 44), "BLivePost · B站动态", fill="#94a3b8", font=small)
         import io as _io
         buf = _io.BytesIO()
         img.save(buf, format="PNG")
         return buf.getvalue()
 
     async def _handle_prepare(self, request: web.Request) -> web.Response:
-        """候选动态内容准备：opus渲染+配图决策（卡片→截图→原图→无图）。
+        """候选动态内容准备：opus渲染+配图决策（截图→卡片→原图→无图）。
 
         本地图片以image_b64返回——群files接口支持二进制直传（file_data），
-        无需公网URL托管；超_MAX_DIRECT_BYTES的截图降级原图URL。
+        无需公网URL托管。截图优先（保真美观，2026-11-10用户决策）；截图
+        失败/超_MAX_DIRECT_BYTES降级PIL卡片（含作者头像），再降原图URL。
         """
         if request.headers.get("X-Fetch-Token") != self._token:
             return web.json_response({"error": "unauthorized"}, status=401)
@@ -320,19 +362,22 @@ class DynFetchService:
             image_url = None
             image_b64 = None
             image_source = "none"
-            # ① 本地渲染自定义卡片（PIL，轻量可控）
-            card = self._render_card(content.get("author") or "",
-                                     content.get("title") or "",
-                                     content.get("text") or "")
-            if card and len(card) <= _MAX_DIRECT_BYTES:
-                image_b64 = base64.b64encode(card).decode("ascii")
-                image_source = "card"
+            # ① opus页.bili-opus-view截图（保真美观，用户决策优先）
+            shot = await self._screenshot_view()
+            if shot and len(shot) <= _MAX_DIRECT_BYTES:
+                image_b64 = base64.b64encode(shot).decode("ascii")
+                image_source = "screenshot"
             if image_b64 is None:
-                # ② opus页.bili-opus-view截图（超大长文截图可能超直传限）
-                shot = await self._screenshot_view()
-                if shot and len(shot) <= _MAX_DIRECT_BYTES:
-                    image_b64 = base64.b64encode(shot).decode("ascii")
-                    image_source = "screenshot"
+                # ② PIL本地渲染卡片（含作者头像；截图失败/超限时兜底）
+                card = await asyncio.to_thread(
+                    self._render_card,
+                    content.get("author") or "",
+                    content.get("title") or "",
+                    content.get("text") or "",
+                    content.get("avatar") or "")
+                if card and len(card) <= _MAX_DIRECT_BYTES:
+                    image_b64 = base64.b64encode(card).decode("ascii")
+                    image_source = "card"
             if image_b64 is None and content.get("images"):
                 # ③ 动态原图URL（公网，平台可直接转存——与开播封面同链路）
                 image_url = content["images"][0]

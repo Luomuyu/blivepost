@@ -968,12 +968,13 @@ async def test_consumer_dynamic_str_pub_ts_pushes():
 # ---------- opus渲染与配图决策（/dyn-prepare） ----------
 
 async def test_dyn_prepare_image_priority(monkeypatch):
-    """配图优先级：卡片(b64)→截图(b64)→动态原图URL→无图（二进制直传链）"""
+    """配图优先级（2026-11-10用户调整）：截图→卡片(含头像)→原图URL→无图"""
     from aiohttp.test_utils import TestClient, TestServer
     from blivepost.services.dyn_fetch import DynFetchService
     import base64
 
-    content = {"author": "UP", "title": "标题", "text": "正文内容",
+    content = {"author": "UP", "avatar": "https://i0.hdslb.com/bfs/face/a.jpg",
+               "title": "标题", "text": "正文内容",
                "images": ["https://i0.hdslb.com/bfs/a.png"]}
     card_bytes = b"PNGCARD"
 
@@ -988,18 +989,7 @@ async def test_dyn_prepare_image_priority(monkeypatch):
     client = TestClient(TestServer(svc._build_app()))
     await client.start_server()
     try:
-        # ① PIL卡片可用 → b64直传（无需公网URL）
-        r = await client.post("/dyn-prepare", json={"dynamic_id": "900"},
-                              headers={"X-Fetch-Token": svc.token})
-        body = await r.json()
-        assert body["image_source"] == "card"
-        assert base64.b64decode(body["image_b64"]) == card_bytes
-        assert body["image_url"] is None
-
-        # 卡片不可用 → ②截图
-        monkeypatch.setattr(DynFetchService, "_render_card",
-                            staticmethod(lambda *a: None))
-
+        # ① 截图可用 → 优先
         async def fake_shot():
             return b"PNGSHOT"
 
@@ -1009,8 +999,23 @@ async def test_dyn_prepare_image_priority(monkeypatch):
         body = await r.json()
         assert body["image_source"] == "screenshot"
         assert base64.b64decode(body["image_b64"]) == b"PNGSHOT"
+        assert body["image_url"] is None
 
-        # 截图超大 → ③原图URL
+        # 截图失败 → ② PIL卡片（含头像）
+        async def no_shot():
+            return None
+
+        svc._screenshot_view = no_shot
+        r = await client.post("/dyn-prepare", json={"dynamic_id": "900"},
+                              headers={"X-Fetch-Token": svc.token})
+        body = await r.json()
+        assert body["image_source"] == "card"
+        assert base64.b64decode(body["image_b64"]) == card_bytes
+
+        # 截图超大 + 卡片不可用 → ③原图URL
+        monkeypatch.setattr(DynFetchService, "_render_card",
+                            staticmethod(lambda *a: None))
+
         async def big_shot():
             return b"x" * (5 * 1024 * 1024)
 
@@ -1036,6 +1041,17 @@ async def test_dyn_prepare_image_priority(monkeypatch):
         assert body["image_url"] is None and body["image_source"] == "none"
     finally:
         await client.close()
+
+
+def test_render_card_layout_no_empty_title_gap():
+    """卡片排版：标题为空时不产生空行/多余间距（修复'两行正文'反馈）；
+    卡片可渲染且为PNG字节"""
+    from blivepost.services.dyn_fetch import DynFetchService
+    card = DynFetchService._render_card("UP", "", "只有正文没有标题")
+    assert card is not None and card[1:4] == b"PNG"  # PNG魔数
+
+    card2 = DynFetchService._render_card("UP", "有标题", "有正文")
+    assert card2 is not None
 
 
 async def test_remote_proxy_prepare():
