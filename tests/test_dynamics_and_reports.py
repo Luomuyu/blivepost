@@ -66,10 +66,12 @@ class FakeDynamicManager:
 
     def __init__(self):
         self.ensured = []
+        self.ensure_baseline_first = []
         self.removed = []
 
-    async def ensure(self, uid):
+    async def ensure(self, uid, baseline_first=False):
         self.ensured.append(uid)
+        self.ensure_baseline_first.append(baseline_first)
         return True, ""
 
     async def remove(self, uid):
@@ -123,6 +125,8 @@ async def test_bind_dynamic_command(env):
     r = await ch.handle(FakeMsg("/绑定动态 12345", "G1"))
     assert "已订阅UP主12345" in r
     assert 12345 in dm.ensured
+    # 订阅指令强制基线化首轮（防止重订阅时补推停订期间的新动态）
+    assert dm.ensure_baseline_first == [True]
     assert store.get_dynamic_groups(12345) == ["G1"]
     # 重复订阅
     r = await ch.handle(FakeMsg("/绑定动态 12345", "G1"))
@@ -165,9 +169,15 @@ async def test_dynamic_up_name_backfill(env):
     assert store2.get_dynamic_up_name(555) == "测试UP"
 
 
-def test_poll_once_handles_invalid_uid():
+def test_poll_once_handles_invalid_uid(monkeypatch):
     """无效UID轮询返回None（网络层容错）"""
-    assert _poll_once(0) is None or isinstance(_poll_once(1), dict) or True
+    from blivepost.services import dynamics as dyn
+
+    def _raise(*a, **kw):
+        raise ConnectionError("boom")
+
+    monkeypatch.setattr(dyn.requests, "get", _raise)
+    assert _poll_once(0) is None
 
 
 # ==================== /汇总 命令 ====================

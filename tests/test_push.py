@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """推送服务测试（CQ转换、绑定路由、富媒体）"""
 
+import asyncio
+
+import pytest
+
 from blivepost.config.settings import Settings
 from blivepost.models.live import LiveRoomInfo
 from blivepost.services.push import PushService, convert_cq_message
@@ -158,7 +162,7 @@ def test_live_enter_keyboard_structure():
     assert btn["render_data"]["style"] == 1  # 蓝色线框（官方style取值：0灰/1蓝线框）
     assert btn["action"]["permission"]["type"] == 2  # 所有人可点击
     assert btn["action"]["type"] == 0  # 跳转按钮
-    assert btn["action"]["data"] == "bilibili://live/9646546"
+    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
     assert "unsupport_tips" in btn["action"]
     # 非本文档字段不出现（clicked_data/at_bot_show来自其他版本文档）
     assert "clicked_data" not in btn["action"]
@@ -237,7 +241,7 @@ async def test_push_live_start_official_bot_uses_ladder(tmp_path):
     assert ps.push_live_start(make_info(room_id=9646546)) is True
     call = bot.calls[0]
     btn = call["keyboard"]["content"]["rows"][0]["buttons"][0]
-    assert btn["action"]["data"] == "bilibili://live/9646546"
+    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
     assert btn["render_data"]["style"] == 1  # 蓝色线框
     assert call["media"] == "http://cover.jpg"  # 封面交由bot层嵌Markdown
     await db.close()
@@ -251,7 +255,7 @@ async def test_push_live_start_markdown_bot(tmp_path):
     assert len(bot.md_calls) == 1
     md_content, kb = bot.md_calls[0]
     btn = kb["content"]["rows"][0]["buttons"][0]
-    assert btn["action"]["data"] == "bilibili://live/9646546"
+    assert btn["action"]["data"] == "https://live.bilibili.com/9646546"
     # 原生图片语法嵌封面（官方文档：![文字 #宽px #高px](URL)）
     assert "![封面 #640px #360px](http://cover.jpg)" in md_content
     assert bot.media_calls == []  # Markdown成功不降级富媒体
@@ -411,3 +415,146 @@ async def test_broadcast_message_all_fail():
     c.send_group_message = fail
     sent = await c._broadcast_message(["G1"], "hi", media="http://img.jpg")
     assert sent is False
+
+
+# ==================== 推送上下文并发隔离（ContextVar） ====================
+
+
+class StaticBindingStore:
+    """固定映射的绑定存储桩（并发测试用，免DB）"""
+
+    def __init__(self, mapping):
+        self._mapping = mapping
+
+    def get_monitored_groups(self, room_id):
+        return list(self._mapping.get(int(room_id), []))
+
+
+async def test_groups_context_isolated_between_concurrent_tasks():
+    """两个协程并发进入不同_groups上下文、交错await：各自解析的目标群互不串扰"""
+    ps = PushService(Settings())
+    ps.binding_store = StaticBindingStore({23058: ["G1", "G2", "G3"]})
+
+    entered = []
+    both_inside = asyncio.Event()
+
+    async def worker(allowed):
+        with ps._groups(allowed):
+            seen_inside = (ps._groups_override, ps._resolve_groups(23058))
+            entered.append(allowed)
+            if len(entered) == 2:
+                both_inside.set()
+            await both_inside.wait()  # 两个协程都已进入各自上下文后再解析
+            return seen_inside, (ps._groups_override, ps._resolve_groups(23058))
+
+    (in1, after1), (in2, after2) = await asyncio.gather(
+        worker(["G1"]), worker(["G2"])
+    )
+    assert in1 == (["G1"], ["G1"]) and after1 == (["G1"], ["G1"])
+    assert in2 == (["G2"], ["G2"]) and after2 == (["G2"], ["G2"])
+    # 退出上下文后恢复（无覆盖=按绑定解析全量）
+    assert ps._groups_override is None
+    assert ps._resolve_groups(23058) == ["G1", "G2", "G3"]
+
+
+async def test_switch_context_isolated_between_concurrent_tasks():
+    """两个协程并发进入不同_switch上下文：开关tag互不覆盖，退出后恢复"""
+    ps = PushService(Settings())
+
+    entered = []
+    both_inside = asyncio.Event()
+
+    async def worker(name):
+        with ps._switch(name):
+            seen_inside = ps._switch_tag
+            entered.append(name)
+            if len(entered) == 2:
+                both_inside.set()
+            await both_inside.wait()  # 两个协程都已进入各自上下文后再读取
+            return seen_inside, ps._switch_tag
+
+    (in1, after1), (in2, after2) = await asyncio.gather(
+        worker("anchor"), worker("system_event")
+    )
+    assert in1 == "anchor" and after1 == "anchor"
+    assert in2 == "system_event" and after2 == "system_event"
+    # 退出上下文后恢复
+    assert ps._switch_tag is None
+
+
+def test_push_context_token_reset_restores_previous_value():
+    """token恢复：嵌套退出内层后还原外层值（而非清空）；异常退出同样恢复"""
+    ps = PushService(Settings())
+
+    with ps._groups(["G1"]):
+        with ps._groups(["G2"]):
+            assert ps._groups_override == ["G2"]
+        assert ps._groups_override == ["G1"]
+    assert ps._groups_override is None
+
+    with ps._switch("anchor"):
+        with pytest.raises(ValueError):
+            with ps._switch("system_event"):
+                raise ValueError("boom")
+        assert ps._switch_tag == "anchor"
+    assert ps._switch_tag is None
+
+
+# ==================== 开播/下播消息形态（第八批后调整） ====================
+
+def test_live_end_text_has_no_url_line():
+    """下播消息：全部形态移除"直播地址："行"""
+    from blivepost.models.live import LiveStats
+    ps = PushService(Settings())
+    info = make_info()
+    stats = LiveStats(like_count=10, danmaku_count=5, gold_count=1,
+                      ship_count=0, sc_count=0)
+    text = ps._live_end_text(info, stats)
+    assert "直播地址" not in text
+    assert "直播时长" in text  # 其余行不受影响
+
+
+def test_live_start_text_keeps_url_line():
+    """开播正文保留"直播地址："行（富媒体/文本降级仍用它，无按钮可点）"""
+    ps = PushService(Settings())
+    text = ps._live_start_text(make_info())
+    assert "直播地址：https://live.bilibili.com/23058" in text
+
+
+def test_live_markdown_strips_url_line():
+    """Markdown开播消息移除"直播地址："行（跳转入口仅保留按钮）；其余行保留"""
+    from blivepost.services.push import live_markdown_content
+    content = ("[主播]的直播间开播啦！！！\n标题：标题\n房间号：23058\n"
+               "直播地址：https://live.bilibili.com/23058\n推送时间：现在")
+    md = live_markdown_content(content, "http://cover.jpg")
+    assert "直播地址" not in md
+    assert "标题：标题" in md and "推送时间" in md
+    assert "![封面 #640px #360px](http://cover.jpg)" in md
+    # 无图markdown同样移除该行
+    md_noimg = live_markdown_content(content, None)
+    assert "直播地址" not in md_noimg and "开播啦" in md_noimg
+    # 非直播地址行不受影响（如动态消息的"链接："行）
+    other = live_markdown_content("UP主动态\n链接：https://www.bilibili.com/opus/1", None)
+    assert "链接：" in other
+
+
+def test_live_enter_keyboard_uses_https_url():
+    """「进入直播间」按钮使用https链接（QQ不支持bilibili://拉起客户端）"""
+    from blivepost.services.push import live_enter_keyboard
+    button = (live_enter_keyboard(23058)["content"]["rows"][0]["buttons"][0])
+    assert button["action"]["data"] == "https://live.bilibili.com/23058"
+    assert "bilibili://" not in button["action"]["data"]
+
+
+def test_official_bot_markdown_stripped_text_fallback_keeps_url():
+    """官方bot链路：Markdown消息无"直播地址"，降级文本保留"""
+    from blivepost.services.qqbot import QQBotClient
+    from blivepost.services.push import live_markdown_content
+
+    content = "开播啦\n直播地址：https://live.bilibili.com/23058"
+    md = live_markdown_content(content, None)
+    assert "直播地址" not in md
+    # 降级文本使用原始content（见 _broadcast_message 实现）
+    import inspect
+    src = inspect.getsource(QQBotClient._broadcast_message)
+    assert "group_content" in src  # 文本降级用原始正文而非markdown加工版

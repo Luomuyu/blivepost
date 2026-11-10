@@ -58,8 +58,14 @@ async def handler(tmp_path, monkeypatch):
     settings.database.sqlite_path = str(tmp_path / "t.db")
     db = DatabaseManager(settings.database)
     await db.initialize()
-    store = BindingStore(DatabaseService(db))
+    svc = DatabaseService(db)
+    store = BindingStore(svc)
     await store.load()
+    # 播种全局推送开关（推送设置指令"跟随全局"判定的基准）
+    await svc.seed_push_switches({
+        "anchor": True, "guard_achievement": True, "system_event": True,
+        "room_change": False, "daily_report": False, "weekly_report": False,
+        "monthly_report": False, "dynamic_monitor": False})
 
     class FakeAPI:
         """拦截监控登记时的主播快照查询（避免真实网络）"""
@@ -73,7 +79,8 @@ async def handler(tmp_path, monkeypatch):
     import blivepost.services.bilibili as bili
     monkeypatch.setattr(bili, "BilibiliAPI", FakeAPI)
 
-    yield CommandHandler(store, FakeManager(short_map={2345: 23058})), store
+    yield CommandHandler(store, FakeManager(short_map={2345: 23058}),
+                         db_service=svc), store
     await db.close()
 
 
@@ -151,3 +158,100 @@ async def test_status_and_my_bindings(handler):
     assert "23058" in status and "监控运行中" in status
     bindings = await ch.handle(FakeMsg("/绑定列表", "G"))
     assert "23058" in bindings and "监控中" in bindings
+
+
+async def test_push_setting_overview(handler):
+    """/推送设置无房间号：本群全部绑定房间的开关概览（徽标+修改提示）"""
+    ch, _ = handler
+    assert "没有推送中" in await ch.handle(FakeMsg("/推送设置", "G"))
+    await ch.handle(FakeMsg("/监控 23058", "G"))
+    r = await ch.handle(FakeMsg("/推送设置", "G"))
+    assert "本群推送设置概览" in r
+    assert "房间23058" in r
+    assert "天选：开" in r and "房变：关" in r  # 绑定播种继承全局
+    assert "修改" in r  # 提示如何修改
+
+
+async def test_push_setting_detail(handler):
+    """/推送设置 房间号：7项开关逐项明细（标注跟随全局）"""
+    ch, _ = handler
+    await ch.handle(FakeMsg("/监控 23058", "G"))
+    r = await ch.handle(FakeMsg("/推送设置 23058", "G"))
+    assert "房间23058本群推送设置" in r
+    assert "天选时刻：开（跟随全局）" in r
+    assert "房间信息：关（跟随全局）" in r
+    assert "每月结算：关（跟随全局）" in r
+
+
+async def test_push_setting_toggle_and_reset(handler):
+    """单项开/关切换落库生效（不动全局）；恢复清除独立设置回落全局"""
+    ch, _ = handler
+    db = ch.db_service
+    await ch.handle(FakeMsg("/监控 23058", "G"))
+
+    r = await ch.handle(FakeMsg("/推送设置 23058 天选 关", "G"))
+    assert "已设为关" in r
+    own = await db.get_group_push_setting(23058, "G")
+    assert own["anchor"] is False
+    assert await db.get_push_switch_enabled("anchor", True) is True  # 全局不受影响
+    detail = await ch.handle(FakeMsg("/推送设置 23058", "G"))
+    assert "天选时刻：关" in detail
+    assert "天选时刻：关（跟随全局）" not in detail  # 已偏离全局=独立
+    assert "独立" in await ch.handle(FakeMsg("/推送设置", "G"))  # 概览标记独立
+
+    r = await ch.handle(FakeMsg("/推送设置 23058 大航海 开", "G"))
+    assert "已设为开" in r
+    assert (await db.get_group_push_setting(23058, "G"))["guard_achievement"] is True
+
+    r = await ch.handle(FakeMsg("/推送设置 23058 恢复", "G"))
+    assert "恢复跟随全局" in r
+    assert await db.get_group_push_setting(23058, "G") is None  # 独立行已清除
+    detail = await ch.handle(FakeMsg("/推送设置 23058", "G"))
+    assert "天选时刻：开（跟随全局）" in detail
+
+    # 恢复后再单项设置：先按全局播种，其余开关不被默认置关
+    await ch.handle(FakeMsg("/推送设置 23058 日报 开", "G"))
+    own = await db.get_group_push_setting(23058, "G")
+    assert own["daily_report"] is True and own["anchor"] is True
+
+
+async def test_push_setting_invalid_switch_and_missing_state(handler):
+    """非法开关名给出可用列表；缺开/关参数提示用法"""
+    ch, _ = handler
+    await ch.handle(FakeMsg("/监控 23058", "G"))
+    r = await ch.handle(FakeMsg("/推送设置 23058 未知项 开", "G"))
+    assert "未知开关" in r and "天选" in r and "房间信息" in r
+    r = await ch.handle(FakeMsg("/推送设置 23058 天选", "G"))
+    assert "请指定开或关" in r
+
+
+async def test_push_setting_unbound_room(handler):
+    """房间号必须是本群已绑定房间；短号归一化后再判定"""
+    ch, _ = handler
+    await ch.handle(FakeMsg("/监控 23058", "G"))
+    r = await ch.handle(FakeMsg("/推送设置 99999", "G"))
+    assert "不是本群绑定" in r
+    r = await ch.handle(FakeMsg("/推送设置 2345", "G"))  # 短号→23058已绑定
+    assert "房间23058本群推送设置" in r
+
+
+async def test_push_setting_permission_denied(handler):
+    """推送设置与控制指令同一权限门槛（名单未配置不限制）"""
+    ch, store = handler
+    gated = CommandHandler(store, FakeManager(), db_service=ch.db_service,
+                           group_admin_openids=["ADMIN"])
+    assert "无权限" in await gated.handle(FakeMsg("/推送设置", "G"))
+    assert "无权限" in await gated.handle(FakeMsg("/推送设置 23058 天选 开", "G"))
+    r = await gated.handle(FakeMsg("/推送设置", "G", sender="ADMIN"))
+    assert "无权限" not in r  # 名单内放行
+
+
+async def test_push_setting_regex_forms(handler):
+    """正则匹配：带/不带房间号、全角斜杠、全名与开启动词均可；无斜杠不触发"""
+    ch, _ = handler
+    await ch.handle(FakeMsg("/监控 23058", "G"))
+    assert await ch.handle(FakeMsg("推送设置 23058", "G")) is None  # 无斜杠不触发
+    r = await ch.handle(FakeMsg("／推送设置 23058", "G"))  # 全角斜杠
+    assert "房间23058本群推送设置" in r
+    r = await ch.handle(FakeMsg("/推送设置 23058 天选时刻 开启", "G"))
+    assert "已设为开" in r

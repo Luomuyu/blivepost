@@ -14,9 +14,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install lint tools
-        run: pip install flake8
+        run: pip install flake8 pyflakes
       - name: flake8
         run: flake8 src/ tests/
+      - name: pyflakes
+        run: pyflakes src tests
 
   type-check:
     runs-on: ubuntu-latest
@@ -32,17 +34,54 @@ jobs:
       - name: mypy
         run: mypy src/blivepost
 
+  # 版本矩阵覆盖 pyproject 声明的两端（3.11最低 / 3.14开发机与Docker基础镜像）
   test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install project with dev deps
+        run: pip install -e ".[dev]"
+      - name: Pre-download vendored blivedm
+        # 运行时下载逻辑在测试里为条件skip（_vendor不存在即跳过），
+        # CI预下载使 vendor/patch.py 的350行补丁真正被测试执行
+        run: python -c "from blivepost.vendor.manager import setup_blivedm; setup_blivedm()"
+      - name: Run tests
+        env:
+          # 测试不依赖真实凭证
+          BLIVEPOST_QQBOT_APP_ID: ""
+        run: pytest tests/ -q
+
+  # 打包冒烟：wheel构建→净环境安装→导入与模板资源检查
+  wheel:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install project with dev deps
-        run: pip install -e ".[dev]"
-      - name: Run tests
-        env:
-          # 测试不依赖真实凭证
-          BLIVEPOST_QQBOT_APP_ID: ""
-        run: pytest tests/ -q
+      - name: Build wheel
+        run: |
+          pip install build
+          python -m build --wheel --outdir dist
+      - name: Install wheel into clean venv
+        # 不用 --no-deps：走真实安装路径，顺带验证依赖声明在PyPI可解析
+        run: |
+          python -m venv /tmp/wheeltest
+          /tmp/wheeltest/bin/pip install dist/blivepost-*.whl
+      - name: Import & resources smoke
+        run: |
+          /tmp/wheeltest/bin/python -c "
+          import blivepost, importlib.resources, pathlib
+          pkg = importlib.resources.files('blivepost')
+          templates = list((pkg / 'services' / 'templates').rglob('*.html'))
+          assert len(templates) >= 15, f'templates missing: {len(templates)}'
+          assert (pkg / 'py.typed').is_file(), 'py.typed missing'
+          print('wheel smoke ok:', blivepost.__version__, len(templates), 'templates')
+          "

@@ -159,8 +159,8 @@ async def test_panel_token_quick_login():
     req = make_mocked_request("GET", "/?token=SECRET")
     resp = await panel._make_page_handler("overview")(req)
     assert resp.status == 302
-    sid = next(iter(panel._sessions))
-    assert panel._sessions[sid]["admin"] is True
+    sid = resp.cookies["blivepost_sid"].value
+    assert panel._session_from_sid(sid)["admin"] is True
     # 携会话渲染
     req2 = make_mocked_request("GET", "/", headers={"Cookie": f"blivepost_sid={sid}"})
     resp2 = await panel._make_page_handler("overview")(req2)

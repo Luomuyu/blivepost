@@ -32,7 +32,8 @@ _*.py
 
 # 旧代码归档
 oldsrc
-scripts/panel_ids.json
+# 面板运维脚本产物（panel_id含真实凭证信息，任何副本都不入库）
+scripts/panel_ids*.json
 
 *.whl
 # playwright chromium内核（运行目录本地安装）

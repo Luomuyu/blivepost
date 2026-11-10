@@ -162,3 +162,51 @@ def test_migration_v5_monitored_boolean_to_integer():
         assert any("group_binding" in ix for ix in indexes)  # 索引已重建
     finally:
         db.close()
+
+
+def test_table_columns_information_schema_filters_current_db():
+    """列存在性探测限定当前库/schema：多库同名表不再让本库缺列被误判为已存在"""
+    from blivepost.database.migrations import _table_columns
+
+    class _FakeResult(list):
+        pass
+
+    class _FakeConn:
+        def __init__(self):
+            self.sql = None
+            self.params = None
+
+        async def execute(self, sql, params=None):
+            self.sql = str(sql)
+            self.params = params
+            return _FakeResult()
+
+    conn = _FakeConn()
+    asyncio.run(_table_columns(conn, "mysql", "cookie_account"))
+    assert "table_name = :table" in conn.sql
+    assert "table_schema = DATABASE()" in conn.sql
+    assert conn.params == {"table": "cookie_account"}
+
+    asyncio.run(_table_columns(conn, "postgresql", "friend"))
+    assert "table_name = :table" in conn.sql
+    assert "table_schema = current_schema()" in conn.sql
+    assert conn.params == {"table": "friend"}
+
+    # sqlite路径走PRAGMA，不受本修复影响（用真库冒烟：建表后列名可探出）
+    tmp = tempfile.mkdtemp()
+    db_path = os.path.join(tmp, "cols.db")
+    sconn = sqlite3.connect(db_path)
+    sconn.execute("CREATE TABLE cookie_account (id INTEGER PRIMARY KEY, uid INTEGER)")
+    sconn.commit()
+    sconn.close()
+
+    async def probe():
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        async with engine.connect() as conn_:
+            cols = await _table_columns(conn_, "sqlite", "cookie_account")
+        await engine.dispose()
+        return cols
+
+    assert asyncio.run(probe()) == {"id", "uid"}

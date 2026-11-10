@@ -19,7 +19,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
   ├─ services/report.py     DailyReportJob：日/周/月结算推送（仅推有数据房间，模板可配）
   ├─ services/dynamics.py   DynamicManager：UP主动态轮询（wbi签名、多类型提取、开播联动）
   │                         LiveStateWatcher：批量直播状态（单请求全覆盖）→ 状态文件共享
-  ├─ services/webpanel.py   WebPanel：只读状态面板（token鉴权、SVG趋势图、账号健康）
+  ├─ services/webpanel.py   WebPanel：Web管理面板（三层鉴权/管理后台/大屏/词云/导出脱敏）
   ├─ services/bilibili.py   B站免签名API（直播间信息/用户名片，规避wbi/acc/info风控）
   ├─ services/wbi.py        WBI签名单一实现（dynamics/fingerprint使用）
   ├─ utils/contact.py       消息发送者身份提取（union_openid > member_openid > user_openid > id）
@@ -96,8 +96,9 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 
 ## Web状态面板
 
-- `Setting.web_panel`（默认N）；web_host/web_port/web_token（留空不鉴权，请勿暴露公网）
-- 路由：`/`（HTML面板）与 `/api/status`、`/api/history?days=N`；含数据库体积、账号剩余有效期与使用次数、SVG趋势图
+- `Setting.web_panel`（默认N）；web_host/web_port/web_token/web_admin_user/web_admin_password
+- 三层鉴权（第五十九批起）：游客只读浏览、前台用户（web_user表）可操作、管理员（config口令非空才启用）可进 `/admin` 后台；`web_token` 为管理员快捷令牌
+- 路由：`/`（HTML面板）与 `/api/history?days=N`（只读）；`/api/status` 含账号情报**需登录**（第七批加固）；含数据库体积、账号剩余有效期与使用次数、SVG趋势图、词云、数据大屏
 
 ## 数据存储
 
@@ -144,6 +145,10 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 2026-09 第三十三批（主播/直播间信息表） | **新增streamer与live_room两张表**（uid/room_id唯一，create_all对旧库自动建表，无需迁移条目）；**绑定时全量落库**：get_status_info_by_uids一次免登录查询同时写两表（uname/face/title/short_id/live_status/分区/封面/关键帧/在线），快照失败退回get_room_info已知字段，均不阻断绑定；**每日0点批量刷新**：StreamerRefresher（manager）按绑定uid分批（50/次）查询并更新快照，启动时表空回填；**WebUI主播名改读数据库**（移除实时名片API与缓存）；**回退bot_connect覆写**（SDK侧将由qq-botpy-v2源码修复，项目侧保留stop()子任务清扫）；依赖钉qq-botpy-v2>=1.0.1 |
 | 2026-09 第三十四批（真机反馈：40034105推送失败） | 真机开播推送返回`40034105 主动消息失败,无权限`——**与消息接收开关无关**：接收开关只控制收@消息，推送属主动消息需平台单独授权（未放量约4条/群/月）。发送路径识别40034105/主动消息拒绝→输出每群每6小时一次的可操作提示（申请主动消息放量），替代逐条ERROR；接收开关事件（群/单聊开启关闭）增加INFO日志便于对照；README补主动消息权限说明 |
 | 2026-09 第六十六批（词云容器高度自适应） | 词云容器高度改**内容自适应**：布局完成后按词云实际铺开范围（最高词顶/最低词底）计算容器高度并整体上移贴合，卡片随之伸缩——词少的范围卡片收紧、词多时自动撑高，不再出现固定高度导致的词云溢出（原高度按容器宽度公式固定，与实际铺开范围无关）；导出图片的画布高度同步取实际内容高度；空态回落min-height。浏览器实测：30词全部落在卡片内、密集/空范围卡片正确伸缩 |
+| 2026-11 第七批（全项目审查整改） | 四阶段整改：P0修复5项（await同步broadcast/绑定正则残留/退群误停/ENV缺键/finally NameError）；可靠性（映射缓存/to_thread/结算重试/重建退避/优雅关闭/发送队列背压/WAL）；安全（登录限速/扫码隔离/导出脱敏/token常量比较）；三大文件拆分12模块；251用例。详见REVIEW.md第七轮 |
+| 2026-11 第八批（遗留清零+艾特全体） | 开播提醒@全体（group_at_all每日配额）；push上下文contextvars；webpanel N+1并行化；动态轮询修复（WbiSigner复用/漏推/告警）；子进程日志分离；签名会话持久化；/推送设置指令；大屏日间主题 |
+| 2026-11 第九批（复审） | 第九轮复审：修复/绑定动态指令失效（CommandHandler缺dynamic_manager）、UP提醒收群过滤、stop窗口断言、登录计数上限、WbiTTL等；「平台标签剥离」按用户结论回退（@全体配额为平台每日1次硬限制，注入无法绕过）；文档全面同步 |
+| 2026-11 第十批（复审整改+遗留清零） | 回退"平台标签剥离"（@全体配额为平台硬限制）；第九轮修复（/绑定动态接线/收群过滤/stop窗口等）；大屏N+1并行化；退群清理补全；重新订阅不补推；seen表修剪；DB死代码与冗余索引移除；迁移幂等化；CI矩阵+wheel冒烟；318用例 |
 | 2026-09 第六十五批（词云首次渲染错位修复） | **根因**：布局脚本在页面样式/布局未稳定时执行（Tailwind CDN异步注入样式、HTMX交换settle前的时序竞争），绝对定位的词被锚定到错误的祖先元素——词云飞出容器盖住导航区，resize触发重排后才归位。**修复**：容器自带`position:relative`内联锚定（不再依赖JS时序）；布局延迟执行——双requestAnimationFrame后先排一次，页面load与htmx:afterSettle再各兜底重排（幂等）；直接加载与HTMX导航两路径实测30词全部落在容器内 |
 | 2026-09 第六十四批（DEBUG日志开关+jieba噪音静默） | **DEBUG日志由`Setting.debug`控制**：Logger新增apply_debug——配置加载后统一应用级别（debug=N默认INFO，logger.debug的排障明细如推送丢弃/分片上传响应不再出现在终端；debug=Y输出DEBUG）；jieba词典构建日志（"Building prefix dict.../Loading model..."）不再污染终端——wordcloud导入时默认静默至WARNING，apply_debug(debug=Y)时随开关联动放开；新增日志开关测试；200测试全过 |
 | 2026-09 第六十三批（数据大屏） | 新增**数据大屏**（/screen，登录后可访问；独立全屏布局无导航页头）：顶栏实时时钟（秒级）+六张KPI卡（机器人状态/监控房间存活/动态订阅轮询/绑定群与推送关系/账号池/数据库体积）+近7天趋势（SVG柱=弹幕、折线=礼物元，悬停明细）+房间今日排行（按收入降序）+最近下播卡片；数据局部30秒HTMX轮询自动刷新（交换后重绘图表）。**鉴权**：游客拒绝——整页302跳登录页、HTMX局部返回HX-Redirect；页头新增「大屏」入口（登录用户可见，新窗口打开，适合投在副屏/电视）。新增访问控制与渲染回归测试；199测试全过；浏览器实测1600×1000全屏布局 |
@@ -174,7 +179,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 2026-09 第三十七批（存储架构：每直播间子库） | **直播间事件数据按房间拆分为独立sqlite子库**：弹幕/礼物/舰长/SC/天选/红包/大航海成就/系统事件/房间变更/开播下播10张事件表迁至`data/rooms/<主库文件名>/room_<id>.db`（EventBase元数据，sqlite专用，**不受config数据库类型控制**）；主库仅新增room_db映射表（房间→子库文件名）；DatabaseService路由层：11个写入与单房读取按映射路由，跨房聚合（趋势/汇总/下播记录/表行数）扇出全部子库合并，对外方法签名不变（队列桥/报表/指令零改动）；**旧库事件数据启动自动迁移**（查500→写子库→删主库，数据不丢，幂等）；**动态已见表**：每UP独立子库`data/dynamics/up_<uid>.db`（dynamic_seen表，动态ID持久判重——发布后删除的旧动态/进程重启均不再触发推送，替代旧last_seen内存比较；动态是UP维度故按同样隔离原则落到每UP子库而非房间子库）；Web面板数据库体积改为主库+全部子库合计；新增专项测试（路由/扇出/迁移/动态判重）；174测试全过、静态零告警 |
 | 2026-09 第三十六批（开播推送按钮） | 开播推送携带「进入直播间」按钮keyboard：线框样式(style=0)、所有人可点击(permission.type=2)、跳转`bilibili://live/房间号`（唤起B站客户端）；bot层send_group_message/media支持keyboard参数（**带按钮发送失败自动去按钮重发**——按钮需平台单独授权，保证推送必达）；keyboard经子进程队列桥透传（开播推送从房间子进程发出）；富媒体失败回退文本同样携带按钮；自定义bot鸭子类型兼容（签名探测回退旧调用）。后按官方v2群消息接口文档修正按钮字段：style=1蓝色线框（0为灰）、visited_label点击后文字（无visited_color字段）、移除非文档字段clicked_data/at_bot_show、补unsupport_tips版本过低提示 | 新增`Setting.debug`（Y/N，默认N）：开启后收到群聊/私聊消息时输出发送者身份明细（user_openid/member_openid/union_openid/union_user_account/username/member_role/id，仅输出携带的字段；群消息附group_openid）；QQBotClient经构造参数透传至_PushClient；支持.env/环境变量覆盖；README配置样例同步 |
 
-各批次过程细节见REVIEW.md（六轮审查记录）与git历史。
+各批次过程细节见REVIEW.md（十轮审查记录）与git历史。
 
 ## 真机验证状态
 
@@ -192,19 +197,21 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ## 未实现 / 半成品
 
 1. **微博动态监控**：仅B站UP主动态已实现。
-2. **Web面板增强**：只读；编辑操作与登录体系未做。
 
 ## 建议添加的新功能（按优先级）
 
-1. **按群推送粒度**：绑定关系增加push_types字段，各群自选订阅事件类型。
+1. ~~按群推送粒度~~（已实现：第六十批 `group_push_setting`，每绑定群对本房间7项推送开关）
 2. **失效凭证自动重扫增强**： expired账号密码重登等场景恢复后自动回池的告警优化（每日nav重扫已有）。
+3. ~~群推送设置的QQ群指令入口~~（已实现：第八批 `/推送设置` 指令）
+4. ~~会话持久化~~（已实现：第八批 HMAC签名sid，web_token派生密钥跨重启保留）
+5. **MySQL/PG数据导出**：当前仅SQLite支持zip导出。
 
 ## 运行要点
 
 ```bash
 pip install -e .           # 安装（自动安装全部依赖，含PyPI的qq-botpy-v2）
 pip install -e ".[dev]"    # 开发环境
-pytest tests/              # 单元测试（159个，无需联网）
+pytest tests/              # 单元测试（318个，无需联网）
 flake8 src/ tests/         # lint（零告警）
 blivepost -c config.yaml   # 运行；chromium装到运行目录ms-playwright/（已装秒级跳过）
 
@@ -227,4 +234,4 @@ export BLIVEPOST_ADMIN_OPENIDS="openid1,openid2"
 - Redis不可达时0.5秒TCP预检快速跳过，不拖慢启动
 - 多实例部署：各实例独立工作目录即可完全隔离（chromium也随目录隔离）
 - 数据库体积超阈值私聊提醒主管理员；代码不自动删除数据
-- 审查报告见REVIEW.md（六轮，最新2026-09-03）
+- 审查报告见REVIEW.md（十轮，最新2026-11-10）

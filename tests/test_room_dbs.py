@@ -6,7 +6,9 @@ from sqlalchemy import select
 
 from blivepost.config.settings import Settings
 from blivepost.database import DatabaseManager, DatabaseService
-from blivepost.database.models import DanmakuRecord, EventBase, RoomDbRecord
+from blivepost.database.models import (
+    DanmakuRecord, EventBase, GroupBindingRecord, RoomDbRecord,
+)
 
 
 async def _make_svc(tmp_path, name="t"):
@@ -422,3 +424,179 @@ async def test_live_page_group_push_settings_ctx(tmp_path):
     items2 = {ps["name"]: ps for ps in b2["push_settings"]}
     assert items2["anchor"]["on"] is False and items2["anchor"]["custom"] is True
     await db.close()
+
+
+# ==================== 旧库迁移幂等性（复制一半崩溃重跑） ====================
+
+
+@pytest.mark.asyncio
+async def test_legacy_migration_crash_midway_rerun_idempotent(tmp_path):
+    """复制一半崩溃重跑安全：子库已存在的id跳过（不IntegrityError卡死），主库按批删除"""
+    from datetime import datetime
+
+    from sqlalchemy import func
+
+    svc, db = await _make_svc(tmp_path, "crash")
+    # 模拟旧库：主库手工建事件表并写入两房间各2行
+    async with db._engine.begin() as conn:
+        await conn.run_sync(EventBase.metadata.create_all)
+    async with db.get_session() as session:
+        for room in (100, 200):
+            for i in range(2):
+                session.add(DanmakuRecord(room_id=room, uid=1, uname="u",
+                                          msg=f"m{i}", timestamp=datetime.now()))
+        await session.commit()
+
+    # 首跑模拟崩溃：第一个房间复制提交后、第二个房间复制前失败（删除阶段未到）
+    original = svc._room_manager
+    calls = []
+
+    async def crash_on_second(room_id):
+        calls.append(room_id)
+        if len(calls) >= 2:
+            raise RuntimeError("模拟中途崩溃")
+        return await original(room_id)
+
+    svc._room_manager = crash_on_second
+    with pytest.raises(RuntimeError):
+        await svc._migrate_legacy_table(DanmakuRecord)
+    svc._room_manager = original
+
+    async with db.get_session() as session:
+        res = await session.execute(select(func.count()).select_from(DanmakuRecord))
+        assert int(res.scalar() or 0) == 4  # 删除阶段未执行，主库数据原样
+
+    # 重跑：已复制房间的id冲突跳过、其余照常插入，整批删除——不再主键冲突卡死
+    moved = await svc._migrate_legacy_table(DanmakuRecord)
+    assert moved == 4
+
+    async with db.get_session() as session:
+        res = await session.execute(select(func.count()).select_from(DanmakuRecord))
+        assert int(res.scalar() or 0) == 0  # 主库已清空
+    assert (await svc.get_daily_summary(100))["danmaku_count"] == 2  # 子库无重复行
+    assert (await svc.get_daily_summary(200))["danmaku_count"] == 2
+    assert await svc._migrate_legacy_table(DanmakuRecord) == 0  # 再次重跑安全返回0
+    await db.close()
+
+
+# ==================== 模型Schema回归：主键类型与冗余索引 ====================
+
+# 事件表 -> (room_id, timestamp) 复合索引名
+_EVENT_TABLES_WITH_ROOM_TIME = {
+    "danmaku": "idx_danmaku_room_time",
+    "gift": "idx_gift_room_time",
+    "super_chat": "idx_sc_room_time",
+    "guard": "idx_guard_room_time",
+    "anchor": "idx_anchor_room_time",
+    "red_pocket": "idx_redpocket_room_time",
+    "guard_achievement": "idx_achievement_room_time",
+    "system_event": "idx_sys_event_room_time",
+    "room_change": "idx_room_change_room_time",
+    "live_status": "idx_live_status_room_time",
+}
+
+
+def _index_columns(conn, table):
+    """{索引名: [覆盖列,...]}（PRAGMA index_list + index_info；含唯一约束索引）"""
+    result = {}
+    for row in conn.execute(f"PRAGMA index_list({table})"):
+        name = row[1]
+        result[name] = [r[2] for r in conn.execute(f"PRAGMA index_info({name})")]
+    return result
+
+
+async def _build_event_db(path):
+    """独立建一个事件子库（EventBase全部表）"""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
+    async with engine.begin() as conn:
+        await conn.run_sync(EventBase.metadata.create_all)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_event_tables_pk_integer_and_autoincrement(tmp_path):
+    """自增主键SQLite渲染INTEGER（rowid别名）：不指定id插入仍可自增"""
+    import sqlite3
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'ev.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(EventBase.metadata.create_all)
+    async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+        rec = DanmakuRecord(room_id=100, uid=1, uname="u", msg="m")
+        session.add(rec)
+        await session.commit()
+        assert rec.id == 1  # 未显式给id，自增生效
+    await engine.dispose()
+
+    conn = sqlite3.connect(tmp_path / "ev.db")
+    try:
+        for table in _EVENT_TABLES_WITH_ROOM_TIME:
+            info = {r[1]: r[2] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert info["id"] == "INTEGER", f"{table}.id 应渲染为 INTEGER"
+    finally:
+        conn.close()
+
+
+def test_pk_type_renders_bigint_on_mysql_and_pg():
+    """主键类型跨方言：MySQL渲染BIGINT AUTO_INCREMENT、PG渲染BIGSERIAL（新库演进）；
+    primary_key_column/set_db_type 死代码机制已移除"""
+    from sqlalchemy.dialects import mysql, postgresql
+    from sqlalchemy.schema import CreateTable
+
+    from blivepost.database import models
+
+    ddl_mysql = str(CreateTable(GroupBindingRecord.__table__).compile(
+        dialect=mysql.dialect()))
+    ddl_pg = str(CreateTable(GroupBindingRecord.__table__).compile(
+        dialect=postgresql.dialect()))
+    assert "id BIGINT NOT NULL AUTO_INCREMENT" in ddl_mysql
+    assert "BIGSERIAL" in ddl_pg
+    assert not hasattr(models, "primary_key_column")
+    assert not hasattr(models, "set_db_type")
+
+
+@pytest.mark.asyncio
+async def test_event_tables_no_redundant_room_id_index(tmp_path):
+    """事件表room_id无单列索引（复合索引最左前缀已覆盖），复合索引保留"""
+    import sqlite3
+
+    await _build_event_db(tmp_path / "ev2.db")
+
+    conn = sqlite3.connect(tmp_path / "ev2.db")
+    try:
+        for table, composite in _EVENT_TABLES_WITH_ROOM_TIME.items():
+            idx = _index_columns(conn, table)
+            assert not any(cols == ["room_id"] for cols in idx.values()), table
+            assert idx.get(composite) == ["room_id", "timestamp"], table
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_binding_tables_group_openid_index_removed(tmp_path):
+    """绑定表group_openid无单列索引（唯一约束最左前缀已覆盖）；room_id/up_uid索引保留"""
+    import sqlite3
+
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "bind.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    await db.close()
+
+    conn = sqlite3.connect(settings.database.sqlite_path)
+    try:
+        gb = _index_columns(conn, "group_binding")
+        assert not any(cols == ["group_openid"] for cols in gb.values())
+        assert any(cols == ["group_openid", "room_id"] for cols in gb.values())
+        assert any(cols == ["room_id"] for cols in gb.values())
+
+        dbb = _index_columns(conn, "dynamic_binding")
+        assert not any(cols == ["group_openid"] for cols in dbb.values())
+        assert any(cols == ["group_openid", "up_uid"] for cols in dbb.values())
+        assert any(cols == ["up_uid"] for cols in dbb.values())
+    finally:
+        conn.close()

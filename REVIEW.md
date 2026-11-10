@@ -9,7 +9,11 @@
 | 第三轮 | 2026-09-02 | 第十六批后全量 + wheel构建验证 | 通过（高1、中1、低2；py.typed缺失补齐） |
 | 第四轮 | 2026-09-02 | 联系人管理批次专项 | 通过（154用例全过） |
 | 第五轮 | 2026-09-02 | 过期内容专项清理 | 通过（README配置示例与代码模板同步） |
-| **第六轮** | **2026-09-03** | **qq-botpy-v2替换 / union链路 / chromium目录 / 绑定风控 / 文档重建** | **通过（union回填补接线、风控接口替换、2个日期边界测试缺陷修复）** |
+| 第六轮 | 2026-09-03 | qq-botpy-v2替换 / union链路 / chromium目录 / 绑定风控 / 文档重建 | 通过（union回填补接线、风控接口替换、2个日期边界测试缺陷修复） |
+| **第七轮** | **2026-11-10** | **全项目深度审查+四阶段整改（P0修复/可靠性/安全/拆分重构）** | **通过（高危5+存量4修复；251用例全绿；pyflakes/mypy零告警；wheel 76文件）** |
+| **第八轮** | **2026-11-10** | **遗留清零 + 开播提醒艾特全体新功能** | **通过（每群每日1次@全体；push并发安全/N+1/动态轮询/日志分离/会话持久化/群指令入口/大屏主题；293用例全绿）** |
+| **第九轮** | **2026-11-10** | **全项目复审（新代码安全+正确性+文档核对）** | **通过（修复/绑定动态指令失效等1高5中3低+文档9处；「平台标签剥离」按用户结论回退）** |
+| **第十轮** | **2026-11-10** | **遗留清零（大屏N+1/退群清理/动态语义/DB死代码/迁移/CI）** | **通过（318用例全绿；pyflakes/mypy零告警）** |
 
 ## 当前全量基线（第六轮审查后）
 
@@ -44,6 +48,80 @@
 | `services/wbi.py`（WbiSigner/wbi_sign/derive_wbi_key） | 第六轮确认非死代码：`dynamics.py`/`fingerprint.py` 在用，`test_wbi.py` 覆盖。bilibili.py 摘除签名调用不影响其存续 |
 | `push.send_group_image` | 预留API，与单聊files接口对称 |
 | `QueueDbBridge.__getattr__` 动态分发 | 子进程侧无需枚举主进程save_*方法清单 |
+
+---
+
+# 第七轮审查（2026-11-10）详细记录
+
+> 背景：三路并行深度审查（数据库/进程层、服务层、测试/部署）发现多个"主路径正确、分支路径翻车"级缺陷与系统性技术债，随后按四阶段整改。
+> 结论：**通过**。修复高危9项（含5项亲测复核确认的现网bug）、中危十余项；三大千行文件拆分；测试盲区补齐。
+
+## 一、P0修复（全部亲测复核确认 + 回归测试）
+
+| 级别 | 问题 | 位置 | 修复 |
+|------|------|------|------|
+| 高危 | `await bot.broadcast(...)` 等待同步方法必抛 TypeError——纯文本动态推送与UP开播提醒自上线起100%失败（旧测试桩把broadcast写成async导致从未暴露） | core/manager.py:533,552 | 去 await；测试桩改同步签名作回归防线 |
+| 高危 | `/绑定`/`/解绑` 指令已移除但正则仍捕获，落入else分支被当作**取消监控**反向执行 | commands.py 正则 | 正则删除两词+注释警示；头部过时docstring同步 |
+| 高危 | 机器人被移出群时直接 remove 房间监控，未检查其他群仍监控同一房间（A退群误停B群推送） | contacts.py on_group_del | unbind后查 get_monitored_groups，非空保留 |
+| 高危 | docker-compose 设 BLIVEPOST_WEB_HOST=0.0.0.0 但 ENV_MAP 无此键，环境变量静默无效、端口映射不通 | config/env.py | ENV_MAP 补键+文档 |
+| 高危 | `maintainer`/`db_service`/`dynamic_manager` try中途才赋值，启动早期异常时 finally NameError 掩盖原始异常并跳过后续清理 | __main__.py | 预清名单补全+None守卫（新增main_async冒烟测试7例覆盖） |
+
+## 二、可靠性加固（阶段1）
+
+- **热路径缓存**：房间→子库名进程内缓存（写穿透），弹幕/礼物落库从每事件一次主库会话降为零
+- **事件循环去阻塞**：`verify_nav`（同步requests）4处调用全部 `asyncio.to_thread`
+- **日结算重试**：失败当日60秒重试+运行日去重（原异常后直接顺延次日=静默丢一整天）
+- **崩溃重建退避**：指数退避（5s起步/300s封顶/6次上限放弃），稳定运行10分钟后计数重置；`ensure(manual=)` 区分用户主动与重建回调
+- **优雅关闭**：房间子库 engine close_all（含registry并发首建锁）、dynamic_manager 纳入 finally、stop_all 并行化、_watch 本地引用消除 exitcode 竞态
+- **推送背压**：qqbot 发送改有界队列（200）+2 worker，满则丢弃告警；stop 哨兵排空30秒超时
+- **SQLite**：WAL+synchronous=NORMAL+busy_timeout 15s（连接池事件重放）；MySQL/PG 用户/密码 quote_plus 转义
+
+## 三、安全加固（阶段2）
+
+- **登录防爆破**：IP+用户名双维度失败计数（5次/5分钟窗口→锁5分钟），err=3 提示
+- **扫码会话隔离**：登录流程归属发起用户，他人不可查看二维码/状态/取消（原全局单会话可窥探抢登）
+- **导出脱敏**：默认 VACUUM INTO 一致性快照+清除 cookie_account（原一个zip=全部B站凭证明文且热文件可能不一致）；`?credentials=1` 显式备份；后台双按钮+警示
+- **web_token**：常量时间比较；长效令牌不再落 cookie、cookie 通道不再接受（仅 ?token= 与 X-Web-Token 头）
+- **/api/status 需登录**（原对游客暴露 app_id/账号UID/到期天数/群规模）
+
+## 四、拆分重构（阶段3，纯代码搬移，AST逐实体比对一致）
+
+| 原文件 | 拆分后 |
+|--------|--------|
+| database/service.py（1940行） | service.py(100) + service_events.py(435) + service_stats.py(410) + service_admin.py(1075)；DatabaseService(EventWriterMixin, StatsMixin, AdminMixin) |
+| services/webpanel.py（1482行） | webpanel.py(186) + webpanel_{common,auth,actions,pages,admin,screen}.py；WebPanel(五Mixin) |
+| core/manager.py（1336行） | manager.py(446) + room_process.py(257) + consumer.py(322) + maintenance.py(392)；原导入路径全部 re-export |
+
+- 公共接口不变：`from blivepost.core.manager import PushQueueConsumer`、`from ..database.service import GROUP_PUSH_SWITCHES`、tests 全部直接属性访问原样通过
+- spawn pickle 安全：`_room_process_main` 迁至 room_process.py，pickle round-trip 验证
+
+## 五、测试盲区补齐
+
+- **test_qqbot_send.py（18例）**：send_group_message（msg_seq/去按钮重发/40034105低频提示）、send_group_media、push/broadcast/push_media 队列链路、_broadcast_message 降级、notify_admins、c2c 消息/图片——原850行零测试的核心出口链路
+- **test_main_smoke.py（11例）**：22个重量组件全桩装配+finally顺序断言、早期异常无NameError、退出码语义、SESSDATA优先级
+
+## 六、其他
+
+- 顺带修复：`_handle_admin_export` 先 `Path(None)` 后判None的顺序错误（非SQLite时500而非409）；mypy 清零（原4个存量错误：`raise denied` 类型标注、Path(None)、本次新增2处在验证中即修）
+- config.example.yaml 入库（由代码模板生成）；配置模板修正（移除已废弃 /绑定 提示、补 Template 5键）；.gitignore 覆盖 `scripts/panel_ids*.json`；PROJECT.md 过时条目同步
+
+## 七、量化摘要
+
+| 指标 | 值 |
+|------|-----|
+| 测试 | 200→**251用例**全过（+51，其中审查回归37+盲区29-覆盖重复合并计） |
+| 静态检查 | pyflakes 零告警；mypy **0错误**（54文件，清零4个存量） |
+| wheel | blivepost-1.1.0-py3-none-any.whl，76文件（新增12模块+16模板+py.typed） |
+| 移除/收缩 | service.py -1940→100行、webpanel.py -1482→186行、manager.py -1336→446行（合计迁出约3800行至12个领域模块） |
+
+---
+
+# 第九/十轮审查（2026-11-10）详细记录
+
+> 第九轮：三路复审第七~八批新增代码（安全/正确性/文档），发现并修复1高危（`CommandHandler` 未传 `dynamic_manager` 致 /绑定动态 指令自拆分后失效——亲测复核确认）、5中危（正文标签注入疑虑、UP提醒配额未过滤收群、DynamicManager缺log_dir、stop收尾窗口断言、Wbi外层TTL与内层日缓存矛盾）、3低危与9处文档不一致。
+> **回退决定（用户结论）**：@全体每群每日1次为**平台硬性限制**，正文注入 `<qqbot-at-everyone />` 无法绕过（平台侧拒发/计数），第九轮的"平台标签剥离"修复前提不成立，已完整回退（strip_platform_tags 及其调用与测试）。
+> 第十轮（遗留清零）：大屏 `_screen_context` N+1 并行化（3N串行→1批量+N并行）；退群清理补全（动态订阅解绑+无他群停轮询+at_all记录清理，ContactEventHandler 接线 dynamic_manager）；动态语义修复（重新订阅 `baseline_first=True` 不再补推停订期间动态、空列表≠异常告警、seen表保留500条修剪+写失败记日志、WbiSignerCache 改 monotonic 时钟根治偶发测试失败）；指令 UX（漏开关名引导文案、异常回显收敛为通用文案）；数据库层（primary_key_column/set_db_type 死代码移除→`BigInteger().with_variant(Integer,"sqlite")`、12处冗余索引删除、`_migrate_legacy_table` on_conflict_do_nothing 幂等化（实证旧实现崩溃重跑必卡IntegrityError）、information_schema 按 dialect 过滤当前库）；CI（Python 3.11/3.12/3.14 矩阵、vendor 预下载使补丁测试不再skip、wheel 构建冒烟）。
+> 量化：**318用例全绿**（302→318）、pyflakes/mypy 双零、wheel 构建/打包资源核验通过。
 
 ---
 

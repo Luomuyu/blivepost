@@ -145,8 +145,8 @@ async def test_token_quick_login_and_pages(monkeypatch, tmp_path):
     # ?token= → 管理员会话 + 重定向干净URL
     resp = await panel._make_page_handler("overview")(FakeReq(query={"token": "SECRET"}))
     assert resp.status == 302
-    sid = next(iter(panel._sessions))  # cookie经Set-Cookie下发（prepare时应用）
-    assert panel._sessions[sid]["admin"] is True
+    sid = resp.cookies["blivepost_sid"].value  # cookie经Set-Cookie下发（prepare时应用）
+    assert panel._session_from_sid(sid)["admin"] is True
 
     # 携会话cookie渲染概览页（回归：viewport/机器人详情）
     class CookieReq:
@@ -504,8 +504,8 @@ async def test_admin_login_user_manage_and_switch(tmp_path):
     resp_login = await panel._action_web_login(FakeReq(form={
         "username": "boss", "password": "SECRET123"}))
     assert resp_login.status == 302 and resp_login.location == "/admin"
-    admin_sid = next(iter(panel._sessions))
-    assert panel._sessions[admin_sid]["admin"] is True
+    admin_sid = resp_login.cookies["blivepost_sid"].value
+    assert panel._session_from_sid(admin_sid)["admin"] is True
 
     # 登录失败 → 回登录页带错误
     with pytest.raises(web.HTTPFound) as ei2:
@@ -535,8 +535,8 @@ async def test_admin_login_user_manage_and_switch(tmp_path):
     resp_alice = await panel._action_web_login(FakeReq(form={
         "username": "alice", "password": "abcd1234"}))
     assert resp_alice.status == 302 and resp_alice.location == "/"
-    alice_sid = [k for k, v in panel._sessions.items() if not v["admin"]][0]
-    assert panel._sessions[alice_sid]["user"] == "alice"
+    alice_sid = resp_alice.cookies["blivepost_sid"].value
+    assert panel._session_from_sid(alice_sid)["user"] == "alice"
 
     # 用户改开关：默认allow_modify关→403；管理员放行后可切
     deny = await panel._action_switch_toggle(FakeReq(
@@ -567,10 +567,11 @@ async def test_admin_login_user_manage_and_switch(tmp_path):
         cookies={"blivepost_sid": admin_sid}, form={"username": "alice"}))
     assert await svc.get_web_user("alice") is None
 
-    # 登出：会话销毁
-    with pytest.raises(web.HTTPFound):
+    # 登出：响应清除会话cookie（签名会话无服务端状态，登出=客户端丢弃cookie）
+    with pytest.raises(web.HTTPFound) as ei_logout:
         await panel._action_web_logout(FakeReq(cookies={"blivepost_sid": alice_sid}))
-    assert alice_sid not in panel._sessions
+    morsel = ei_logout.value.cookies["blivepost_sid"]
+    assert morsel.value == "" and int(morsel["max-age"]) == 0
     await db.close()
 
 
@@ -688,6 +689,78 @@ async def test_screen_requires_login_and_renders(tmp_path):
     assert "screen-trend" in resp2.text and "房间今日排行" in resp2.text
 
 
+@pytest.mark.asyncio
+async def test_screen_context_batches_room_summaries():
+    """大屏房间今日排行：多房间批量get_daily_summaries恰1次，不再逐房串行N+1"""
+    from blivepost.services.webpanel import WebPanel
+
+    async def _fake_collect():
+        return {"now": "t", "bot": {"client_started": True, "token_ready": True,
+                "token_expires_in": 3600},
+                "me": {"id": "9", "username": "bot", "avatar": "", "share_url": ""},
+                "app_id": "100", "db_size_mb": 1.2,
+                "accounts": [], "rooms": [],
+                "dynamics": [], "recent": []}
+
+    class FakeDB:
+        """计数器桩：记录批量/逐房汇总与主播名查询各自的调用次数"""
+        batch_calls = 0
+        single_calls = 0
+        room_uid_calls = 0
+        streamer_name_calls = 0
+
+        async def list_room_ids(self):
+            return [101, 102, 103]
+
+        async def get_daily_summaries(self, room_ids, day=None):
+            FakeDB.batch_calls += 1
+            assert list(room_ids) == [101, 102, 103] and day is not None
+            return {101: {"danmaku_count": 5, "gift_gold": 10.0,
+                          "ship_total": 0, "sc_total": 0},
+                    102: {"danmaku_count": 1, "gift_gold": 50.0,
+                          "ship_total": 30.0, "sc_total": 20.0},
+                    103: {"danmaku_count": 0, "gift_gold": 0,
+                          "ship_total": 0, "sc_total": 0}}
+
+        async def get_daily_summary(self, rid, day=None):
+            FakeDB.single_calls += 1
+            return {}
+
+        async def get_room_uid(self, rid):
+            FakeDB.room_uid_calls += 1
+            return 0
+
+        async def get_streamer_name(self, uid):
+            FakeDB.streamer_name_calls += 1
+            return ""
+
+        async def get_daily_history_range(self, start, end, room_ids=None):
+            return []
+
+        async def load_groups(self):
+            return []
+
+    panel = WebPanel(None, None, None, None, None, bot_client=None)
+    panel._collect = _fake_collect
+    panel.db_service = FakeDB()
+
+    ctx = await panel._screen_context()
+    # 批量汇总恰1次；旧逐房路径（get_daily_summary/get_room_uid/
+    # get_streamer_name逐房串行）不再被触发
+    assert FakeDB.batch_calls == 1
+    assert FakeDB.single_calls == 0
+    assert FakeDB.room_uid_calls == 0
+    assert FakeDB.streamer_name_calls == 0
+    # 排序按 gold+ship+sc 降序：102(100)>101(10)>103(0)
+    rooms = ctx["rooms_today"]
+    assert [r["room_id"] for r in rooms] == [102, 101, 103]
+    assert rooms[0]["gold"] == 50.0 and rooms[0]["ship"] == 30.0
+    assert rooms[1]["danmaku"] == 5 and rooms[1]["gold"] == 10.0
+    # binding_store为None→主播名回落房号占位
+    assert rooms[2]["streamer"] == "房间103"
+    assert ctx["trend7"] == [] and ctx["group_count"] == 0
+
+
 def test_logger_debug_gating(capsys):
     """DEBUG日志仅在debug开关开启时输出；jieba日志级别随开关联动"""
     import logging
@@ -710,3 +783,135 @@ def test_logger_debug_gating(capsys):
     Logger().apply_debug(False)
     assert logger.level == logging.INFO
     assert logging.getLogger("jieba").level == logging.WARNING
+
+
+# ==================== 面板数据收集并行化/TTL缓存（N+1查询扇出优化） ====================
+
+
+async def test_collect_multi_room_batch_and_parallel():
+    """多房间_collect：批量汇总接口一次扇出全部房间，行数据完整且顺序稳定"""
+    panel = _make_panel()
+    calls = {"batch": 0, "names": []}
+
+    class D:
+        requested = None
+
+        @staticmethod
+        async def get_daily_summaries(room_ids, day=None):
+            calls["batch"] += 1
+            D.requested = list(room_ids)
+            return {rid: {"day": "t", "danmaku_count": rid * 10, "gift_gold": 1.5,
+                          "gift_count": 0, "ship_total": 2.0, "ship_count": 0,
+                          "sc_total": 3, "sc_count": 0, "red_pocket": 0}
+                    for rid in room_ids}
+
+        @staticmethod
+        async def get_streamer_name(uid):
+            calls["names"].append(uid)
+            return f"主播{uid}"
+
+        @staticmethod
+        async def get_recent_live_status(limit=10):
+            return []
+
+    class MM:
+        @staticmethod
+        def room_ids():
+            return [101, 202, 303]
+
+        @staticmethod
+        def has(rid):
+            return rid != 303
+
+        @staticmethod
+        def get_cookie_uid(rid):
+            return rid + 1
+
+    class BS:
+        @staticmethod
+        def get_monitored_groups(rid):
+            return ["G1"]
+
+        @staticmethod
+        def get_binding(group, rid):
+            class B:
+                uid = rid + 1000
+            return B()
+
+        @staticmethod
+        def get_dynamic_up_uids():
+            return []
+
+    panel.db_service = D()
+    panel.monitor_manager = MM()
+    panel.binding_store = BS()
+    panel._streamer_names.clear()
+
+    data = await panel._collect()
+    # 汇总批量一次拿到全部房间（不再逐房串行get_daily_summary）
+    assert calls["batch"] == 1 and D.requested == [101, 202, 303]
+    assert [r["room_id"] for r in data["rooms"]] == [101, 202, 303]
+    assert data["rooms"][0]["danmaku"] == 1010
+    assert data["rooms"][1]["gold"] == 1.5 and data["rooms"][1]["sc"] == 3
+    assert data["rooms"][0]["streamer"] == "主播1101"
+    assert data["rooms"][0]["alive"] is True and data["rooms"][2]["alive"] is False
+    assert sorted(calls["names"]) == [1101, 1202, 1303]
+
+
+async def test_streamer_name_ttl_cache_no_db_requery():
+    """TTL缓存：首次查库，缓存命中期间二次调用不触库；到期后重新查库"""
+    import time as _time
+
+    panel = _make_panel()
+    counter = {"n": 0}
+
+    class D:
+        @staticmethod
+        async def get_streamer_name(uid):
+            counter["n"] += 1
+            return "墨翎"
+
+    class BS:
+        @staticmethod
+        def get_monitored_groups(rid):
+            return ["G1"]
+
+        @staticmethod
+        def get_binding(group, rid):
+            class B:
+                uid = 42
+            return B()
+
+    panel.db_service = D()
+    panel.binding_store = BS()
+    panel._streamer_names.clear()
+
+    assert await panel._streamer_name(7) == "墨翎"
+    assert counter["n"] == 1
+    assert await panel._streamer_name(7) == "墨翎"  # 缓存命中：不再触库
+    assert counter["n"] == 1
+
+    # 缓存过期 → 重新查库
+    panel._streamer_names[7] = (_time.monotonic() - 0.001, "旧名")
+    assert await panel._streamer_name(7) == "墨翎"
+    assert counter["n"] == 2
+
+
+async def test_get_daily_summaries_batch(tmp_path):
+    """批量汇总：一次调用返回各房间当日汇总，与单房get_daily_summary语义一致"""
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    await svc.save_danmaku(room_id=100, uid=1, uname="u", msg="a")
+    await svc.save_gift(room_id=200, uid=1, uname="u", gift_id=1,
+                        gift_name="g", num=1, price=1000, coin_type="gold")
+    summaries = await svc.get_daily_summaries([100, 200, 300])
+    assert set(summaries) == {100, 200, 300}
+    assert summaries[100]["danmaku_count"] == 1 and summaries[100]["gift_gold"] == 0
+    assert summaries[200]["danmaku_count"] == 0 and summaries[200]["gift_gold"] == 1.0
+    assert summaries[300]["danmaku_count"] == 0  # 无数据房间零值汇总
+    assert summaries[100] == await svc.get_daily_summary(100)  # 等价单房查询
+    assert await svc.get_daily_summaries([]) == {}
+    await db.close()
