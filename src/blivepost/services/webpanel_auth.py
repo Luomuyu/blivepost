@@ -94,7 +94,8 @@ def verify_session_sid(sid: str, key: bytes) -> Optional[dict]:
         return None
     if payload["e"] < datetime.now().timestamp():
         return None
-    return {"user": payload["u"], "admin": bool(payload["a"]), "exp": payload["e"]}
+    return {"user": payload["u"], "admin": bool(payload["a"]),
+            "exp": payload["e"], "jti": payload.get("i", "")}
 
 
 class AuthMixin:
@@ -106,6 +107,8 @@ class AuthMixin:
     LOGIN_LOCK_SECONDS = 300.0
     # 失败计数字典容量上限（防随机用户名脚本无界增长内存）
     LOGIN_MAX_TRACKED = 1000
+    # 吊销列表容量上限（jti → 过期monotonic；过期自动清理）
+    REVOKED_MAX = 5000
 
     # ---- 以下实例属性由组合后的宿主WebPanel.__init__提供（仅类型标注） ----
     token: str
@@ -124,15 +127,50 @@ class AuthMixin:
 
     def _create_session(self, user: str, is_admin: bool) -> str:
         """新建会话（7天有效），返回签名会话ID（无状态持久化，见模块docstring）"""
+        if not hasattr(self, "_revoked_jtis"):
+            self._revoked_jtis: dict = {}
         exp = (datetime.now() + _SESSION_TTL).timestamp()
         return create_session_sid(user, is_admin, exp, self._session_key)
 
+    def revoke_session(self, sid: str) -> bool:
+        """吊销指定会话（加入jti黑名单，签名再有效也拒绝；进程生命周期内）"""
+        if not hasattr(self, "_revoked_jtis"):
+            self._revoked_jtis = {}
+        sess = verify_session_sid(sid, self._session_key)
+        if sess is None:
+            return False
+        jti = sess.get("jti", "")
+        if not jti:
+            return False
+        self._prune_revoked()
+        self._revoked_jtis[jti] = sess["exp"]  # 到会话自然过期时自动清理
+        logger.info(f"已吊销会话（用户 {sess['user']}）")
+        return True
+
+    def _prune_revoked(self) -> None:
+        """清理已自然过期的吊销条目"""
+        import time
+        if not hasattr(self, "_revoked_jtis"):
+            return
+        now = time.time()
+        for k in [k for k, exp in self._revoked_jtis.items() if exp < now]:
+            self._revoked_jtis.pop(k, None)
+        # 超容量时截断最旧的
+        while len(self._revoked_jtis) > self.REVOKED_MAX:
+            self._revoked_jtis.pop(next(iter(self._revoked_jtis)))
+
     def _session_from_sid(self, sid: str) -> Optional[dict]:
-        """验签解析会话sid（None=无效/伪造/过期）"""
-        return verify_session_sid(sid, self._session_key)
+        """验签解析会话sid（含吊销检查；None=无效/伪造/过期/已吊销）"""
+        sess = verify_session_sid(sid, self._session_key)
+        if sess is None:
+            return None
+        jti = sess.get("jti", "")
+        if jti and hasattr(self, "_revoked_jtis") and jti in self._revoked_jtis:
+            return None  # 已吊销
+        return sess
 
     def _session(self, request) -> Optional[dict]:
-        """当前会话（None=游客）：cookie携签名sid，验签+验期，无服务端状态"""
+        """当前会话（None=游客）：cookie携签名sid，验签+验期+吊销检查"""
         sid = request.cookies.get(_SESSION_COOKIE, "")
         return self._session_from_sid(sid)
 
@@ -284,12 +322,15 @@ class AuthMixin:
         return resp
 
     async def _action_web_logout(self, request):
-        """登出：清除会话cookie回到游客
+        """登出：吊销当前会话jti + 清除cookie回到游客
 
-        签名会话无服务端状态，无法吊销单个sid（过期前签名仍有效，登出即
-        客户端丢弃cookie）；需要全量登出时改web_token（或未配置token时
-        重启进程），全部旧会话验签即失效。
+        v1.2.0起支持单会话吊销（jti黑名单，进程生命周期内有效）；
+        全量登出仍可通过改web_token实现。注：吊销列表在内存，
+        进程重启后清空（被窃取的sid重启后恢复可用——需改token根治）。
         """
+        sid = request.cookies.get(_SESSION_COOKIE, "")
+        if sid:
+            self.revoke_session(sid)  # 吊销jti，防cookie残留重放
         resp = web.HTTPFound("/")
         resp.del_cookie(_SESSION_COOKIE, path="/")
         raise resp

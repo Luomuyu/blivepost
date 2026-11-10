@@ -148,9 +148,10 @@ asyncio.run(main_async(config_path="config.yaml", sessdata=""))
 
 # 库级组件也可单独使用
 from blivepost import CookiePool, PushService, WbiSigner, BindingStore
+from blivepost import DatabaseService, DatabaseManager
 ```
 
-> 说明：`LiveMonitor` 等早期库API仍保留导出，但推荐的使用方式是CLI启动完整主进程（含子进程监控、账号池与群指令体系）。
+> **v1.2.0 破坏性变更**：`LiveMonitor` 早期库API已移除（监控由 `MonitorManager` 子进程承担）。库级扩展推荐 `PushService`（推送链）与 `DatabaseService`（读写门面）两条路径，见下方"扩展开发"。
 
 ## 📁 项目结构
 
@@ -163,7 +164,7 @@ blivepost/
 │   │   └── settings.py      # 配置管理（Admin/QQBot/Setting/Template等段）
 │   ├── core/
 │   │   ├── manager.py       # 子进程管理/队列消费/Cookie维护循环
-│   │   ├── monitor.py       # LiveMonitor（早期库API，主流程已不用）
+│   │   ├── monitor.py       # （已于v1.2.0移除——监控由manager.py子进程承担）
 │   │   └── handler.py       # 直播事件处理（日志/统计/落库/推送开关）
 │   ├── services/
 │   │   ├── qqbot.py         # QQ机器人客户端（qq-botpy-v2封装）

@@ -15,6 +15,7 @@ import botpy
 from botpy.message import C2CMessage, GroupMessage
 
 from ..utils.logger import get_logger
+from .botpy_compat import api_request as _compat_req
 
 
 if TYPE_CHECKING:
@@ -221,7 +222,7 @@ class QQBotClient:
         try:
             route = Route("GET", "/v2/groups/{group_openid}/bot_state",
                           group_openid=group_openid)
-            data = await self._client.api._http.request(route)
+            data = await _compat_req(self._client, route)
             if isinstance(data, dict):
                 # 文档示例为平铺字段；兼容可能的data包裹
                 role = (data.get("member_role")
@@ -976,7 +977,7 @@ class QQBotClient:
             )
             route = Route("POST", "/v2/groups/{group_openid}/files",
                           group_openid=group_openid)
-            media = await self._client.api._http.request(route, data=form)
+            media = await _compat_req(self._client, route, data=form)
 
             await self._client.api.post_group_message(
                 group_openid=group_openid,
@@ -1010,8 +1011,8 @@ class QQBotClient:
         sha1 = hashlib.sha1(data).hexdigest()
         try:
             # ① prepare
-            res = await self._client.api._http.request(
-                Route("POST", "/v2/media-images/prepare"),
+            res = await _compat_req(
+                self._client, Route("POST", "/v2/media-images/prepare"),
                 json={"file_name": file_name, "file_size": len(data),
                       "content_type": content_type, "md5": md5, "sha1": sha1})
             upload_id = (res or {}).get("upload_id")
@@ -1030,8 +1031,8 @@ class QQBotClient:
                         return None
                     etag = resp.headers.get("ETag", "").strip('"') or md5
             # ③ complete
-            res2 = await self._client.api._http.request(
-                Route("POST", "/v2/media-images/complete"),
+            res2 = await _compat_req(
+                self._client, Route("POST", "/v2/media-images/complete"),
                 json={"upload_id": upload_id, "md5": etag})
             url = (res2 or {}).get("url")
             if not url:
@@ -1059,7 +1060,7 @@ class QQBotClient:
             route = Route(
                 "POST", "/v2/groups/{group_openid}/files",
                 group_openid=group_openid)
-            res = await self._client.api._http.request(route, json={
+            res = await _compat_req(self._client, route, json={
                 "file_type": 1,  # 图片
                 "file_name": file_name,
                 "file_data": base64.b64encode(data).decode("ascii"),
@@ -1085,8 +1086,8 @@ class QQBotClient:
         if not self.started or self._client is None:
             return False
         try:
-            await self._client.api._http.request(
-                Route("DELETE", "/v2/media-images/{image_id}/delete",
+            await _compat_req(
+                self._client, Route("DELETE", "/v2/media-images/{image_id}/delete",
                       image_id=image_id))
             return True
         except Exception as e:

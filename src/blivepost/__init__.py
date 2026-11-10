@@ -14,7 +14,6 @@ __version__ = "1.1.0"
 __author__ = "Luomuyu"
 
 # 核心模块
-from .core.monitor import LiveMonitor
 from .core.handler import LiveEventHandler
 from .core.manager import MonitorManager, RoomProcess, PushQueueConsumer
 
@@ -55,8 +54,7 @@ from .__main__ import main, run
 
 
 __all__ = [
-    # 核心类
-    "LiveMonitor",
+    # 核心类（LiveMonitor已于v1.2.0移除，监控由MonitorManager子进程承担）
     "LiveEventHandler",
     # 配置
     "Settings",
