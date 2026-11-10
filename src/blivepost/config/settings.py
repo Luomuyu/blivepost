@@ -54,10 +54,6 @@ class MessageSettings:
     # 的派生来源：登录态跨进程重启保留，修改token即全量登出（未配置时密钥为
     # 进程随机，重启后Web登录态失效——见services/webpanel_auth.py）
     web_token: str = ""
-    # 公网基础URL（如 https://bot.example.com）——QQ群富媒体只收公网URL，
-    # 配置后动态推送启用"本地渲染卡片/opus截图"托管链（服务端口需公网可达
-    # 或反代到 /dyn-img/）；为空时动态图片直接用动态原图URL（B站CDN公网）
-    web_public_base: str = ""
     # Web后台管理员（config设置；口令非空才启用后台登录，登录后可管用户/推送开关/导出）
     web_admin_user: str = "admin"
     web_admin_password: str = ""
@@ -268,7 +264,6 @@ Setting: # 消息推送设置
   web_host: "127.0.0.1" # Web面板监听地址
   web_port: 8080 # Web面板端口
   web_token: "" # Web面板管理员快捷令牌 (设置后 ?token= 即管理员登录, 免输账号密码; 亦作Web会话签名密钥来源, 配置后登录态跨进程重启保留, 修改即全量登出)
-  web_public_base: "" # 公网基础URL (如 https://bot.example.com; 配置后动态推送启用本地渲染卡片/截图托管, 需公网可达/dyn-img; 留空则动态图片用B站原图URL)
   web_admin_user: "admin" # Web后台管理员账号 (管理员来自config不入库)
   web_admin_password: "" # Web后台管理员口令 (非空才启用登录与后台; 前台用户由后台添加)
   data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)

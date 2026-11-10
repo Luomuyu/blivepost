@@ -307,14 +307,28 @@ class PushQueueConsumer:
         if bot is None:
             logger.warning("机器人未启动，动态推送失败")
             return
-        # 带图动态走富媒体（单群失败自动回退文本），纯文本直接广播
-        # 注意：broadcast是同步入口（内部create_task），不可await
+        # 配图优先级（2026-11-10用户决策）：本地渲染图（b64，经群files
+        # 二进制直传投递）> 动态原图URL（平台转存）> 纯文本广播。
+        # 注意：push_media_data/push_media/broadcast均为同步入口（内部
+        # create_task），不可await
+        image_b64 = (item.get("image_b64") or "").strip()
         image = (item.get("image") or "").strip()
-        if image:
+        pushed = False
+        if image_b64:
+            import base64 as _b64mod
+            try:
+                data = _b64mod.b64decode(image_b64)
+            except Exception:
+                data = None
+            push_data = getattr(bot, "push_media_data", None)
+            if data and push_data is not None:
+                pushed = push_data(data, content, groups)
+        if not pushed and image:
             bot.push_media(image, content, groups)
-        else:
+        elif not pushed:
             bot.broadcast(groups, content)
-        logger.info(f"UP主 {up_uid} 新动态已推送到 {len(groups)} 个群")
+        logger.info(f"UP主 {up_uid} 新动态已推送到 {len(groups)} 个群"
+                    f"（图: {item.get('image_source') or ('URL' if image else '无')}）")
 
     async def _handle_up_live(self, item: dict) -> None:
         """处理开播提醒：推送到所有订阅该UP主动态的群（当天首次开播提醒的群艾特全体）"""

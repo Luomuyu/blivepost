@@ -240,6 +240,7 @@ class _RemoteFetchProxy:
             return None
         content = body.get("content") or {}
         image = body.get("image_url") or None
+        image_b64 = body.get("image_b64") or None
         summary_parts = [p for p in (content.get("title"), content.get("text"))
                          if p]
         summary = " ".join(summary_parts)
@@ -248,7 +249,9 @@ class _RemoteFetchProxy:
         return {
             "author": content.get("author") or "",
             "summary": summary,
-            "image": image or (content.get("images") or [None])[0],
+            # 本地渲染图（b64，群files二进制直传）优先；否则动态原图URL
+            "image_b64": image_b64,
+            "image": None if image_b64 else (image or (content.get("images") or [None])[0]),
             "image_source": body.get("image_source") or "",
         }
 
@@ -572,13 +575,15 @@ class _DynamicPollSession:
             try:
                 prepared = prepare(candidate)
                 if isinstance(prepared, dict):
-                    for k in ("author", "summary", "image"):
+                    for k in ("author", "summary", "image", "image_b64"):
                         if prepared.get(k):
                             info[k] = prepared[k]
                     info["image_source"] = prepared.get("image_source") or ""
+                    if info.get("image_b64"):
+                        info["image"] = None  # 本地b64图与URL图互斥
             except Exception as e:
                 logger.warning(f"opus页内容准备失败(动态{candidate}): {e}")
-        if not info["summary"] and not info["image"]:
+        if not info["summary"] and not info["image"] and not info.get("image_b64"):
             # 回退：feed响应中该条目的摘要（含图）——requests兜底链场景
             for item in (_parse_feed_data(data, self.up_uid) or []):
                 if item.get("dynamic_id") == candidate:

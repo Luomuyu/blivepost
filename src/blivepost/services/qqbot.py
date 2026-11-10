@@ -991,6 +991,77 @@ class QQBotClient:
             logger.error(f"发送群图片失败: group={group_openid}, error={e}")
             return False
 
+    async def send_group_media_data(self, group_openid: str, data: bytes,
+                                    file_name: str = "dynamic.png",
+                                    content: str = "") -> bool:
+        """向单个群发送本地图片（二进制直传：file_data，≤5M）。
+
+        官方v2群files接口支持二进制上传（file_data字段，base64编码入JSON），
+        分片合并用于更大文件——动态推送的本地渲染卡片/截图（通常<1M）走直传。
+        """
+        if not self.started or self._client is None:
+            logger.warning("botpy客户端未运行，本地图片发送失败")
+            return False
+        try:
+            import base64
+            route = Route(
+                "POST", "/v2/groups/{group_openid}/files",
+                group_openid=group_openid)
+            res = await self._client.api._http.request(route, json={
+                "file_type": 1,  # 图片
+                "file_name": file_name,
+                "file_data": base64.b64encode(data).decode("ascii"),
+                "srv_send_msg": False,  # 仅取file_info，随后手动发消息
+            })
+            file_info = res.get("file_info") if isinstance(res, dict) else None
+            if not file_info:
+                logger.warning(f"群图片二进制上传未返回file_info: {res}")
+                return False
+            await self._client.api.post_group_message(
+                group_openid=group_openid,
+                msg_type=7,
+                content=content,
+                media={"file_info": file_info},
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"发送群本地图片失败: group={group_openid}, error={e}")
+            return False
+
+    def push_media_data(self, data: bytes, content: str,
+                        groups: Iterable[str],
+                        file_name: str = "dynamic.png") -> bool:
+        """多群推送本地图片（二进制直传；单群失败降级Markdown→文本）"""
+        if self._loop is None or not self.started:
+            logger.error("QQ官方机器人未启动，本地图片推送失败")
+            return False
+
+        async def _run() -> bool:
+            from .push import live_markdown_content
+            all_ok = True
+            for group in groups:
+                ok = await self.send_group_media_data(
+                    group, data, file_name=file_name, content=content)
+                if not ok:
+                    # 降级：Markdown → 文本（图已不可达，纯文字保必达）
+                    ok = await self.send_group_markdown(group, content)
+                    if not ok:
+                        ok = await self.send_group_message(group, content)
+                if not ok:
+                    all_ok = False
+                await asyncio.sleep(0.5)
+            return all_ok
+
+        coro = _run()
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is self._loop:
+            return self._enqueue_send(coro)
+        asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return True
+
     async def notify_admins(self, admins: Iterable[str], content: str) -> int:
         """
         向全部管理员发送私聊提醒（Cookie失效等敏感信息仅走私聊）

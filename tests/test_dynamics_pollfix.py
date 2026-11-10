@@ -968,33 +968,65 @@ async def test_consumer_dynamic_str_pub_ts_pushes():
 # ---------- opus渲染与配图决策（/dyn-prepare） ----------
 
 async def test_dyn_prepare_image_priority(monkeypatch):
-    """配图优先级：无公网基地址→动态原图URL；有→卡片(PIL)优先"""
+    """配图优先级：卡片(b64)→截图(b64)→动态原图URL→无图（二进制直传链）"""
     from aiohttp.test_utils import TestClient, TestServer
     from blivepost.services.dyn_fetch import DynFetchService
+    import base64
 
     content = {"author": "UP", "title": "标题", "text": "正文内容",
                "images": ["https://i0.hdslb.com/bfs/a.png"]}
+    card_bytes = b"PNGCARD"
 
-    svc = DynFetchService()          # 无公网基地址
+    monkeypatch.setattr(DynFetchService, "_render_card",
+                        staticmethod(lambda *a: card_bytes))
 
     async def fake_render(dynamic_id):
         return dict(content)
 
+    svc = DynFetchService()
     svc._render_opus = fake_render
     client = TestClient(TestServer(svc._build_app()))
     await client.start_server()
     try:
+        # ① PIL卡片可用 → b64直传（无需公网URL）
         r = await client.post("/dyn-prepare", json={"dynamic_id": "900"},
                               headers={"X-Fetch-Token": svc.token})
-        assert r.status == 200
         body = await r.json()
-        assert body["image_url"] == content["images"][0]   # 原图URL链
+        assert body["image_source"] == "card"
+        assert base64.b64decode(body["image_b64"]) == card_bytes
+        assert body["image_url"] is None
+
+        # 卡片不可用 → ②截图
+        monkeypatch.setattr(DynFetchService, "_render_card",
+                            staticmethod(lambda *a: None))
+
+        async def fake_shot():
+            return b"PNGSHOT"
+
+        svc._screenshot_view = fake_shot
+        r = await client.post("/dyn-prepare", json={"dynamic_id": "900"},
+                              headers={"X-Fetch-Token": svc.token})
+        body = await r.json()
+        assert body["image_source"] == "screenshot"
+        assert base64.b64decode(body["image_b64"]) == b"PNGSHOT"
+
+        # 截图超大 → ③原图URL
+        async def big_shot():
+            return b"x" * (5 * 1024 * 1024)
+
+        svc._screenshot_view = big_shot
+        r = await client.post("/dyn-prepare", json={"dynamic_id": "900"},
+                              headers={"X-Fetch-Token": svc.token})
+        body = await r.json()
         assert body["image_source"] == "original"
-        # 非法dynamic_id → 400
+        assert body["image_url"] == content["images"][0]
+        assert body["image_b64"] is None
+
+        # 非法dynamic_id → 400；渲染失败无原图 → 无图
         r = await client.post("/dyn-prepare", json={"dynamic_id": "../evil"},
                               headers={"X-Fetch-Token": svc.token})
         assert r.status == 400
-        # 渲染失败且无原图 → 无图文案兜底
+
         async def fail_render(dynamic_id):
             return None
         svc._render_opus = fail_render
@@ -1005,37 +1037,13 @@ async def test_dyn_prepare_image_priority(monkeypatch):
     finally:
         await client.close()
 
-    # 公网基地址配置时：PIL卡片优先（有字体环境）
-    svc2 = DynFetchService(public_base="https://bot.example.com")
-    svc2._render_opus = fake_render
-    card_bytes = b"\x89PNGfake"
-
-    def fake_card(author, title, text):
-        return card_bytes
-
-    monkeypatch.setattr(DynFetchService, "_render_card",
-                        staticmethod(fake_card))
-    client2 = TestClient(TestServer(svc2._build_app()))
-    await client2.start_server()
-    try:
-        r = await client2.post("/dyn-prepare", json={"dynamic_id": "900"},
-                               headers={"X-Fetch-Token": svc2.token})
-        body = await r.json()
-        assert body["image_source"] == "card"
-        assert body["image_url"].startswith("https://bot.example.com/dyn-img/")
-        # 托管URL可下载
-        img_url = body["image_url"].replace("https://bot.example.com", "")
-        r2 = await client2.get(img_url)
-        assert r2.status == 200 and await r2.read() == card_bytes
-    finally:
-        await client2.close()
-
 
 async def test_remote_proxy_prepare():
-    """子进程代理prepare：content→推送字段映射；服务失败回退None"""
+    """子进程代理prepare：content→推送字段映射（含b64互斥）"""
     import blivepost.services.dynamics as dyn
 
     proxy = dyn._RemoteFetchProxy(18080, "TK")
+    b64 = "iVBORw0KGgo="
 
     class FakeResp:
         status_code = 200
@@ -1043,17 +1051,65 @@ async def test_remote_proxy_prepare():
         def json(self):
             return {"content": {"author": "UP", "title": "标题",
                                 "text": "正文", "images": ["http://i/1.jpg"]},
-                    "image_url": "https://b.example/dyn-img/x.png",
+                    "image_b64": b64, "image_url": None,
                     "image_source": "card"}
 
-    monkeypatch_target = dyn.requests
-    orig_post = monkeypatch_target.post
-    monkeypatch_target.post = lambda *a, **kw: FakeResp()
+    orig_post = dyn.requests.post
+    dyn.requests.post = lambda *a, **kw: FakeResp()
     try:
         prepared = proxy.prepare("900")
         assert prepared["author"] == "UP"
         assert "标题" in prepared["summary"] and "正文" in prepared["summary"]
-        assert prepared["image"] == "https://b.example/dyn-img/x.png"
+        assert prepared["image_b64"] == b64 and prepared["image"] is None
         assert prepared["image_source"] == "card"
     finally:
-        monkeypatch_target.post = orig_post
+        dyn.requests.post = orig_post
+
+
+async def test_consumer_dynamic_local_image_binary_push():
+    """consumer：b64本地图→bot.push_media_data(bytes)；URL图→push_media"""
+    from blivepost.config.settings import Settings
+    from blivepost.core.consumer import PushQueueConsumer
+    from blivepost.services.push import PushService
+    import base64
+
+    calls = []
+
+    class Bot:
+        def push_media_data(self, data, content, groups, file_name=None):
+            calls.append(("data", data))
+            return True
+
+        def push_media(self, image, content, groups, keyboard=None,
+                       at_all_groups=None):
+            calls.append(("url", image))
+            return True
+
+        def broadcast(self, groups, content, keyboard=None, at_all_groups=None):
+            calls.append(("text", None))
+            return True
+
+    ps = PushService(Settings())
+    ps.bot_client = Bot()
+
+    class Store:
+        def get_dynamic_groups(self, up_uid):
+            return ["G1"]
+
+        def get_dynamic_up_name(self, up_uid):
+            return "UP"
+
+    consumer = PushQueueConsumer(None, ps, None, binding_store=Store(),
+                                 switch_defaults={"dynamic_monitor": True})
+    payload = {"type": "dynamic", "up_uid": 111, "dynamic_id": "900",
+               "author": "UP", "pub_ts": 1762765229, "summary": "内容",
+               "image": None, "image_b64": base64.b64encode(b"PNG").decode(),
+               "image_source": "card"}
+    await consumer._handle_dynamic(payload)
+    assert calls == [("data", b"PNG")]          # 本地图直传，未走URL/文本链
+
+    calls.clear()
+    payload.update({"image": "http://img/1.png", "image_b64": None,
+                    "image_source": "original"})
+    await consumer._handle_dynamic(payload)
+    assert calls == [("url", "http://img/1.png")]

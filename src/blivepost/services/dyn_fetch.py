@@ -139,26 +139,24 @@ _OPUS_EXTRACT_JS = """
 }
 """
 
-# 托管图片TTL（秒）：推送后平台转存即弃，过期清理防内存滞留
-_IMAGE_TTL = 600.0
+# 本地图片二进制直传大小上限（群files接口file_data限5M，留余量）
+_MAX_DIRECT_BYTES = 4 * 1024 * 1024
 
 
 class DynFetchService:
     """动态取数HTTP服务（127.0.0.1随机端口+进程级token）
 
-    public_base（公网基地址）配置后启用本地渲染图片托管链
-    （PIL卡片→opus截图→动态原图→无图）；为空时仅动态原图URL链。
+    /dyn-prepare配图决策（2026-11-10用户决策）：PIL本地渲染卡片 →
+    opus页.bili-opus-view截图 → 动态原图URL → 无图。本地图片以
+    image_b64返回，经群files接口二进制直传投递（无需公网URL）。
     """
 
-    def __init__(self, cookie_string: str = "", public_base: str = ""):
+    def __init__(self, cookie_string: str = ""):
         self._holder = _BrowserHolder()
         self._holder.set_cookies(cookie_string)
         self._token = secrets.token_urlsafe(24)
         self._runner: Optional[web.AppRunner] = None
         self.port: int = 0
-        self.public_base = (public_base or "").rstrip("/")
-        # 托管图片：{name: (过期monotonic, content_type, bytes)}
-        self._images: dict = {}
         # prepare全流程锁（渲染→截图期间页面不得被并发取数导航走）
         self._prepare_lock = asyncio.Lock()
 
@@ -174,7 +172,6 @@ class DynFetchService:
         app = web.Application()
         app.router.add_post("/dyn-fetch", self._handle_fetch)
         app.router.add_post("/dyn-prepare", self._handle_prepare)
-        app.router.add_get("/dyn-img/{name}", self._handle_image)
         return app
 
     async def start(self) -> int:
@@ -186,15 +183,13 @@ class DynFetchService:
         # TCPSite不直接暴露端口——从runner取实际绑定地址
         sockets = self._runner.addresses
         self.port = int(sockets[0][1]) if sockets else 0
-        logger.info(f"动态取数服务已启动: http://127.0.0.1:{self.port}/dyn-fetch"
-                    f"（本地图片托管: {'启用 ' + self.public_base if self.public_base else '未启用-公网基地址未配置'}）")
+        logger.info(f"动态取数服务已启动: http://127.0.0.1:{self.port}/dyn-fetch")
         return self.port
 
     async def stop(self) -> None:
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
-        self._images.clear()
         await self._holder.close()
 
     # ---- opus页渲染与配图决策 ----
@@ -303,21 +298,12 @@ class DynFetchService:
         img.save(buf, format="PNG")
         return buf.getvalue()
 
-    def _host_image(self, data: bytes, content_type: str) -> Optional[str]:
-        """托管本地图片字节并返回公网URL（未配置公网基地址返回None）"""
-        if not self.public_base:
-            return None
-        import time as _time
-        name = secrets.token_urlsafe(12)
-        now = _time.monotonic()
-        # 顺带清理过期项
-        for k in [k for k, v in self._images.items() if v[0] < now]:
-            self._images.pop(k, None)
-        self._images[name] = (now + _IMAGE_TTL, content_type, data)
-        return f"{self.public_base}/dyn-img/{name}"
-
     async def _handle_prepare(self, request: web.Request) -> web.Response:
-        """候选动态内容准备：opus渲染+配图决策（卡片→截图→原图→无图）"""
+        """候选动态内容准备：opus渲染+配图决策（卡片→截图→原图→无图）。
+
+        本地图片以image_b64返回——群files接口支持二进制直传（file_data），
+        无需公网URL托管；超_MAX_DIRECT_BYTES的截图降级原图URL。
+        """
         if request.headers.get("X-Fetch-Token") != self._token:
             return web.json_response({"error": "unauthorized"}, status=401)
         try:
@@ -328,41 +314,32 @@ class DynFetchService:
         if not dynamic_id.isdigit():
             return web.json_response({"error": "bad id"}, status=400)
 
+        import base64
         async with self._prepare_lock:
             content = await self._render_opus(dynamic_id) or {}
             image_url = None
+            image_b64 = None
             image_source = "none"
-            if self.public_base:
-                # 优先本地渲染自定义卡片（PIL，轻量）；不可用改截图
-                card = self._render_card(content.get("author") or "",
-                                         content.get("title") or "",
-                                         content.get("text") or "")
-                hosted = None
-                if card:
-                    hosted = self._host_image(card, "image/png")
-                if hosted:
-                    image_url, image_source = hosted, "card"
-                else:
-                    shot = await self._screenshot_view()
-                    hosted = self._host_image(shot, "image/png") if shot else None
-                    if hosted:
-                        image_url, image_source = hosted, "screenshot"
-            if image_url is None and content.get("images"):
-                # 动态原图URL（公网，平台可直接转存——与开播封面同链路）
-                image_url, image_source = content["images"][0], "original"
+            # ① 本地渲染自定义卡片（PIL，轻量可控）
+            card = self._render_card(content.get("author") or "",
+                                     content.get("title") or "",
+                                     content.get("text") or "")
+            if card and len(card) <= _MAX_DIRECT_BYTES:
+                image_b64 = base64.b64encode(card).decode("ascii")
+                image_source = "card"
+            if image_b64 is None:
+                # ② opus页.bili-opus-view截图（超大长文截图可能超直传限）
+                shot = await self._screenshot_view()
+                if shot and len(shot) <= _MAX_DIRECT_BYTES:
+                    image_b64 = base64.b64encode(shot).decode("ascii")
+                    image_source = "screenshot"
+            if image_b64 is None and content.get("images"):
+                # ③ 动态原图URL（公网，平台可直接转存——与开播封面同链路）
+                image_url = content["images"][0]
+                image_source = "original"
         return web.json_response({
             "content": content, "image_url": image_url,
-            "image_source": image_source})
-
-    async def _handle_image(self, request: web.Request) -> web.Response:
-        """托管图片下载（公网基地址需反代/暴露本端口后平台方可访问）"""
-        import time as _time
-        name = request.match_info.get("name", "")
-        item = self._images.get(name)
-        if item is None or item[0] < _time.monotonic():
-            self._images.pop(name, None)
-            return web.Response(status=404, text="expired")
-        return web.Response(body=item[2], content_type=item[1])
+            "image_b64": image_b64, "image_source": image_source})
 
     async def _handle_fetch(self, request: web.Request) -> web.Response:
         if request.headers.get("X-Fetch-Token") != self._token:
