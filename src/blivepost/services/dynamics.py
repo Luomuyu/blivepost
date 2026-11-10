@@ -193,6 +193,87 @@ def _extract_content(modules: dict) -> Tuple[str, str]:
     return summary[:80], image
 
 
+class _BrowserFetcher:
+    """无头浏览器取数器：真实浏览器上下文过B站请求级风控。
+
+    2026-11-10真机实证：feed接口对python requests（含curl-cffi模拟TLS指纹）
+    一律412，而真实浏览器（页面导航到API URL）正常返回——风控判定的
+    是完整浏览器环境。每UP子进程持有一个持久Chromium（cookie注入），
+    每轮poll以页面导航方式请求API并读正文JSON。
+    启动/请求失败自动回退requests链（_poll_once），浏览器损坏自动重建。
+    """
+
+    def __init__(self, cookie_string: str):
+        self._cookie_string = cookie_string
+        # playwright对象运行时惰性创建；类型注解用Any（可选依赖，mypy不装其stub）
+        self._pw: Any = None
+        self._browser: Any = None
+        self._page: Any = None
+
+    def _ensure(self) -> bool:
+        if self._page is not None:
+            return True
+        try:
+            # chromium内核路径与登录模块一致（运行目录ms-playwright/）
+            if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
+                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(
+                    Path.cwd() / "ms-playwright")
+            from playwright.sync_api import sync_playwright
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            ctx = self._browser.new_context()
+            cookies = [{"name": n, "value": v,
+                        "domain": ".bilibili.com", "path": "/"}
+                       for pair in self._cookie_string.split(";") if "=" in pair
+                       for n, _, v in [pair.strip().partition("=")]]
+            if cookies:
+                ctx.add_cookies(cookies)
+            self._page = ctx.new_page()
+            return True
+        except Exception as e:
+            logger.warning(f"浏览器取数器启动失败，回退requests链: {e}")
+            self.close()
+            return False
+
+    def fetch_json(self, url: str) -> Optional[dict]:
+        """页面导航到API URL读正文JSON；失败关闭浏览器待下轮重建"""
+        if not self._ensure():
+            return None
+        try:
+            resp = self._page.goto(url, timeout=30000)
+            text = self._page.evaluate("document.body.innerText")
+            data = json.loads(text)
+            if data.get("code") != 0:
+                logger.warning(
+                    f"浏览器取数接口异常码 {data.get('code')} (HTTP {resp.status if resp else '?'})")
+                return None
+            return data
+        except Exception as e:
+            logger.warning(f"浏览器取数失败: {e}")
+            self.close()
+            return None
+
+    def close(self) -> None:
+        try:
+            if self._page is not None:
+                self._page.context.close()
+        except Exception:
+            pass
+        self._page = None
+        try:
+            if self._browser is not None:
+                self._browser.close()
+        except Exception:
+            pass
+        self._browser = None
+        try:
+            if self._pw is not None:
+                self._pw.stop()
+        except Exception:
+            pass
+        self._pw = None
+
+
 def _poll_once(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[List[dict]]:
     """
     查询UP主动态列表（置顶跳过，返回全部可见条目）
@@ -240,7 +321,11 @@ def _poll_once(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[List[
         data = _fetch(unsigned_url)
     if data is None:
         return None
+    return _parse_feed_data(data, up_uid)
 
+
+def _parse_feed_data(data: dict, up_uid: int) -> Optional[List[dict]]:
+    """解析feed接口响应（浏览器/requests两路共用）；解析异常返回None"""
     try:
         items = (data.get("data") or {}).get("items") or []
         infos: List[dict] = []
@@ -532,6 +617,9 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
                                   baseline_first=baseline_first)
     # WBI签名器在轮询循环内复用（小时级TTL惰性重建+失败重建），避免每轮nav取钥
     signer = _WbiSignerCache()
+    # 浏览器取数器（有cookie时）：真实浏览器上下文过请求级风控——requests/
+    # curl-cffi一律412而浏览器导航正常（2026-11-10真机实证）
+    browser_fetcher = _BrowserFetcher(cookie_string) if cookie_string else None
     up_live = False
     logger = get_logger("dynamic")
 
@@ -539,31 +627,45 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
     # 父进程存活自检：主进程被强杀（kill -9/taskkill）时stop_event不会置位，
     # 子进程会泄漏续跑（2026-11-10真机累积11个泄漏进程）——每轮检查父进程
     parent_proc = multiprocessing.parent_process()
-    while not stop_event.is_set():
-        if parent_proc is not None and not parent_proc.is_alive():
-            logger.warning("父进程已退出，动态轮询子进程自动退出（防泄漏）")
-            return
-        # 直播联动：读取主进程批量维护的共享状态文件（子进程不单独发请求），
-        # UP主在播时暂停动态轮询以降低请求量
-        state = _read_live_state(up_uid, path=state_path)
-        new_live = bool(state and state.get("live"))
-        if new_live != up_live:
-            logger.info(
-                f"UP主 {up_uid} {'开播，暂停动态轮询' if new_live else '下播，恢复动态轮询'}"
-            )
-        up_live = new_live
+    try:
+        while not stop_event.is_set():
+            if parent_proc is not None and not parent_proc.is_alive():
+                logger.warning("父进程已退出，动态轮询子进程自动退出（防泄漏）")
+                return
+            # 直播联动：读取主进程批量维护的共享状态文件（子进程不单独发请求），
+            # UP主在播时暂停动态轮询以降低请求量
+            state = _read_live_state(up_uid, path=state_path)
+            new_live = bool(state and state.get("live"))
+            if new_live != up_live:
+                logger.info(
+                    f"UP主 {up_uid} {'开播，暂停动态轮询' if new_live else '下播，恢复动态轮询'}"
+                )
+            up_live = new_live
 
-        if up_live:
-            stop_event.wait(LIVE_PAUSE_POLL)
-            continue
+            if up_live:
+                stop_event.wait(LIVE_PAUSE_POLL)
+                continue
 
-        session.handle(_poll_once(up_uid, cookie_string, signer))
-        # 轮询间隔：正常60-90秒；连续失败≥3轮进入退避（5-10分钟）——
-        # 风控期高频重试只会延长封锁（2026-11-10真机教训），成功后恢复
-        if session.fail_streak >= 3:
-            stop_event.wait(random.randint(BACKOFF_MIN, BACKOFF_MAX))
-        else:
-            stop_event.wait(random.randint(POLL_MIN, POLL_MAX))
+            # 取数三级链：浏览器导航 → requests签名 → requests无签名
+            infos = None
+            data = None
+            if browser_fetcher is not None:
+                data = browser_fetcher.fetch_json(
+                    f"{DYNAMIC_API_BASE}?host_mid={up_uid}&platform=web")
+                if data is not None:
+                    infos = _parse_feed_data(data, up_uid)
+            if data is None:
+                infos = _poll_once(up_uid, cookie_string, signer)
+            session.handle(infos)
+            # 轮询间隔：正常60-90秒；连续失败≥3轮进入退避（5-10分钟）——
+            # 风控期高频重试只会延长封锁（2026-11-10真机教训），成功后恢复
+            if session.fail_streak >= 3:
+                stop_event.wait(random.randint(BACKOFF_MIN, BACKOFF_MAX))
+            else:
+                stop_event.wait(random.randint(POLL_MIN, POLL_MAX))
+    finally:
+        if browser_fetcher is not None:
+            browser_fetcher.close()
 
 
 class DynamicManager:
