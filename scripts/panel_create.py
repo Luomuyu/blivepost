@@ -32,10 +32,16 @@ IDS_FILE = Path(__file__).resolve().parent / "panel_ids.json"
 
 # ---------------------------------------------------------------- 面板定义
 # 与指令实现保持同步：群指令见 blivepost/services/commands.py
-# （_CMD_RE/_NOARG_RE/_PUSHSET_RE），单聊指令见 admin_commands.py；
-# 平台上限：每面板最多 10 条（实测校准，勿按文档20条放行）。
+# （_CMD_RE/_NOARG_RE/_PUSHSET_RE），单聊指令见 admin_commands.py。
+# 平台限制（实测校准）：
+#   - 每面板最多 10 条（勿按文档20条放行）
+#   - 指令说明 desc 最多 30 个字符（超限接口报错，运行前有本地校验拦截）
 # 注意：/绑定 /解绑 指令已移除（直播间绑定改Web面板操作），不得再加入面板；
 # /绑定列表 指令保留但不上面板（与 /状态 职责重叠，为腾条目移出）。
+
+# 面板平台限制（实测校准）
+PANEL_MAX_ITEMS = 10
+PANEL_DESC_MAX_CHARS = 30
 
 GROUP_ITEMS = [
     {"type": "command", "name": "/帮助", "desc": "查看全部指令"},
@@ -66,6 +72,19 @@ PANELS = [
     {"scope": "group", "target_type": "all", "items": GROUP_ITEMS,
      "remark": "BLivePost群聊指令面板"},
 ]
+
+
+def validate_items(items: list, scope: str) -> None:
+    """本地校验面板定义符合平台限制，超限直接报错（运行前拦截）"""
+    if len(items) > PANEL_MAX_ITEMS:
+        raise ValueError(
+            f"{scope}面板条目超限：{len(items)}条 > 上限{PANEL_MAX_ITEMS}条")
+    for item in items:
+        desc = item.get("desc", "")
+        if len(desc) > PANEL_DESC_MAX_CHARS:
+            raise ValueError(
+                f"{scope}面板指令说明超限：{item.get('name')} 的desc "
+                f"{len(desc)}字符 > 上限{PANEL_DESC_MAX_CHARS}字符：{desc}")
 
 
 def load_credentials():
@@ -138,6 +157,10 @@ def main():
         sys.exit(1)
 
     token = get_access_token(app_id, secret)
+
+    # 平台限制本地校验（条目≤10、desc≤30字符），超限拒绝执行
+    for spec in PANELS:
+        validate_items(spec["items"], spec["scope"])
 
     saved = {}
     if IDS_FILE.exists():

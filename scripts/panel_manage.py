@@ -25,15 +25,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import requests  # noqa: E402
 
-from panel_create import load_credentials, get_access_token  # noqa: E402
+from panel_create import (  # noqa: E402
+    load_credentials, get_access_token, validate_items,
+)
 
 API_BASE = "https://api.sgroup.qq.com"
 IDS_FILE = Path(__file__).resolve().parent / "panel_ids.json"
 
 # ---------- 面板定义（修改此处的items后运行 modify 即可更新面板） ----------
 # 与 panel_create.py 的定义保持一致（同步修改两处）；指令全集以
-# blivepost/services/commands.py 与 admin_commands.py 为准；
-# 平台上限：每面板最多 10 条（实测校准，勿按文档20条放行）；
+# blivepost/services/commands.py 与 admin_commands.py 为准。
+# 平台限制（实测校准）：每面板最多 10 条；指令说明 desc 最多 30 字符
+# （运行前经 panel_create.validate_items 本地校验拦截）。
 # /绑定列表 指令保留但不上面板（与 /状态 职责重叠，为腾条目移出）。
 
 GROUP_ITEMS = [
@@ -114,6 +117,8 @@ def main():
         if scope not in ("c2c", "group"):
             print("用法: panel_manage.py modify c2c|group")
             sys.exit(1)
+        # 平台限制本地校验（条目≤10、desc≤30字符），超限拒绝提交
+        validate_items(PANEL_ITEMS[scope], scope)
         info = ids.get(scope) or {}
         pid = info.get("panel_id")
         if not pid:
