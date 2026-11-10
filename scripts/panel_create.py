@@ -35,21 +35,22 @@ IDS_FILE = Path(__file__).resolve().parent / "panel_ids.json"
 # （_CMD_RE/_NOARG_RE/_PUSHSET_RE），单聊指令见 admin_commands.py。
 # 平台限制（实测校准）：
 #   - 每面板最多 10 条（勿按文档20条放行）
-#   - 指令说明 desc 最多 30 个字符（超限接口报错，运行前有本地校验拦截）
+#   - 指令说明 desc 限 30 宽度单位：半角（字母/数字/半角标点）算1，
+#     中文与全角标点算2（含标点；超限接口报错，运行前有本地校验拦截）
 # 注意：/绑定 /解绑 指令已移除（直播间绑定改Web面板操作），不得再加入面板；
 # /绑定列表 指令保留但不上面板（与 /状态 职责重叠，为腾条目移出）。
 
 # 面板平台限制（实测校准）
 PANEL_MAX_ITEMS = 10
-PANEL_DESC_MAX_CHARS = 30
+PANEL_DESC_MAX_WIDTH = 30
 
 GROUP_ITEMS = [
     {"type": "command", "name": "/帮助", "desc": "查看全部指令"},
     {"type": "command", "name": "/监控 ", "desc": "开始监控推送，补房间号"},
     {"type": "command", "name": "/取消监控 ", "desc": "取消监控推送，补房间号"},
     {"type": "command", "name": "/状态", "desc": "查看本群监控状态与绑定"},
-    {"type": "command", "name": "/推送设置 ", "desc": "查看/修改本群推送开关，补房间号"},
-    {"type": "command", "name": "/绑定动态 ", "desc": "订阅UP主动态，补UP主UID"},
+    {"type": "command", "name": "/推送设置 ", "desc": "推送开关查看/修改，补房间号"},
+    {"type": "command", "name": "/绑定动态 ", "desc": "订阅UP主动态，补UID"},
     {"type": "command", "name": "/取消动态 ", "desc": "取消订阅UP主动态，补UID"},
     {"type": "command", "name": "/收入 ", "desc": "查询收入汇总，补房间号"},
     {"type": "command", "name": "/SC榜 ", "desc": "查询SC排行，补房间号"},
@@ -74,6 +75,13 @@ PANELS = [
 ]
 
 
+def desc_width(text: str) -> int:
+    """desc宽度：半角算1，中文/全角标点（East Asian Wide/Fullwidth）算2"""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+               for ch in text)
+
+
 def validate_items(items: list, scope: str) -> None:
     """本地校验面板定义符合平台限制，超限直接报错（运行前拦截）"""
     if len(items) > PANEL_MAX_ITEMS:
@@ -81,10 +89,11 @@ def validate_items(items: list, scope: str) -> None:
             f"{scope}面板条目超限：{len(items)}条 > 上限{PANEL_MAX_ITEMS}条")
     for item in items:
         desc = item.get("desc", "")
-        if len(desc) > PANEL_DESC_MAX_CHARS:
+        width = desc_width(desc)
+        if width > PANEL_DESC_MAX_WIDTH:
             raise ValueError(
                 f"{scope}面板指令说明超限：{item.get('name')} 的desc "
-                f"{len(desc)}字符 > 上限{PANEL_DESC_MAX_CHARS}字符：{desc}")
+                f"宽度{width} > 上限{PANEL_DESC_MAX_WIDTH}（中文/全角算2）：{desc}")
 
 
 def load_credentials():

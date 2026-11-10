@@ -35,8 +35,8 @@ IDS_FILE = Path(__file__).resolve().parent / "panel_ids.json"
 # ---------- 面板定义（修改此处的items后运行 modify 即可更新面板） ----------
 # 与 panel_create.py 的定义保持一致（同步修改两处）；指令全集以
 # blivepost/services/commands.py 与 admin_commands.py 为准。
-# 平台限制（实测校准）：每面板最多 10 条；指令说明 desc 最多 30 字符
-# （运行前经 panel_create.validate_items 本地校验拦截）。
+# 平台限制（实测校准）：每面板最多 10 条；指令说明 desc 限 30 宽度单位
+# （中文/全角标点算2，含标点；运行前经 panel_create.validate_items 本地校验拦截）。
 # /绑定列表 指令保留但不上面板（与 /状态 职责重叠，为腾条目移出）。
 
 GROUP_ITEMS = [
@@ -44,8 +44,8 @@ GROUP_ITEMS = [
     {"type": "command", "name": "/监控 ", "desc": "开始监控推送，补房间号"},
     {"type": "command", "name": "/取消监控 ", "desc": "取消监控推送，补房间号"},
     {"type": "command", "name": "/状态", "desc": "查看本群监控状态与绑定"},
-    {"type": "command", "name": "/推送设置 ", "desc": "查看/修改本群推送开关，补房间号"},
-    {"type": "command", "name": "/绑定动态 ", "desc": "订阅UP主动态，补UP主UID"},
+    {"type": "command", "name": "/推送设置 ", "desc": "推送开关查看/修改，补房间号"},
+    {"type": "command", "name": "/绑定动态 ", "desc": "订阅UP主动态，补UID"},
     {"type": "command", "name": "/取消动态 ", "desc": "取消订阅UP主动态，补UID"},
     {"type": "command", "name": "/收入 ", "desc": "查询收入汇总，补房间号"},
     {"type": "command", "name": "/SC榜 ", "desc": "查询SC排行，补房间号"},
