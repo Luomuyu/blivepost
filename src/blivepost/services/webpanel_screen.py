@@ -33,6 +33,7 @@ class ScreenMixin:
         _session: Callable[..., Any]
         _web_token_ok: Callable[..., Any]
         _current_user: Callable[..., Any]
+        _auth_token_to_admin: Callable[..., Any]
         # 数据收集与渲染能力（PagesMixin提供）
         _collect: Callable[..., Any]
         _streamer_name: Callable[..., Any]
@@ -50,6 +51,10 @@ class ScreenMixin:
 
     async def _handle_screen_page(self, request):
         """大屏整页（独立全屏布局，无导航与页头）"""
+        # ?token=快捷令牌→建会话后重定向（与其他页面管线对齐）
+        token_resp = await self._auth_token_to_admin(request)
+        if token_resp is not None:
+            return token_resp
         if self._session(request) is None and not self._web_token_ok(request):
             return self._screen_denied(request)
         ctx = await self._screen_context()

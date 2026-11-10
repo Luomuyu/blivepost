@@ -38,6 +38,7 @@ class AdminMixin:
         _web_token_ok: Callable[..., Any]
         _current_user: Callable[..., Any]
         _require_admin: Callable[..., Any]
+        _auth_token_to_admin: Callable[..., Any]
         # 渲染能力（PagesMixin提供）
         _render: Callable[..., Any]
         _html_response: Callable[..., Any]
@@ -52,6 +53,11 @@ class AdminMixin:
 
     async def _handle_admin_page(self, request):
         """管理后台：用户管理/推送开关/数据导出"""
+        # ?token=快捷令牌→先建管理员会话并重定向干净URL（否则仅凭token渲染
+        # 页面但无会话cookie，页头仍显示游客——与登录页/普通页管线对齐）
+        token_resp = await self._auth_token_to_admin(request)
+        if token_resp is not None:
+            return token_resp
         denied = self._require_admin_page(request)
         if denied is not None:
             raise denied

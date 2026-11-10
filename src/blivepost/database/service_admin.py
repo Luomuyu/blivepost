@@ -561,6 +561,7 @@ class AdminMixin:
             async with self.db_manager.get_session() as session:
                 res = await session.execute(
                     select(GroupRecord.group_openid).where(
+                        GroupRecord.del_flag == 0,  # 已移出的群不再回填信息
                         GroupRecord.group_desc.is_(None)
                         | GroupRecord.category.is_(None)
                         | GroupRecord.tags.is_(None)
@@ -737,10 +738,14 @@ class AdminMixin:
             logger.error(f"查询主播表行数失败: {e}")
             return 0
 
-    async def load_groups(self) -> list:
+    async def load_groups(self, active_only: bool = False) -> list:
+        """加载群记录；active_only=True时排除机器人已被移出的群（del_flag=1）"""
         try:
             async with self.db_manager.get_session() as session:
-                result = await session.execute(select(GroupRecord))
+                stmt = select(GroupRecord)
+                if active_only:
+                    stmt = stmt.where(GroupRecord.del_flag == 0)
+                result = await session.execute(stmt)
                 return list(result.scalars().all())
         except Exception as e:
             logger.error(f"加载群记录失败: {e}")

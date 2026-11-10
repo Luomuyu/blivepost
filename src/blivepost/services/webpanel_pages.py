@@ -221,14 +221,15 @@ class PagesMixin:
             "pool_total": len(data["accounts"]),
         }
         if key in ("live", "dynamics", "groups"):
+            # active_only：已移出的群不再出现在选项与列表（重新入群自动恢复）
             ctx["group_options"] = [(g.group_openid, g.group_name)
-                                    for g in await self.db_service.load_groups()]
+                                    for g in await self.db_service.load_groups(active_only=True)]
         if key == "groups":
-            ctx["groups"] = await self.db_service.load_groups()
+            ctx["groups"] = await self.db_service.load_groups(active_only=True)
         if key == "live":
             # 上半段：直播间注册表（推送群/监控状态），下半段：群绑定关系（含群详情）
             groups_by_openid = {}
-            for g in await self.db_service.load_groups():
+            for g in await self.db_service.load_groups(active_only=True):
                 groups_by_openid[g.group_openid] = g
             live_rooms = []
             for rec in await self.db_service.list_rooms():
@@ -283,7 +284,7 @@ class PagesMixin:
         if key == "dynamics":
             # 下半段：动态订阅的群绑定关系（群×UP，含群详情）
             groups_by_openid = {}
-            for g in await self.db_service.load_groups():
+            for g in await self.db_service.load_groups(active_only=True):
                 groups_by_openid[g.group_openid] = g
             dyn_bindings = []
             if self.binding_store is not None:

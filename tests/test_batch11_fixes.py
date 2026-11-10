@@ -351,3 +351,64 @@ async def test_get_group_role_parsing_and_cache():
     _Http.request = failing
     assert await bot.get_group_role("G2") is None      # 白名单外→None→放行兜底
     bot._task.cancel()
+
+
+# ---------- token建会话与已移出群过滤（第十一批反馈二） ----------
+
+async def test_admin_token_login_establishes_session():
+    """/admin?token= → 先建会话再重定向（原来仅渲染无sid，页头仍是游客）"""
+    from blivepost.services.webpanel import WebPanel
+    panel = WebPanel(None, None, None, None, None, token="SECRET",
+                     admin_password="p")
+    resp = await panel._handle_admin_page(FakeReq(query={"token": "SECRET"},
+                                                  path="/admin"))
+    # 应为302重定向（去token干净URL）并携带会话cookie，而非直接200渲染
+    assert resp.status == 302
+    assert "blivepost_sid" in resp.cookies
+    sid = resp.cookies["blivepost_sid"].value
+    sess = panel._session_from_sid(sid)
+    assert sess is not None and sess["admin"] is True
+
+
+class FakeReq:
+    def __init__(self, query=None, headers=None, cookies=None, form=None, path="/"):
+        self.query = query or {}
+        self.headers = headers or {}
+        self.cookies = cookies or {}
+        self._form = form or {}
+        self.path = path
+        self.remote = "127.0.0.1"
+
+
+async def test_screen_token_login_establishes_session(monkeypatch):
+    """/screen?token= → 建会话重定向（对齐页面管线）"""
+    from blivepost.services.webpanel import WebPanel
+    panel = WebPanel(None, None, None, None, None, token="SECRET")
+
+    async def fake_ctx():
+        return {}
+
+    monkeypatch.setattr(panel, "_screen_context", fake_ctx)
+    resp = await panel._handle_screen_page(FakeReq(query={"token": "SECRET"},
+                                                   path="/screen"))
+    assert resp.status == 302 and "blivepost_sid" in resp.cookies
+
+
+async def test_load_groups_active_only_filters_removed(tmp_path):
+    """已移出群(del_flag=1)不出现在active_only列表与信息回填目标"""
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    try:
+        await svc.save_group("G_KEEP", name="在群")
+        await svc.save_group("G_GONE", name="已移出", del_flag=1, receive=0)
+        active = await svc.load_groups(active_only=True)
+        assert [g.group_openid for g in active] == ["G_KEEP"]
+        assert len(await svc.load_groups()) == 2      # 不过滤时全量（联系人store用）
+        missing = await svc.list_groups_missing_info()
+        assert "G_GONE" not in missing                 # 移出群不再回填
+    finally:
+        await svc.aclose()
+        await db.close()

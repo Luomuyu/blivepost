@@ -127,7 +127,7 @@ async def test_token_quick_login_and_pages(monkeypatch, tmp_path):
         @staticmethod
         async def list_room_ids(): return []
         @staticmethod
-        async def load_groups():
+        async def load_groups(active_only=False):
             class G:
                 group_openid = "G1"
                 group_name = "测试群"
@@ -737,7 +737,7 @@ async def test_screen_context_batches_room_summaries():
         async def get_daily_history_range(self, start, end, room_ids=None):
             return []
 
-        async def load_groups(self):
+        async def load_groups(self, active_only=False):
             return []
 
     panel = WebPanel(None, None, None, None, None, bot_client=None)
