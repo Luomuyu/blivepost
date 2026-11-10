@@ -396,3 +396,92 @@ def test_enqueue_send_rejects_after_stop_window():
     assert bot._enqueue_send(coro) is False
     import inspect
     assert inspect.getcoroutinestate(coro) == inspect.CORO_CLOSED
+
+
+# ---------- 素材管理上传与动态Markdown链 ----------
+
+async def test_upload_material_image_three_steps(monkeypatch):
+    """素材三步上传：prepare→PUT→complete，返回qqbot-media://URL"""
+    bot = QQBotClient("id", "sec")
+    calls = []
+
+    class _Http:
+        async def request(self, route, json=None):
+            path = getattr(route, "path", str(route))
+            calls.append((path, json))
+            if "prepare" in path:
+                return {"upload_id": "UP1", "presigned_url": "http://cos/presigned"}
+            if "complete" in path:
+                return {"url": "qqbot-media://image/v1/IMG123", "ttl": 7776000}
+            return {}
+
+    class _PutResp:
+        status = 200
+        headers = {"ETag": '"abc123"'}
+
+    class _Sess:
+        def __init__(self): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        def put(self, url, data=None, headers=None):
+            calls.append(("PUT", headers.get("Content-Type")))
+            class _P:
+                async def __aenter__(self): return _PutResp()
+                async def __aexit__(self, *a): pass
+            return _P()
+
+    class _Client:
+        api = type("A", (), {"_http": _Http()})()
+
+    bot._client = _Client()
+    import asyncio as _aio
+    bot._task = _aio.get_running_loop().create_task(_aio.sleep(30))
+    monkeypatch.setattr("blivepost.services.qqbot.aiohttp.ClientSession", _Sess)
+
+    url = await bot.upload_material_image(b"\x89PNG", "d.png")
+    assert url == "qqbot-media://image/v1/IMG123"
+    paths = [c[0] for c in calls]
+    assert any("prepare" in p for p in paths)
+    assert ("PUT", "image/png") in calls                     # Content-Type一致
+    assert any("complete" in p for p in paths)
+    complete_body = [c[1] for c in calls if c[1] and "upload_id" in c[1]][0]
+    assert complete_body["md5"] == "abc123"                  # ETag去引号
+    bot._task.cancel()
+
+
+async def test_push_media_data_markdown_first(monkeypatch):
+    """动态推送链：Markdown(qqbot-media嵌图)优先→富媒体→文本；素材用后即删"""
+    bot = QQBotClient("id", "sec")
+    order = []
+
+    async def fake_upload(data, file_name, content_type="image/png"):
+        order.append("upload")
+        return "qqbot-media://image/v1/TMPIMG"
+
+    async def fake_delete(image_id):
+        order.append(f"delete:{image_id}")
+
+    async def md(group, content, keyboard=None):
+        order.append(("md", group, "qqbot-media://" in content))
+        return True
+
+    bot.upload_material_image = fake_upload
+    bot.delete_material_image = fake_delete
+    bot.send_group_markdown = md
+    bot._loop = asyncio.get_running_loop()
+    bot._task = asyncio.create_task(asyncio.sleep(30))
+    bot._send_queue = asyncio.Queue(maxsize=10)
+    worker = asyncio.create_task(bot._send_worker())
+    bot._send_workers = [worker]
+    try:
+        ok = bot.push_media_data(b"PNG", "动态内容", ["G1", "G2"])
+        assert ok is True
+        await asyncio.wait_for(bot._send_queue.join(), timeout=5)
+    finally:
+        worker.cancel()
+    assert order[0] == "upload"                              # 先上传一次
+    md_groups = [o for o in order if isinstance(o, tuple) and o[0] == "md"]
+    assert len(md_groups) == 2                               # 两群均Markdown
+    assert all(o[2] for o in md_groups)                      # 嵌qqbot-media链接
+    assert order[-1] == "delete:TMPIMG"                      # 用后即删
+    bot._task.cancel()

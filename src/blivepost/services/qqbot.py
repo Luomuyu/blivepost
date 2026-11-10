@@ -991,6 +991,58 @@ class QQBotClient:
             logger.error(f"发送群图片失败: group={group_openid}, error={e}")
             return False
 
+    async def upload_material_image(self, data: bytes,
+                                    file_name: str = "dynamic.png",
+                                    content_type: str = "image/png",
+                                    ) -> Optional[str]:
+        """素材管理三步上传本地图片，返回qqbot-media://引用URL。
+
+        官方素材管理流程（/v2/media-images）：
+        ① prepare（file_name/file_size/content_type/md5/sha1）→ upload_id + presigned_url
+        ② PUT二进制到预签名URL（Content-Type必须与声明一致，COS的ETag=MD5）
+        ③ complete（upload_id+md5）→ url即markdown可嵌的qqbot-media://链接
+        单机器人上限100张（90天滑动过期），动态推送图建议用后即删省配额。
+        """
+        if not self.started or self._client is None:
+            logger.warning("botpy客户端未运行，素材上传失败")
+            return None
+        md5 = hashlib.md5(data).hexdigest()
+        sha1 = hashlib.sha1(data).hexdigest()
+        try:
+            # ① prepare
+            res = await self._client.api._http.request(
+                Route("POST", "/v2/media-images/prepare"),
+                json={"file_name": file_name, "file_size": len(data),
+                      "content_type": content_type, "md5": md5, "sha1": sha1})
+            upload_id = (res or {}).get("upload_id")
+            presigned = (res or {}).get("presigned_url")
+            if not upload_id or not presigned:
+                logger.warning(f"素材prepare未返回上传凭证: {res}")
+                return None
+            # ② PUT二进制直传COS（预签名URL，不带botpy鉴权头）
+            async with aiohttp.ClientSession() as session:
+                async with session.put(
+                        presigned, data=data,
+                        headers={"Content-Type": content_type}) as resp:
+                    if resp.status not in (200, 201):
+                        body = await resp.text()
+                        logger.warning(f"素材PUT失败: HTTP {resp.status} {body[:100]}")
+                        return None
+                    etag = resp.headers.get("ETag", "").strip('"') or md5
+            # ③ complete
+            res2 = await self._client.api._http.request(
+                Route("POST", "/v2/media-images/complete"),
+                json={"upload_id": upload_id, "md5": etag})
+            url = (res2 or {}).get("url")
+            if not url:
+                logger.warning(f"素材complete未返回url: {res2}")
+                return None
+            logger.info(f"素材上传成功: {url[:50]}…")
+            return url
+        except Exception as e:
+            logger.warning(f"素材上传异常: {e}")
+            return None
+
     async def send_group_media_data(self, group_openid: str, data: bytes,
                                     file_name: str = "dynamic.png",
                                     content: str = "") -> bool:
@@ -1028,27 +1080,60 @@ class QQBotClient:
             logger.warning(f"发送群本地图片失败: group={group_openid}, error={e}")
             return False
 
+    async def delete_material_image(self, image_id: str) -> bool:
+        """删除素材（释放100张配额；已发送消息不受影响）"""
+        if not self.started or self._client is None:
+            return False
+        try:
+            await self._client.api._http.request(
+                Route("DELETE", "/v2/media-images/{image_id}/delete",
+                      image_id=image_id))
+            return True
+        except Exception as e:
+            logger.debug(f"删除素材失败(不阻断推送): {e}")
+            return False
+
     def push_media_data(self, data: bytes, content: str,
                         groups: Iterable[str],
                         file_name: str = "dynamic.png") -> bool:
-        """多群推送本地图片（二进制直传；单群失败降级Markdown→文本）"""
+        """多群推送本地图片：Markdown(素材qqbot-media嵌图) > 富媒体(二进制直传) > 文本。
+
+        Markdown优先（用户决策2026-11-10）：本地图经素材管理三步上传获得
+        qqbot-media://引用，以![动态](url)嵌入Markdown消息——图文一体、
+        渲染最佳；Markdown失败降级群files二进制富媒体；再降纯文本。
+        素材用后即删（上限100张，90天滑动过期不必留存）。
+        """
         if self._loop is None or not self.started:
             logger.error("QQ官方机器人未启动，本地图片推送失败")
             return False
 
         async def _run() -> bool:
+            groups_list = list(groups)
+            media_url = await self.upload_material_image(data, file_name)
+            image_id = None
+            if media_url:
+                # qqbot-media://image/v1/<id> → 提取id用于用后即删
+                image_id = media_url.rstrip("/").rsplit("/", 1)[-1]
             all_ok = True
-            for group in groups:
-                ok = await self.send_group_media_data(
-                    group, data, file_name=file_name, content=content)
-                if not ok:
-                    # 降级：Markdown → 文本（图已不可达，纯文字保必达）
-                    ok = await self.send_group_markdown(group, content)
+            try:
+                for group in groups_list:
+                    ok = False
+                    if media_url:
+                        md = f"{content}\n\n![动态]({media_url})"
+                        ok = await self.send_group_markdown(group, md)
                     if not ok:
+                        # 降级：群files二进制富媒体（图+文本）
+                        ok = await self.send_group_media_data(
+                            group, data, file_name=file_name, content=content)
+                    if not ok:
+                        # 再降：纯文本（消息必达）
                         ok = await self.send_group_message(group, content)
-                if not ok:
-                    all_ok = False
-                await asyncio.sleep(0.5)
+                    if not ok:
+                        all_ok = False
+                    await asyncio.sleep(0.5)
+            finally:
+                if image_id:
+                    await self.delete_material_image(image_id)
             return all_ok
 
         coro = _run()
