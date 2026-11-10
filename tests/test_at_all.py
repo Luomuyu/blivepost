@@ -104,8 +104,9 @@ class _QuotaDb:
     def __init__(self):
         self.calls = []
 
-    async def acquire_at_all_groups(self, groups):
-        self.calls.append(list(groups))
+    async def acquire_at_all_groups(self, groups, mark=True):
+        if mark:
+            self.calls.append(list(groups))
         return list(groups) if groups else []
 
 

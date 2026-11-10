@@ -9,6 +9,7 @@
 from blivepost.config.settings import Settings
 from blivepost.database.manager import DatabaseManager
 from blivepost.database.service import DatabaseService
+from blivepost.services.push import PushService
 from blivepost.services.qqbot import QQBotClient
 
 
@@ -178,3 +179,175 @@ async def test_recent_live_status_json_serializable(tmp_path):
     finally:
         await svc.aclose()
         await db.close()
+
+
+# ---------- 角色门控与配额退还（用户规则：群主/管理员才艾特；失败不计数） ----------
+
+class _Store:
+    def get_dynamic_groups(self, up_uid):
+        return []
+
+    def get_dynamic_up_name(self, up_uid):
+        return ""
+
+
+class _Ps(PushService):
+    """最小PushService桩（bot_client/contact_store可注入）"""
+
+    def __init__(self):
+        super().__init__(Settings())
+        self.bot_client = None
+
+
+class _RoleDb:
+    """peek/mark两段式配额桩：记录mark调用"""
+
+    def __init__(self, used_dates=None):
+        self.used = dict(used_dates or {})
+        self.mark_calls = []
+
+    async def acquire_at_all_groups(self, groups, mark=True):
+        from datetime import datetime as _dt
+        today = _dt.now().strftime("%Y-%m-%d")
+        eligible = [g for g in groups if self.used.get(g) != today]
+        if mark:
+            for g in eligible:
+                self.used[g] = today
+            self.mark_calls.append(list(eligible))
+        return eligible
+
+    async def clear_group_at_all(self, group_openid):
+        self.used.pop(group_openid, None)
+        return True
+
+
+class _RoleBot:
+    """带get_group_role的bot桩（角色可配）；无发送（本组用例只测门控）"""
+
+    def __init__(self, roles):
+        self.roles = roles
+
+    async def get_group_role(self, group_openid):
+        return self.roles.get(group_openid)
+
+
+async def test_role_gate_member_skipped_owner_marked():
+    """member角色跳过且不占配额；owner/admin放行并登记"""
+    from blivepost.core.consumer import PushQueueConsumer
+
+    ps = _Ps()
+    ps.bot_client = _RoleBot({"G_OWNER": "owner", "G_ADMIN": "admin",
+                              "G_MEMBER": "member"})
+    db = _RoleDb()
+    consumer = PushQueueConsumer(None, ps, db, binding_store=_Store())
+    result = await consumer._acquire_at_all_for_groups(
+        ["G_OWNER", "G_ADMIN", "G_MEMBER"])
+    assert sorted(result) == ["G_ADMIN", "G_OWNER"]      # member被角色门控跳过
+    assert db.mark_calls == [["G_OWNER", "G_ADMIN"]]     # 仅放行群登记配额
+    assert "G_MEMBER" not in db.used                     # 未占当日配额
+
+
+async def test_role_unknown_falls_back_to_attempt():
+    """角色查询不可用（None=白名单外/网络失败）→ 放行，靠降级兜底"""
+    from blivepost.core.consumer import PushQueueConsumer
+
+    ps = _Ps()
+    ps.bot_client = _RoleBot({"G1": None})
+    db = _RoleDb()
+    consumer = PushQueueConsumer(None, ps, db, binding_store=_Store())
+    assert await consumer._acquire_at_all_for_groups(["G1"]) == ["G1"]
+
+
+async def test_custom_bot_without_role_api_all_allowed():
+    """自定义bot无get_group_role：全部放行（duck-type兼容）"""
+    from blivepost.core.consumer import PushQueueConsumer
+
+    ps = _Ps()
+    ps.bot_client = object()  # 无get_group_role属性
+    db = _RoleDb()
+    consumer = PushQueueConsumer(None, ps, db, binding_store=_Store())
+    assert await consumer._acquire_at_all_for_groups(["G1", "G2"]) == ["G1", "G2"]
+
+
+async def test_at_all_failure_refunds_quota():
+    """发送失败退还配额：降级路径调用at_all_refund，当日可再次艾特"""
+    bot = _DenyTagBot()
+    refunded = []
+
+    async def _refund(group):
+        refunded.append(group)
+
+    bot.at_all_refund = _refund
+    ok = await bot._broadcast_message(["G9"], "开播", at_all_groups=["G9"])
+    assert ok is True
+    assert refunded == ["G9"]                      # 失败即退还
+    assert "G9" in bot._at_all_unsupported
+
+
+async def test_at_all_success_keeps_quota():
+    """发送成功不退还（配额正常占用）"""
+    bot = QQBotClient("id", "sec")
+    refunded = []
+
+    async def md(group, content, keyboard=None):
+        return True
+
+    bot.send_group_markdown = md
+    bot.at_all_refund = lambda g: refunded.append(g)
+    await bot._broadcast_message(["GK"], "开播", at_all_groups=["GK"])
+    assert refunded == []
+
+
+async def test_acquire_peek_does_not_mark(tmp_path):
+    """mark=False纯查询不写库（配额未消耗）；随后mark=True登记"""
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    try:
+        peek1 = await svc.acquire_at_all_groups(["GA"], mark=False)
+        peek2 = await svc.acquire_at_all_groups(["GA"], mark=False)
+        assert peek1 == ["GA"] == peek2            # 两次peek均可用（未写入）
+        marked = await svc.acquire_at_all_groups(["GA"])   # mark=True
+        assert marked == ["GA"]
+        after = await svc.acquire_at_all_groups(["GA"], mark=False)
+        assert after == []                          # 已占用
+        await svc.clear_group_at_all("GA")          # 退还后恢复
+        assert await svc.acquire_at_all_groups(["GA"], mark=False) == ["GA"]
+    finally:
+        await svc.aclose()
+        await db.close()
+
+
+async def test_get_group_role_parsing_and_cache():
+    """bot_state响应解析（平铺/包裹两形态）+ TTL缓存 + 失败返回None"""
+    bot = QQBotClient("id", "sec")
+    calls = []
+
+    class _Http:
+        async def request(self, route):
+            calls.append(route)
+            return {"member_openid": "X", "member_role": "admin"}
+
+    class _Api:
+        _http = _Http()
+
+    class _Client:
+        api = _Api()
+
+    bot._client = _Client()
+    import asyncio as _aio
+    bot._task = _aio.get_running_loop().create_task(_aio.sleep(30))
+    assert await bot.get_group_role("G1") == "admin"
+    assert await bot.get_group_role("G1") == "admin"   # 第二次命中缓存
+    assert len(calls) == 1
+    assert "/v2/groups/" in calls[0].path
+    bot._group_role_cache.clear()
+
+    async def failing(route):
+        raise RuntimeError("11253 应用无接口访问权限")
+
+    _Http.request = failing
+    assert await bot.get_group_role("G2") is None      # 白名单外→None→放行兜底
+    bot._task.cancel()

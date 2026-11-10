@@ -337,17 +337,53 @@ class PushQueueConsumer:
         return await self._acquire_at_all_for_groups(groups)
 
     async def _acquire_at_all_for_groups(self, groups) -> Optional[list]:
-        """给定群列表的艾特全体配额（当天未用的群登记并返回；失败不艾特）"""
+        """给定群列表的艾特全体配额与角色门控。
+
+        流程：peek当日未用群（不写库）→ 按机器人群内角色过滤（群主/管理员
+        才放行；普通成员跳过且不占配额；角色未知=接口不可用时放行，靠发送
+        失败降级兜底）→ 仅对放行群登记配额（mark）。
+        发送失败由bot层经at_all_refund退还当日配额。
+        """
         if self.db_service is None or not groups:
             return None
         try:
-            eligible = await self.db_service.acquire_at_all_groups(list(groups))
-            if eligible:
-                logger.info(f"开播提醒艾特全体（当日配额）：{len(eligible)}个群")
-            return eligible or None
+            candidates = await self.db_service.acquire_at_all_groups(
+                list(groups), mark=False)
+            if not candidates:
+                return None
+            permitted = await self._at_all_role_permitted(candidates)
+            if not permitted:
+                return None
+            marked = await self.db_service.acquire_at_all_groups(permitted)
+            if marked:
+                logger.info(f"开播提醒艾特全体（当日配额）：{len(marked)}个群")
+            return marked or None
         except Exception as e:
             logger.warning(f"艾特全体配额判定失败，本次不艾特: {e}")
             return None
+
+    async def _at_all_role_permitted(self, groups: list) -> list:
+        """角色门控：机器人须为群主(owner)或管理员(admin)才艾特全体。
+
+        get_group_role不可用（自定义bot无该接口/白名单外/网络失败）返回
+        None时放行尝试——降级链兜底；member角色的群直接跳过（不发起、不占配额）。
+        """
+        bot = getattr(self.push_service, "bot_client", None)
+        get_role = getattr(bot, "get_group_role", None)
+        if get_role is None:
+            return list(groups)
+        permitted = []
+        for g in groups:
+            try:
+                role = await get_role(g)
+            except Exception as e:
+                logger.debug(f"查询群角色异常(群{g[:6]}…): {e}")
+                role = None
+            if role in (None, "owner", "admin"):
+                permitted.append(g)
+            else:
+                logger.info(f"群{g[:6]}… 机器人为普通成员({role})，跳过艾特全体")
+        return permitted
 
     async def _notify_admins(self, content: str, sensitive: bool = False) -> None:
         """

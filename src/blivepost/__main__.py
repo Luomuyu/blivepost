@@ -284,6 +284,8 @@ async def main_async(
             logger.info("正在启动QQ官方机器人...")
             qqbot = QQBotClient(settings.qqbot.app_id, settings.qqbot.app_secret,
                                 debug=settings.message.debug)
+            # 艾特全体发送失败时退还当日配额（bot层降级路径回调）
+            qqbot.at_all_refund = db_service.clear_group_at_all
             admin_handler = AdminCommandHandler(
                 cookie_pool, settings.admin.openids, bot_client=qqbot,
                 db_service=db_service, monitor_manager=monitor_manager,

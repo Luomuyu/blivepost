@@ -970,11 +970,14 @@ class AdminMixin:
             logger.error(f"查询推送开关失败: {e}")
             return default
 
-    async def acquire_at_all_groups(self, groups: List[str]) -> List[str]:
+    async def acquire_at_all_groups(self, groups: List[str],
+                                    mark: bool = True) -> List[str]:
         """艾特全体配额：返回本次可艾特的群（每群每自然日1次）。
 
-        当天未使用的群在调用时即登记为已用（调度即占用，发送失败不退还；
-        平台配额按实际送达计，此策略保守但简单，避免重试重复艾特）。
+        mark=True：当天未使用的群登记为已用（调度即占用）；
+        mark=False（peek）：仅查询不写入——调用方先按机器人群内角色过滤，
+        只对真正要尝试艾特的群再mark，角色不足的群不消耗当日配额。
+        发送失败由 bot 层经 at_all_refund 钩子调用 clear_group_at_all 退还。
         """
         groups = [g for g in dict.fromkeys(groups) if g]
         if not groups:
@@ -986,13 +989,14 @@ class AdminMixin:
                     GroupAtAllRecord.group_openid.in_(groups)))
                 used = {r.group_openid: r.used_date for r in res.scalars().all()}
                 eligible = [g for g in groups if used.get(g) != today]
-                for g in eligible:
-                    record = await session.get(GroupAtAllRecord, g)
-                    if record is None:
-                        session.add(GroupAtAllRecord(group_openid=g, used_date=today))
-                    else:
-                        record.used_date = today
-                await session.commit()
+                if mark:
+                    for g in eligible:
+                        record = await session.get(GroupAtAllRecord, g)
+                        if record is None:
+                            session.add(GroupAtAllRecord(group_openid=g, used_date=today))
+                        else:
+                            record.used_date = today
+                    await session.commit()
                 return eligible
         except Exception as e:
             logger.error(f"艾特全体配额判定失败: {e}")

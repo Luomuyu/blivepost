@@ -7,7 +7,7 @@ import asyncio
 import hashlib
 import os
 import time
-from typing import Any, Iterable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Iterable, Optional, TYPE_CHECKING
 
 import aiohttp
 from botpy.http import Route
@@ -188,6 +188,10 @@ class QQBotClient:
         self._send_workers: list = []
         # 已确认不支持艾特全体的群（发送被拒后降级成功前记录；进程生命周期内不再尝试）
         self._at_all_unsupported: set = set()
+        # 群角色缓存：{group_openid: (过期monotonic, role)}——bot_state仅白名单可用且30QPM
+        self._group_role_cache: dict = {}
+        # 艾特全体发送失败时的配额退还钩子（__main__注入db_service.clear_group_at_all）
+        self.at_all_refund: Optional[Callable[[str], Any]] = None
         # 主动消息权限拒绝提示的去重：{group_openid: 上次提示的monotonic时刻}
         self._deny_warned: dict = {}
 
@@ -195,6 +199,49 @@ class QQBotClient:
     def started(self) -> bool:
         """客户端是否正在运行"""
         return self._task is not None and not self._task.done()
+
+    # 群角色缓存时长（秒）：角色变更少、接口30QPM限频
+    GROUP_ROLE_TTL = 600.0
+
+    async def get_group_role(self, group_openid: str) -> Optional[str]:
+        """机器人在群内的成员角色（owner=群主/admin=管理员/member=普通成员）。
+
+        GET /v2/groups/{group_openid}/bot_state——注意该接口**仅白名单机器人**
+        可用（错误码11253），查询失败/无权限/未启动时返回None；调用方应把
+        None视作"未知"，放行艾特尝试并依赖发送失败降级兜底。
+        结果缓存GROUP_ROLE_TTL秒。
+        """
+        now = time.monotonic()
+        cached = self._group_role_cache.get(group_openid)
+        if cached and cached[0] > now:
+            return cached[1]
+        if not self.started or self._client is None:
+            return None
+        role: Optional[str] = None
+        try:
+            route = Route("GET", "/v2/groups/{group_openid}/bot_state",
+                          group_openid=group_openid)
+            data = await self._client.api._http.request(route)
+            if isinstance(data, dict):
+                # 文档示例为平铺字段；兼容可能的data包裹
+                role = (data.get("member_role")
+                        or (data.get("data") or {}).get("member_role"))
+        except Exception as e:
+            logger.debug(f"查询群角色失败(群{group_openid[:6]}…): {e}")
+            role = None
+        self._group_role_cache[group_openid] = (now + self.GROUP_ROLE_TTL, role)
+        return role
+
+    async def _refund_at_all(self, group_openid: str) -> None:
+        """艾特全体发送失败后退还当日配额（钩子由__main__注入；失败仅记日志）"""
+        refund = self.at_all_refund
+        if refund is None:
+            return
+        try:
+            await refund(group_openid)
+            logger.info(f"群{group_openid[:6]}… 艾特全体发送失败，已退还当日配额")
+        except Exception as e:
+            logger.warning(f"退还艾特全体配额失败(群{group_openid[:6]}…): {e}")
 
     async def get_me(self, force_refresh: bool = False) -> Optional[dict]:
         """
@@ -572,11 +619,13 @@ class QQBotClient:
                 group_content = f"<qqbot-at-everyone /> {content}"
             sent = await _send_pair(group, group_content)
             if not sent and use_at_all:
-                # 艾特全体被拒（无群管理员权限等）→ 去标签降级重发，保证消息必达
+                # 艾特全体被拒（无群管理员权限等）→ 去标签降级重发，保证消息必达；
+                # 艾特未送达，退还该群当日配额（发送失败不计入）
                 logger.warning(
                     f"群{group} 艾特全体发送失败（机器人可能无群管理员权限），"
                     f"降级为普通消息重发")
                 self._at_all_unsupported.add(group)
+                await self._refund_at_all(group)
                 sent = await _send_pair(group, content)
             if not sent:
                 success = False

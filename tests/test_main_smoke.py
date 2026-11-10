@@ -64,6 +64,9 @@ class _DbServiceStub:
     async def migrate_legacy_events(self):
         return 0
 
+    async def clear_group_at_all(self, group_openid):
+        return True
+
     async def seed_push_switches(self, defaults):
         return None
 
