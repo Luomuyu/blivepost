@@ -7,15 +7,28 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.4/dist/htmx.min.js"></script>
 <style>
-  :root{color-scheme:dark;--bg:#020617;--surface:#0f172a;--border:#1e293b;
-        --text:#e2e8f0;--muted:#64748b;--ok:#34d399;--blue:#60a5fa;--amber:#f59e0b}
+  :root{color-scheme:dark;--bg:#020617;--surface:#0f172a;--surface2:rgba(15,23,42,.6);
+        --border:#1e293b;--text:#e2e8f0;--muted:#64748b;
+        --ok:#34d399;--blue:#60a5fa;--amber:#f59e0b}
+  /* 跟随系统日间模式：浅色主题变量覆盖（深色变量保持为默认） */
+  @media (prefers-color-scheme: light){
+    :root{color-scheme:light;--bg:#f1f5f9;--surface:#ffffff;--surface2:#f8fafc;
+          --border:#e2e8f0;--text:#0f172a;--muted:#64748b;
+          --ok:#059669;--blue:#2563eb;--amber:#d97706}
+  }
   body{background:var(--bg);color:var(--text)}
   ::-webkit-scrollbar{width:8px;height:8px}
-  ::-webkit-scrollbar-thumb{background:#334155;border-radius:4px}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:1rem}
   .kpi-num{font-variant-numeric:tabular-nums;letter-spacing:.02em}
   .glow-blue{text-shadow:0 0 18px rgba(96,165,250,.45)}
   .glow-amber{text-shadow:0 0 18px rgba(245,158,11,.45)}
+  .t-strong{color:var(--text)}
+  .t-soft{color:var(--muted)}
+  .tbl-head{background:var(--surface2)}
+  .tbl-row{border-top:1px solid var(--border)}
+  .back-link{color:var(--muted)}
+  .back-link:hover{color:var(--text)}
 </style>
 </head>
 <body class="min-h-screen font-sans antialiased">
@@ -24,10 +37,10 @@
   <header class="flex flex-wrap items-center justify-between gap-3 mb-4">
     <div class="flex items-center gap-3">
       <span class="w-3 h-3 rounded-full bg-pink-500 shadow-[0_0_12px_rgba(236,72,153,.9)]"></span>
-      <h1 class="text-2xl font-bold tracking-wide">BLivePost <span class="text-slate-500 font-normal text-lg">数据大屏</span></h1>
-      <span id="screen-clock" class="text-slate-400 kpi-num text-lg"></span>
+      <h1 class="text-2xl font-bold tracking-wide">BLivePost <span class="t-soft font-normal text-lg">数据大屏</span></h1>
+      <span id="screen-clock" class="t-soft kpi-num text-lg"></span>
     </div>
-    <a href="/" class="text-xs text-slate-500 hover:text-slate-300">← 返回面板</a>
+    <a href="/" class="text-xs back-link">← 返回面板</a>
   </header>
 
   <div id="screen-data" hx-get="/panel/screen" hx-trigger="every 30s" hx-swap="innerHTML">
@@ -52,7 +65,7 @@ setInterval(tickClock, 1000);
 window.renderScreenTrend = function(rows){
   var box = document.getElementById('screen-trend');
   if(!box) return;
-  if(!rows || !rows.length){ box.innerHTML = '<p class="py-16 text-center text-slate-500">暂无趋势数据</p>'; return; }
+  if(!rows || !rows.length){ box.innerHTML = '<p class="py-16 text-center t-soft">暂无趋势数据</p>'; return; }
   var W = box.clientWidth || 900, H = 260, padL = 46, padB = 26, padT = 12;
   var iw = W - padL - 10, ih = H - padB - padT, n = rows.length;
   var maxD = 1, maxG = 1;
@@ -61,8 +74,8 @@ window.renderScreenTrend = function(rows){
   var g = '';
   for(var f = 0; f <= 4; f++){
     var y = padT + ih - ih * f / 4;
-    g += '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - 10) + '" y2="' + y + '" stroke="#1e293b"/>' +
-         '<text x="' + (padL - 6) + '" y="' + (y + 4) + '" font-size="10" fill="#64748b" text-anchor="end">' +
+    g += '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - 10) + '" y2="' + y + '" stroke="var(--border)"/>' +
+         '<text x="' + (padL - 6) + '" y="' + (y + 4) + '" font-size="10" fill="var(--muted)" text-anchor="end">' +
          Math.round(maxD * f / 4) + '</text>';
   }
   var pts = [];
@@ -70,17 +83,17 @@ window.renderScreenTrend = function(rows){
     var x = padL + iw * (n === 1 ? 0.5 : i / (n - 1));
     var h = ih * ((+r.danmaku || 0) / maxD);
     g += '<rect x="' + (x - bw / 2) + '" y="' + (padT + ih - h) + '" width="' + bw + '" height="' + h +
-         '" rx="3" fill="#60a5fa" opacity="0.75"><title>' + r.day + ' 弹幕' + r.danmaku + '</title></rect>';
+         '" rx="3" fill="var(--blue)" opacity="0.75"><title>' + r.day + ' 弹幕' + r.danmaku + '</title></rect>';
     var gy = padT + ih - ih * ((+r.gift_gold || 0) / maxG);
     pts.push(x.toFixed(1) + ',' + gy.toFixed(1));
-    g += '<text x="' + x + '" y="' + (H - 8) + '" font-size="10" fill="#64748b" text-anchor="middle">' +
+    g += '<text x="' + x + '" y="' + (H - 8) + '" font-size="10" fill="var(--muted)" text-anchor="middle">' +
          r.day.slice(5) + '</text>';
   });
-  g += '<polyline fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-linejoin="round" points="' + pts.join(' ') + '"/>';
+  g += '<polyline fill="none" stroke="var(--amber)" stroke-width="2.5" stroke-linejoin="round" points="' + pts.join(' ') + '"/>';
   rows.forEach((r, i) => {
     var x = padL + iw * (n === 1 ? 0.5 : i / (n - 1));
     var gy = padT + ih - ih * ((+r.gift_gold || 0) / maxG);
-    g += '<circle cx="' + x + '" cy="' + gy + '" r="3.5" fill="#f59e0b"><title>' + r.day + ' 礼物' + r.gift_gold + '元</title></circle>';
+    g += '<circle cx="' + x + '" cy="' + gy + '" r="3.5" fill="var(--amber)"><title>' + r.day + ' 礼物' + r.gift_gold + '元</title></circle>';
   });
   box.innerHTML = '<svg width="' + W + '" height="' + H + '">' + g + '</svg>';
 };
