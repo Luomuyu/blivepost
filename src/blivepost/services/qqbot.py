@@ -1037,7 +1037,6 @@ class QQBotClient:
             return False
 
         async def _run() -> bool:
-            from .push import live_markdown_content
             all_ok = True
             for group in groups:
                 ok = await self.send_group_media_data(
