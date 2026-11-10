@@ -45,6 +45,9 @@ _NOARG_RE = re.compile(r"[/／]\s*(帮助|指令|菜单|状态|绑定列表|汇�
 # （房间号须为本群已绑定房间；开关名支持中文别名；权限同控制指令）
 _PUSHSET_RE = re.compile(
     r"[/／]\s*推送设置(?:\s+(\d{2,})(?:\s+(\S+)(?:\s+(开启?|关闭?))?)?)?\s*$")
+# 艾特全体模式指令：/艾特全体 每日|仅 房间号,房间号|关闭|查看
+_ATALL_RE = re.compile(
+    r"[/／]\s*艾特全体(?:\s+(每日|关闭?|查看|仅\s*[\d,，\s]+))?\s*$")
 
 # 推送开关元数据：内部名 -> (显示名, 概览徽标简写, 可输入别名)；
 # 键与GROUP_PUSH_SWITCHES一致（动态监控为全局项，不随房间）
@@ -74,11 +77,19 @@ def _parse_date(text: str):
 
 HELP_TEXT = (
     "支持的指令：\n"
+    "【查询（所有人可用）】\n"
+    "/状态 - 本群监控的直播间与动态订阅\n"
+    "/绑定列表 - 本群全部绑定关系\n"
+    "/收入 房间号 [日期|周|月] - 查询收入汇总\n"
+    "/SC榜 房间号 [日期] - SC金额排行\n"
+    "/汇总 [周|月] - 全部房间合计\n"
+    "【控制（需管理员）】\n"
     "/监控 房间号 - 监控该直播间并推送到本群\n"
     "/取消监控 房间号 - 取消向本群的推送\n"
-    "/推送设置 [房间号] - 查看本群各房间推送开关\n"
-    "/推送设置 房间号 开关名 开|关 - 修改本群独立开关（天选/大航海/系统事件/房间信息/日报/周报/月报）\n"
-    "/推送设置 房间号 恢复 - 清除独立设置，恢复跟随全局\n"
+    "/绑定动态 房间号或UID - 订阅UP主动态\n"
+    "/取消动态 房间号或UID - 取消订阅\n"
+    "/推送设置 [房间号] - 查看本群推送开关\n"
+    "/艾特全体 查看|每日|仅 房间|关闭 - 本群@全体模式\n"
     "提示：直播间的添加/删除请在Web面板操作"
 )
 
@@ -157,11 +168,27 @@ class CommandHandler:
                 logger.error(f"执行命令 推送设置 {parts} 失败: {e}")
                 return GENERIC_CMD_FAILURE
 
+        # 艾特全体模式指令（本群at_all配置，权限同控制指令）
+        aam = _ATALL_RE.search(content)
+        if aam is not None:
+            arg = aam.group(1) or "查看"
+            logger.info(f"收到群命令: 艾特全体 {arg} (group={group_openid})")
+            denied = self._control_denied(extract_sender(message.author))
+            if denied is not None:
+                return denied
+            try:
+                return await self._at_all_mode(group_openid, arg)
+            except Exception as e:
+                logger.error(f"执行命令 艾特全体 {arg} 失败: {e}")
+                return GENERIC_CMD_FAILURE
+
         # 带房间号指令
         match = _CMD_RE.search(content)
 
         if match is None:
-            return None
+            return self._suggest_command(content)
+
+        cmd, room_str = match.group(1), match.group(2)
 
         cmd, room_str = match.group(1), match.group(2)
         room_id = int(room_str)
@@ -269,6 +296,41 @@ class CommandHandler:
             if self.db_service is not None else {}
         return {s: bool(switches.get(s, {}).get("enabled", False))
                 for s in GROUP_PUSH_SWITCHES}
+
+    async def _at_all_mode(self, group_openid: str, arg: str) -> str:
+        """查看/设置本群的艾特全体模式（daily/rooms/off）"""
+        if self.db_service is None:
+            return "此功能需要数据库支持"
+
+        arg = arg.strip()
+        if arg in ("查看", ""):
+            cfg = await self.db_service.get_group_at_all_mode(group_openid)
+            mode = cfg["mode"]
+            desc = {"daily": "每日首次开播提醒艾特全体",
+                    "rooms": f"仅指定房间开播时艾特（{cfg['room_ids'] or '未设置'}）",
+                    "off": "已关闭艾特全体"}[mode]
+            return (f"本群艾特全体：{desc}\n"
+                    f"修改：/艾特全体 每日 | /艾特全体 仅 房间号[,房间号] | /艾特全体 关闭")
+
+        if arg == "每日":
+            await self.db_service.set_group_at_all_mode(group_openid, "daily")
+            return "已设置：每日首次开播提醒时艾特全体"
+
+        if arg.startswith("关"):
+            await self.db_service.set_group_at_all_mode(group_openid, "off")
+            return "已关闭本群艾特全体（开播提醒不再@全体成员）"
+
+        if arg.startswith("仅"):
+            room_part = arg[1:].strip().replace("，", ",").replace(" ", "")
+            room_ids = ",".join(
+                r for r in room_part.split(",") if r.strip().isdigit())
+            if not room_ids:
+                return "用法：/艾特全体 仅 房间号[,房间号]（多个房间用逗号分隔）"
+            await self.db_service.set_group_at_all_mode(
+                group_openid, "rooms", room_ids)
+            return f"已设置：仅房间 {room_ids} 开播时艾特全体"
+
+        return "用法：/艾特全体 查看 | 每日 | 仅 房间号[,房间号] | 关闭"
 
     async def _push_setting(self, group_openid: str, room_id: Optional[int],
                             arg: Optional[str] = None,
@@ -420,6 +482,25 @@ class CommandHandler:
                 name_text = f"（{name}）" if name else ""
                 lines.append(f"· UP主{uid}{name_text}")
         return "\n".join(lines)
+
+    _KNOWN_CMDS = ("监控", "取消监控", "绑定动态", "取消动态", "推送设置",
+                   "艾特全体", "收入", "sc榜", "状态", "绑定列表", "汇总", "帮助")
+
+    @classmethod
+    def _suggest_command(cls, content: str) -> Optional[str]:
+        """未匹配指令的模糊提示：/监空 → "你是不是想用 /监控"（仅对/开头）"""
+        import difflib
+        stripped = content.strip()
+        if not stripped.startswith(("/", "／")):
+            return None
+        # 提取指令词（去掉/和后续参数）
+        word = re.sub(r"^[/／]\s*", "", stripped).split()[0] if stripped.split() else ""
+        if not word or len(word) < 2:
+            return None
+        matches = difflib.get_close_matches(word, cls._KNOWN_CMDS, n=1, cutoff=0.5)
+        if matches:
+            return f"你是不是想用 /{matches[0]}？发送 /帮助 查看全部指令"
+        return None
 
     @staticmethod
     def help_text() -> str:

@@ -348,7 +348,8 @@ class PushQueueConsumer:
         if bot is None:
             logger.warning("机器人未启动，开播提醒推送失败")
             return
-        at_all_groups = await self._acquire_at_all_for_groups(groups)
+        at_all_groups = await self._acquire_at_all_for_groups(
+            groups, room_id=int(room_id or 0))
         # 自定义bot可能不支持at_all_groups参数（鸭子类型兼容），不支持则原样发送
         if at_all_groups and _supports_kwarg(bot.broadcast, "at_all_groups"):
             bot.broadcast(groups, content, at_all_groups=at_all_groups)
@@ -361,21 +362,23 @@ class PushQueueConsumer:
         if self.db_service is None or room_id is None:
             return None
         groups = self.push_service.resolve_push_groups(room_id)
-        return await self._acquire_at_all_for_groups(groups)
+        return await self._acquire_at_all_for_groups(groups, room_id=room_id)
 
-    async def _acquire_at_all_for_groups(self, groups) -> Optional[list]:
+    async def _acquire_at_all_for_groups(self, groups,
+                                         room_id: int = 0) -> Optional[list]:
         """给定群列表的艾特全体配额与角色门控。
 
-        流程：peek当日未用群（不写库）→ 按机器人群内角色过滤（群主/管理员
-        才放行；普通成员跳过且不占配额；角色未知=接口不可用时放行，靠发送
-        失败降级兜底）→ 仅对放行群登记配额（mark）。
+        流程：peek当日未用群（不写库，含at_all模式过滤：off跳过/rooms按
+        房间过滤）→ 按机器人群内角色过滤（群主/管理员才放行；普通成员跳过
+        且不占配额；角色未知=接口不可用时放行，靠发送失败降级兜底）→ 仅对
+        放行群登记配额（mark）。
         发送失败由bot层经at_all_refund退还当日配额。
         """
         if self.db_service is None or not groups:
             return None
         try:
             candidates = await self.db_service.acquire_at_all_groups(
-                list(groups), mark=False)
+                list(groups), room_id=int(room_id or 0), mark=False)
             if not candidates:
                 return None
             permitted = await self._at_all_role_permitted(candidates)

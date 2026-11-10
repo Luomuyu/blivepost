@@ -975,13 +975,18 @@ class AdminMixin:
             logger.error(f"查询推送开关失败: {e}")
             return default
 
-    async def acquire_at_all_groups(self, groups: List[str],
+    async def acquire_at_all_groups(self, groups: List[str], room_id: int = 0,
                                     mark: bool = True) -> List[str]:
-        """艾特全体配额：返回本次可艾特的群（每群每自然日1次）。
+        """艾特全体配额（含模式过滤）：返回本次可艾特的群。
+
+        模式过滤（每群的at_all配置行）：
+          daily → 正常参与每日配额
+          rooms → room_id在room_ids列表中才参与
+          off   → 跳过
+        无配置行视为daily（默认）。
 
         mark=True：当天未使用的群登记为已用（调度即占用）；
-        mark=False（peek）：仅查询不写入——调用方先按机器人群内角色过滤，
-        只对真正要尝试艾特的群再mark，角色不足的群不消耗当日配额。
+        mark=False（peek）：仅查询不写入。角色门控后mark=True只对放行群。
         发送失败由 bot 层经 at_all_refund 钩子调用 clear_group_at_all 退还。
         """
         groups = [g for g in dict.fromkeys(groups) if g]
@@ -992,13 +997,30 @@ class AdminMixin:
             async with self.db_manager.get_session() as session:
                 res = await session.execute(select(GroupAtAllRecord).where(
                     GroupAtAllRecord.group_openid.in_(groups)))
-                used = {r.group_openid: r.used_date for r in res.scalars().all()}
-                eligible = [g for g in groups if used.get(g) != today]
+                records = {r.group_openid: r for r in res.scalars().all()}
+
+                eligible = []
+                for g in groups:
+                    rec = records.get(g)
+                    # 无行=daily默认；off跳过
+                    mode = rec.mode if rec is not None else "daily"
+                    if mode == "off":
+                        continue
+                    if mode == "rooms" and rec is not None:
+                        allowed = set(
+                            s.strip() for s in (rec.room_ids or "").split(",") if s.strip())
+                        if room_id and str(room_id) not in allowed:
+                            continue
+                    if (rec.used_date if rec is not None else "") == today:
+                        continue  # 当日已用
+                    eligible.append(g)
+
                 if mark:
                     for g in eligible:
-                        record = await session.get(GroupAtAllRecord, g)
+                        record = records.get(g)
                         if record is None:
-                            session.add(GroupAtAllRecord(group_openid=g, used_date=today))
+                            session.add(GroupAtAllRecord(
+                                group_openid=g, used_date=today, mode="daily"))
                         else:
                             record.used_date = today
                     await session.commit()
@@ -1008,7 +1030,7 @@ class AdminMixin:
             return []
 
     async def clear_group_at_all(self, group_openid: str) -> bool:
-        """删除群的艾特全体配额记录（退群清理；重进群后重新计数）"""
+        """删除群的艾特全体配额与配置记录（退群清理；重进群恢复默认daily）"""
         try:
             async with self.db_manager.get_session() as session:
                 result = await session.execute(
@@ -1023,6 +1045,40 @@ class AdminMixin:
         except Exception as e:
             logger.error(f"清理艾特全体配额记录失败({group_openid}): {e}")
             return False
+
+    async def set_group_at_all_mode(self, group_openid: str, mode: str,
+                                    room_ids: str = "") -> bool:
+        """设置群的at_all模式（daily/rooms/off）；rooms时room_ids逗号分隔"""
+        if mode not in ("daily", "rooms", "off"):
+            return False
+        try:
+            async with self.db_manager.get_session() as session:
+                record = await session.get(GroupAtAllRecord, group_openid)
+                if record is None:
+                    record = GroupAtAllRecord(
+                        group_openid=group_openid, mode=mode,
+                        room_ids=room_ids if mode == "rooms" else "",
+                        used_date="")
+                    session.add(record)
+                else:
+                    record.mode = mode
+                    record.room_ids = room_ids if mode == "rooms" else ""
+                await session.commit()
+                return True
+        except Exception as e:
+            logger.error(f"设置at_all模式失败({group_openid}): {e}")
+            return False
+
+    async def get_group_at_all_mode(self, group_openid: str) -> dict:
+        """获取群的at_all配置 {mode, room_ids}；无行返回daily默认"""
+        try:
+            async with self.db_manager.get_session() as session:
+                record = await session.get(GroupAtAllRecord, group_openid)
+                if record is None:
+                    return {"mode": "daily", "room_ids": ""}
+                return {"mode": record.mode, "room_ids": record.room_ids or ""}
+        except Exception:
+            return {"mode": "daily", "room_ids": ""}
 
     async def set_push_switch(self, name: str, enabled: Optional[bool] = None,
                               allow_modify: Optional[bool] = None) -> bool:

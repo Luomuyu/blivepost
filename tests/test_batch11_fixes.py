@@ -206,7 +206,7 @@ class _RoleDb:
         self.used = dict(used_dates or {})
         self.mark_calls = []
 
-    async def acquire_at_all_groups(self, groups, mark=True):
+    async def acquire_at_all_groups(self, groups, room_id=0, mark=True):
         from datetime import datetime as _dt
         today = _dt.now().strftime("%Y-%m-%d")
         eligible = [g for g in groups if self.used.get(g) != today]

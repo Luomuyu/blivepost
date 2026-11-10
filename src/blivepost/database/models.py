@@ -423,10 +423,23 @@ class PushSwitchRecord(Base):
 
 
 class GroupAtAllRecord(Base):
-    """群艾特全体使用记录（每群每自然日仅1次：开播提醒首次艾特全体配额）"""
+    """群艾特全体配置与使用记录。
+
+    mode: at_all模式（第十三批用户决策）——
+      daily=每日首次开播提醒艾特（默认）
+      rooms=仅指定房间开播时艾特（room_ids列）
+      off=本群关闭艾特全体
+    used_date: 每群每自然日仅1次配额的判定依据。
+    """
     __tablename__ = "group_at_all"
 
     group_openid: Mapped[str] = mapped_column(String(64), primary_key=True, comment="群openid")
+    mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="daily",
+        comment="at_all模式: daily/rooms/off")
+    room_ids: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="",
+        comment="rooms模式下艾特的房间ID列表(逗号分隔)")
     used_date: Mapped[str] = mapped_column(String(10), nullable=False, comment="最近使用日期YYYY-MM-DD")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=local_now, onupdate=local_now, comment="更新时间")

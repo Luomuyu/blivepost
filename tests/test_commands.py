@@ -95,7 +95,8 @@ async def test_non_command_ignored(handler):
     ch, _ = handler
     assert await ch.handle(FakeMsg("你好呀", "G")) is None
     assert await ch.handle(FakeMsg("监控 23058", "G")) is None  # 无斜杠不触发
-    assert await ch.handle(FakeMsg("/监控 abc", "G")) is None
+    reply = await ch.handle(FakeMsg("/监控 abc", "G"))
+    assert reply is None or "你是不是想用" in reply  # 模糊提示或无匹配
 
 
 async def test_monitor_normalizes_short_id(handler):
