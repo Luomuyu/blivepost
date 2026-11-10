@@ -193,85 +193,37 @@ def _extract_content(modules: dict) -> Tuple[str, str]:
     return summary[:80], image
 
 
-class _BrowserFetcher:
-    """无头浏览器取数器：真实浏览器上下文过B站请求级风控。
+class _RemoteFetchProxy:
+    """主进程全局单浏览器取数服务的子进程侧代理。
 
-    2026-11-10真机实证：feed接口对python requests（含curl-cffi模拟TLS指纹）
-    一律412，而真实浏览器（页面导航到API URL）正常返回——风控判定的
-    是完整浏览器环境。每UP子进程持有一个持久Chromium（cookie注入），
-    每轮poll以页面导航方式请求API并读正文JSON。
-    启动/请求失败自动回退requests链（_poll_once），浏览器损坏自动重建。
+    背景（2026-11-10真机实证）：feed接口对python requests（含curl-cffi模拟
+    TLS指纹）一律请求级风控412，仅真实浏览器导航正常——动态取数依赖无头
+    浏览器。为控制内存（每实例~300MB），**全局仅主进程持有一个浏览器**
+    （DynFetchService），不论订阅多少UP；本代理经本机HTTP调用该服务。
+    服务不可用/失败时由调用方回退requests链（_poll_once），不影响尽力取数。
     """
 
-    def __init__(self, cookie_string: str):
-        self._cookie_string = cookie_string
-        # playwright对象运行时惰性创建；类型注解用Any（可选依赖，mypy不装其stub）
-        self._pw: Any = None
-        self._browser: Any = None
-        self._page: Any = None
-
-    def _ensure(self) -> bool:
-        if self._page is not None:
-            return True
-        try:
-            # chromium内核路径与登录模块一致（运行目录ms-playwright/）
-            if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(
-                    Path.cwd() / "ms-playwright")
-            from playwright.sync_api import sync_playwright
-            self._pw = sync_playwright().start()
-            self._browser = self._pw.chromium.launch(headless=True)
-            ctx = self._browser.new_context()
-            cookies = [{"name": n, "value": v,
-                        "domain": ".bilibili.com", "path": "/"}
-                       for pair in self._cookie_string.split(";") if "=" in pair
-                       for n, _, v in [pair.strip().partition("=")]]
-            if cookies:
-                ctx.add_cookies(cookies)
-            self._page = ctx.new_page()
-            return True
-        except Exception as e:
-            logger.warning(f"浏览器取数器启动失败，回退requests链: {e}")
-            self.close()
-            return False
+    def __init__(self, port: int, token: str):
+        self._port = int(port)
+        self._token = token
 
     def fetch_json(self, url: str) -> Optional[dict]:
-        """页面导航到API URL读正文JSON；失败关闭浏览器待下轮重建"""
-        if not self._ensure():
-            return None
+        """经主进程浏览器取数；任何失败返回None（调用方走requests兜底）"""
         try:
-            resp = self._page.goto(url, timeout=30000)
-            text = self._page.evaluate("document.body.innerText")
-            data = json.loads(text)
-            if data.get("code") != 0:
-                logger.warning(
-                    f"浏览器取数接口异常码 {data.get('code')} (HTTP {resp.status if resp else '?'})")
+            resp = requests.post(
+                f"http://127.0.0.1:{self._port}/dyn-fetch",
+                json={"url": url},
+                headers={"X-Fetch-Token": self._token},
+                timeout=40,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"浏览器取数服务响应异常: HTTP {resp.status_code}")
                 return None
-            return data
+            data = (resp.json() or {}).get("data")
+            return data if isinstance(data, dict) else None
         except Exception as e:
-            logger.warning(f"浏览器取数失败: {e}")
-            self.close()
+            logger.warning(f"浏览器取数服务不可达: {e}")
             return None
-
-    def close(self) -> None:
-        try:
-            if self._page is not None:
-                self._page.context.close()
-        except Exception:
-            pass
-        self._page = None
-        try:
-            if self._browser is not None:
-                self._browser.close()
-        except Exception:
-            pass
-        self._browser = None
-        try:
-            if self._pw is not None:
-                self._pw.stop()
-        except Exception:
-            pass
-        self._pw = None
 
 
 def _poll_once(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[List[dict]]:
@@ -599,10 +551,12 @@ class _DynamicPollSession:
 def _dynamic_process_main(up_uid: int, push_queue, stop_event,
                           cookie_string: str = "", state_path=None,
                           dynamics_dir=None, log_dir=None,
-                          baseline_first: bool = False) -> None:
+                          baseline_first: bool = False,
+                          fetch_port: int = 0, fetch_token: str = "") -> None:
     """动态轮询子进程入口（spawn）；baseline_first见_DynamicPollSession
 
-    cookie_string传完整cookie（buvid3等风控必需；仅SESSDATA会412）
+    cookie_string传完整cookie（buvid3等风控必需；仅SESSDATA会412），
+    供requests兜底链使用；浏览器取数走主进程全局服务（fetch_port/token）。
     """
     from ..utils.logger import Logger
 
@@ -617,55 +571,55 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
                                   baseline_first=baseline_first)
     # WBI签名器在轮询循环内复用（小时级TTL惰性重建+失败重建），避免每轮nav取钥
     signer = _WbiSignerCache()
-    # 浏览器取数器（有cookie时）：真实浏览器上下文过请求级风控——requests/
-    # curl-cffi一律412而浏览器导航正常（2026-11-10真机实证）
-    browser_fetcher = _BrowserFetcher(cookie_string) if cookie_string else None
+    # 全局单浏览器取数代理（主进程DynFetchService）：真实浏览器环境过
+    # 请求级风控——requests/curl-cffi一律412而浏览器导航正常（真机实证）
+    fetch_proxy = _RemoteFetchProxy(fetch_port, fetch_token) if fetch_port else None
     up_live = False
+    served_logged = False
     logger = get_logger("dynamic")
 
     logger.info(f"UP主 {up_uid} 动态轮询进程已启动 (pid={os.getpid()})")
     # 父进程存活自检：主进程被强杀（kill -9/taskkill）时stop_event不会置位，
     # 子进程会泄漏续跑（2026-11-10真机累积11个泄漏进程）——每轮检查父进程
     parent_proc = multiprocessing.parent_process()
-    try:
-        while not stop_event.is_set():
-            if parent_proc is not None and not parent_proc.is_alive():
-                logger.warning("父进程已退出，动态轮询子进程自动退出（防泄漏）")
-                return
-            # 直播联动：读取主进程批量维护的共享状态文件（子进程不单独发请求），
-            # UP主在播时暂停动态轮询以降低请求量
-            state = _read_live_state(up_uid, path=state_path)
-            new_live = bool(state and state.get("live"))
-            if new_live != up_live:
-                logger.info(
-                    f"UP主 {up_uid} {'开播，暂停动态轮询' if new_live else '下播，恢复动态轮询'}"
-                )
-            up_live = new_live
+    while not stop_event.is_set():
+        if parent_proc is not None and not parent_proc.is_alive():
+            logger.warning("父进程已退出，动态轮询子进程自动退出（防泄漏）")
+            return
+        # 直播联动：读取主进程批量维护的共享状态文件（子进程不单独发请求），
+        # UP主在播时暂停动态轮询以降低请求量
+        state = _read_live_state(up_uid, path=state_path)
+        new_live = bool(state and state.get("live"))
+        if new_live != up_live:
+            logger.info(
+                f"UP主 {up_uid} {'开播，暂停动态轮询' if new_live else '下播，恢复动态轮询'}"
+            )
+        up_live = new_live
 
-            if up_live:
-                stop_event.wait(LIVE_PAUSE_POLL)
-                continue
+        if up_live:
+            stop_event.wait(LIVE_PAUSE_POLL)
+            continue
 
-            # 取数三级链：浏览器导航 → requests签名 → requests无签名
-            infos = None
-            data = None
-            if browser_fetcher is not None:
-                data = browser_fetcher.fetch_json(
-                    f"{DYNAMIC_API_BASE}?host_mid={up_uid}&platform=web")
-                if data is not None:
-                    infos = _parse_feed_data(data, up_uid)
-            if data is None:
-                infos = _poll_once(up_uid, cookie_string, signer)
-            session.handle(infos)
-            # 轮询间隔：正常60-90秒；连续失败≥3轮进入退避（5-10分钟）——
-            # 风控期高频重试只会延长封锁（2026-11-10真机教训），成功后恢复
-            if session.fail_streak >= 3:
-                stop_event.wait(random.randint(BACKOFF_MIN, BACKOFF_MAX))
-            else:
-                stop_event.wait(random.randint(POLL_MIN, POLL_MAX))
-    finally:
-        if browser_fetcher is not None:
-            browser_fetcher.close()
+        # 取数三级链：主进程浏览器 → requests签名 → requests无签名
+        infos = None
+        data = None
+        if fetch_proxy is not None:
+            data = fetch_proxy.fetch_json(
+                f"{DYNAMIC_API_BASE}?host_mid={up_uid}&platform=web")
+            if data is not None:
+                infos = _parse_feed_data(data, up_uid)
+                if not served_logged:
+                    served_logged = True
+                    logger.info(f"UP主 {up_uid} 浏览器取数服务链路正常")
+        if data is None:
+            infos = _poll_once(up_uid, cookie_string, signer)
+        session.handle(infos)
+        # 轮询间隔：正常60-90秒；连续失败≥3轮进入退避（5-10分钟）——
+        # 风控期高频重试只会延长封锁（2026-11-10真机教训），成功后恢复
+        if session.fail_streak >= 3:
+            stop_event.wait(random.randint(BACKOFF_MIN, BACKOFF_MAX))
+        else:
+            stop_event.wait(random.randint(POLL_MIN, POLL_MAX))
 
 
 class DynamicManager:
@@ -678,7 +632,7 @@ class DynamicManager:
 
     def __init__(self, settings: Settings, push_queue, cookie_pool=None,
                  enabled: bool = False, state_path=None, dynamics_dir=None,
-                 log_dir=None):
+                 log_dir=None, fetch_service=None):
         """
         初始化动态管理器
 
@@ -689,6 +643,8 @@ class DynamicManager:
             enabled: 动态监控总开关（Setting.dynamic_monitor，默认关闭）
             state_path: 直播状态共享文件路径（实例私有，默认数据目录）
             log_dir: 子进程日志目录（None时子进程用默认logs/，独立文件名）
+            fetch_service: 全局单浏览器取数服务（DynFetchService，可选）——
+                提供时子进程优先经其取数（过请求级风控），否则仅requests链
         """
         self.settings = settings
         self.push_queue = push_queue
@@ -697,6 +653,7 @@ class DynamicManager:
         self.state_path = state_path
         self.dynamics_dir = dynamics_dir
         self.log_dir = log_dir
+        self.fetch_service = fetch_service
 
         self._ctx = multiprocessing.get_context("spawn")
         self._ups: Dict[int, Any] = {}
@@ -735,12 +692,18 @@ class DynamicManager:
                 if account is not None:
                     # 完整cookie（含buvid3等风控必需项；仅SESSDATA实测412）
                     cookie_string = account.cookie_string or ""
+                    # 全局浏览器服务的cookie同步（各UP共用单浏览器实例）
+                    if self.fetch_service is not None:
+                        self.fetch_service.set_cookies(cookie_string)
 
+            fetch_port = self.fetch_service.port if self.fetch_service else 0
+            fetch_token = self.fetch_service.token if self.fetch_service else ""
             stop_event = self._ctx.Event()
             proc = self._ctx.Process(
                 target=_dynamic_process_main,
                 args=(uid, self.push_queue, stop_event, cookie_string, self.state_path,
-                      self.dynamics_dir, self.log_dir, baseline_first),
+                      self.dynamics_dir, self.log_dir, baseline_first,
+                      fetch_port, fetch_token),
                 name=f"dynamic-{uid}",
             )
             proc.start()

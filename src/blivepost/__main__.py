@@ -185,6 +185,7 @@ async def main_async(
     db_manager = None
     db_service = None
     dynamic_manager = None
+    dyn_fetch_service = None
     daily_report = None
     live_watcher = None
     consumer = None
@@ -270,6 +271,14 @@ async def main_async(
         logger.info("检查playwright chromium内核...")
         await ensure_playwright_chromium()
 
+        # 动态取数服务（全局单浏览器，主进程内127.0.0.1端点）：动态监控
+        # 启用时提供浏览器环境取数（B站feed对python请求一律风控412，真机实证）
+        dyn_fetch_service = None
+        if settings.message.dynamic_monitor:
+            from .services.dyn_fetch import DynFetchService
+            dyn_fetch_service = DynFetchService()
+            await dyn_fetch_service.start()
+
         # 动态轮询管理器（与监控共用跨进程队列；直播状态文件放数据库目录，实例私有）
         state_path = Path(settings.database.sqlite_path).parent / "dynamic_live_state.json"
         dynamics_dir = Path(settings.database.sqlite_path).parent / "dynamics"
@@ -277,6 +286,7 @@ async def main_async(
             settings, monitor_manager.push_queue, cookie_pool=cookie_pool,
             enabled=settings.message.dynamic_monitor, state_path=state_path,
             dynamics_dir=dynamics_dir, log_dir=log_dir,
+            fetch_service=dyn_fetch_service,
         )
 
         # 启动QQ官方机器人
@@ -468,6 +478,13 @@ async def main_async(
         try:
             if dynamic_manager is not None:
                 await dynamic_manager.stop_all()
+        except Exception:
+            pass
+
+        # 关闭全局取数服务（释放唯一浏览器实例）
+        try:
+            if dyn_fetch_service is not None:
+                await dyn_fetch_service.stop()
         except Exception:
             pass
 

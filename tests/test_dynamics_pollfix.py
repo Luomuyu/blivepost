@@ -416,11 +416,26 @@ async def test_ensure_passes_baseline_first_to_process_args(monkeypatch):
     await m.ensure(111, baseline_first=True)
     assert recorded["target"] is dyn._dynamic_process_main
     assert recorded["args"][0] == 111
-    assert recorded["args"][-1] is True
+    assert recorded["args"][-3] is True          # baseline_first（其后是fetch_port/token）
+    assert recorded["args"][-2:] == (0, "")     # 无取数服务：port=0/token空
 
     await m.ensure(222)  # 默认False：运行中恢复（重启/开关恢复/崩溃重建）语义
     assert recorded["args"][0] == 222
-    assert recorded["args"][-1] is False
+    assert recorded["args"][-3] is False
+
+    # 配置取数服务后透传端口/token
+    class FakeSvc:
+        port = 18080
+        token = "TK"
+
+        def set_cookies(self, cookie_string):
+            pass
+
+    m2 = dyn.DynamicManager(Settings(), push_queue=None, enabled=True,
+                            fetch_service=FakeSvc())
+    m2._ctx = FakeCtx()
+    await m2.ensure(333, baseline_first=True)
+    assert recorded["args"][-2:] == (18080, "TK")
 
     await asyncio.sleep(0)  # 让桩watcher任务运行完毕，避免task销毁告警
 
@@ -712,3 +727,88 @@ async def test_bind_dynamic_normalizes_room_id_to_uid():
     assert store.bound == [36296621]                        # 绑定的是UID
     assert mgr.ensured[0][0] == 36296621
     assert "已自动换算为UP主UID" in reply
+
+
+# ---------- 全局单浏览器取数服务 ----------
+
+async def test_dyn_fetch_service_auth_and_url_guard(monkeypatch):
+    """取数服务：token校验401；URL白名单403；正常请求回传浏览器结果"""
+    from aiohttp.test_utils import TestClient, TestServer
+    from blivepost.services.dyn_fetch import DynFetchService
+
+    svc = DynFetchService()
+
+    class FakeHolder:
+        async def fetch_json(self, url):
+            return {"code": 0, "data": {"items": [{"id_str": "1"}]}}
+
+        async def close(self):
+            pass
+
+        def set_cookies(self, s):
+            pass
+
+    svc._holder = FakeHolder()
+    client = TestClient(TestServer(svc._build_app()))
+    await client.start_server()
+    try:
+        # 无token → 401
+        r = await client.post("/dyn-fetch", json={"url": "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"})
+        assert r.status == 401
+        # 非白名单URL → 403
+        r = await client.post("/dyn-fetch", json={"url": "http://evil.com/x"},
+                              headers={"X-Fetch-Token": svc.token})
+        assert r.status == 403
+        # 正常 → 浏览器结果data
+        r = await client.post(
+            "/dyn-fetch",
+            json={"url": "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=1"},
+            headers={"X-Fetch-Token": svc.token})
+        assert r.status == 200
+        body = await r.json()
+        assert body["data"]["data"]["items"][0]["id_str"] == "1"
+        # 浏览器失败 → 502
+        async def fail(url):
+            return None
+        svc._holder.fetch_json = fail
+        r = await client.post(
+            "/dyn-fetch",
+            json={"url": "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space?host_mid=1"},
+            headers={"X-Fetch-Token": svc.token})
+        assert r.status == 502
+    finally:
+        await client.close()
+
+
+async def test_remote_fetch_proxy(monkeypatch):
+    """子进程侧代理：正常回传data；异常/非200回None（触发requests兜底）"""
+    import blivepost.services.dynamics as dyn
+
+    proxy = dyn._RemoteFetchProxy(18080, "TK")
+    calls = []
+
+    class FakeResp:
+        def __init__(self, status, payload):
+            self.status_code = status
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append((url, json, headers.get("X-Fetch-Token")))
+        return FakeResp(200, {"data": {"code": 0, "x": 1}})
+
+    monkeypatch.setattr(dyn.requests, "post", fake_post)
+    assert proxy.fetch_json("https://api.bilibili.com/x/polymer/web-dynamic/v1/a") == {"code": 0, "x": 1}
+    assert calls[0][0] == "http://127.0.0.1:18080/dyn-fetch"
+    assert calls[0][2] == "TK"
+
+    def fail_post(*a, **kw):
+        raise dyn.requests.RequestException("服务不可达")
+
+    monkeypatch.setattr(dyn.requests, "post", fail_post)
+    assert proxy.fetch_json("u") is None
+    monkeypatch.setattr(dyn.requests, "post",
+                        lambda *a, **kw: FakeResp(502, {}))
+    assert proxy.fetch_json("u") is None
