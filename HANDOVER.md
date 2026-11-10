@@ -170,12 +170,14 @@ docker compose up --build      # config.yaml/data/logs 挂载，端口8080（BLI
 
 ## 九、未完成 / 建议方向（承接 PROJECT.md 建议节，第十批后更新）
 
-- 后台数据导出粒度细化（按房间/按时间）
-- MySQL/PG 下的数据导出方案（当前仅 SQLite）
-- naive本地时间统一时区化（跨DST/跨时区部署才显现，涉及全部时间列）
+**下一步开发方向与计划以 `ROADMAP.md` 为准**（v1.1.1 真机验证+运维小件 → v1.2.0 群内体验+数据价值+破坏性清理窗口 → v1.3.0 待定项）。当前简记：
+
+- 后台数据导出粒度细化（按房间/按时间）→ 第十二批
+- MySQL/PG 下的数据导出方案 → 第十二批（明细 CSV/JSON 导出不依赖 zip）
+- naive本地时间统一时区化 → 第十五批（轻量版优先，见 ROADMAP 待决②）
 - 发布即置顶的动态延迟推送（已知行为，见 dynamics.py 注释）
-- qqbot 直接访问 botpy 私有属性（升级脆弱性，需随 botpy 版本验证）
-- `LiveMonitor` 旧库API移除（约定下个大版本）
+- qqbot 直接访问 botpy 私有属性 → 第十五批适配层
+- `LiveMonitor` 旧库API移除 → 第十五批 v1.2.0 窗口
 
 ## 十、真机验证状态
 
