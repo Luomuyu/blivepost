@@ -197,10 +197,8 @@ class PagesMixin:
         nav = [(path, key_, title) for key_, (path, title) in self.PAGES.items()]
 
         async def _handler(request):
-            # ?token=管理员快捷令牌：建管理员会话并重定向到干净URL
-            token_resp = await self._auth_token_to_admin(request)
-            if token_resp is not None:
-                return token_resp
+            # ?token=令牌登录已收窄到/login页（防token经URL在全站传播，
+            # 见webpanel_auth._web_token_ok）；此处仅做会话/令牌头判定
             is_guest = (self._session(request) is None
                         and not self._web_token_ok(request))
             if is_guest and key == "accounts":

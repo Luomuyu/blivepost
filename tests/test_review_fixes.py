@@ -145,3 +145,125 @@ async def test_wait_stop_event_exits_on_set():
     assert not task.done()
     ev.set()
     await asyncio.wait_for(task, timeout=1.0)
+
+
+# ---------- 第二轮：逐项修复回归 ----------
+
+async def test_v8_event_timestamp_indexes(tmp_path):
+    """v8迁移：高频事件表建timestamp单列索引（主库遗留表+房间子库）"""
+    import sqlite3
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from blivepost.database.migrations import run_migrations
+
+    main_db = tmp_path / "t.db"
+    conn = sqlite3.connect(main_db)
+    conn.execute("CREATE TABLE danmaku (id INTEGER PRIMARY KEY, timestamp BIGINT)")
+    conn.execute("CREATE TABLE gift (id INTEGER PRIMARY KEY, timestamp BIGINT)")
+    conn.commit(); conn.close()
+    sub = tmp_path / "rooms" / "t" / "room_1.db"
+    sub.parent.mkdir(parents=True)
+    conn = sqlite3.connect(sub)
+    conn.execute("CREATE TABLE super_chat (id INTEGER PRIMARY KEY, timestamp BIGINT)")
+    conn.commit(); conn.close()
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{main_db}")
+    try:
+        await run_migrations(engine)
+    finally:
+        await engine.dispose()
+
+    conn = sqlite3.connect(main_db)
+    idx = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    conn.close()
+    assert "idx_danmaku_timestamp" in idx and "idx_gift_timestamp" in idx
+    conn = sqlite3.connect(sub)
+    idx2 = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'")}
+    conn.close()
+    assert "idx_sc_timestamp" in idx2  # super_chat缩写名与ORM一致
+
+
+async def test_sql_bucketing_matches_python_keys(tmp_path):
+    """SQL整数分桶与Python侧day_key_ms/hour_key_ms等价（含跨日样本）"""
+    from blivepost.config.settings import Settings
+    from blivepost.database import DatabaseManager, DatabaseService
+    from blivepost.database.models import DanmakuRecord
+    from blivepost.utils.timeutil import day_bounds_ms, day_key_ms, hour_key_ms
+
+    settings = Settings()
+    settings.database.sqlite_path = str(tmp_path / "t.db")
+    db = DatabaseManager(settings.database)
+    await db.initialize()
+    svc = DatabaseService(db)
+    try:
+        # 样本：今天0点边界前后各一条+26小时前一条（覆盖跨日与小时分桶）
+        # 直写房间子库（分析查询按room_id路由到子库）
+        today_start, _ = day_bounds_ms()
+        samples = [today_start - 1, today_start, today_start - 26 * 3600 * 1000]
+        sub = await svc._ensure_registry().get(await svc._room_db_name(1))
+        async with sub.get_session() as session:
+            for ts in samples:
+                session.add(DanmakuRecord(room_id=1, uid=1, uname="u",
+                                          msg="m", timestamp=ts))
+            await session.commit()
+
+        heat = await svc.get_activity_heatmap(room_id=1, days=7)
+        expect: dict = {}
+        for ts in samples:
+            d, h = day_key_ms(ts), hour_key_ms(ts)
+            expect.setdefault(d, [0] * 24)[h] += 1
+        for day, hours in expect.items():
+            assert day in heat, f"缺日键{day}"
+            assert list(heat[day]) == hours, f"{day}小时分布不符"
+        dist = await svc.get_danmaku_daily_distribution(room_id=1, days=7)
+        dist_map = {row["day"]: row["count"] for row in dist}
+        for day, hours in expect.items():
+            assert dist_map.get(day) == sum(hours)
+    finally:
+        await svc.aclose()
+        await db.close()
+
+
+def test_atall_rooms_fullwidth_normalized():
+    """/艾特全体 仅 房间号：全角数字归一化为半角"""
+    import asyncio
+    from blivepost.services.commands import CommandHandler
+
+    class DB:
+        def __init__(self):
+            self.saved = None
+
+        async def set_group_at_all_mode(self, g, mode, room_ids=""):
+            self.saved = (mode, room_ids)
+            return True
+
+    handler = CommandHandler.__new__(CommandHandler)
+    handler.db_service = DB()
+    out = asyncio.run(handler._at_all_mode("G", "仅 １２３，456"))
+    assert "123,456" in out
+    assert handler.db_service.saved == ("rooms", "123,456")
+
+
+def test_send_queue_watermark_degrades_to_text():
+    """发送队列高水位：本地图推送降级纯文本（不再携带大图入队）"""
+    from blivepost.services.qqbot import QQBotClient
+
+    bot = QQBotClient.__new__(QQBotClient)
+    # 绕过started/_loop检查：直接给内部状态
+    bot._task = None
+    bot._loop = object()  # 非None即通过"未启动"检查（不真正发消息）
+    QQBotClient.started = property(lambda self: True)
+    try:
+        import asyncio as _aio
+        bot._send_queue = _aio.Queue(maxsize=200)
+        for _ in range(150):
+            bot._send_queue.put_nowait(object())
+        pushed = []
+        bot.push = lambda content, groups, **kw: pushed.append(content) or True
+        ok = bot.push_media_data(b"x" * 100, "动态文本", ["G"])
+        assert ok is True and pushed == ["动态文本"]
+    finally:
+        # 还原被替换的property（避免污染其他测试）
+        QQBotClient.started = property(lambda self: (
+            self._task is not None and not self._task.done()))

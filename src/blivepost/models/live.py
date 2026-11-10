@@ -140,13 +140,11 @@ class DanmakuInfo:
     msg: str
     medal_name: str = ""
     medal_level: int = 0
-    timestamp: int = 0
     
     def __post_init__(self):
         """确保数据类型正确"""
         self.uid = int(self.uid) if self.uid else 0
         self.medal_level = int(self.medal_level) if self.medal_level else 0
-        self.timestamp = int(self.timestamp) if self.timestamp else 0
 
 
 @dataclass
@@ -181,13 +179,11 @@ class SuperChatInfo:
     price: int
     message: str
     background_color: str = ""
-    timestamp: int = 0
     
     def __post_init__(self):
         """确保数据类型正确"""
         self.uid = int(self.uid) if self.uid else 0
         self.price = int(self.price) if self.price else 0
-        self.timestamp = int(self.timestamp) if self.timestamp else 0
 
 
 @dataclass
@@ -206,33 +202,3 @@ class GuardInfo:
         self.guard_level = int(self.guard_level) if self.guard_level else 0
         self.price = int(self.price) if self.price else 0
         self.num = int(self.num) if self.num else 1
-
-
-@dataclass
-class DynamicInfo:
-    """动态信息"""
-    dynamic_id: str
-    author_name: str
-    author_uid: int
-    content: str
-    publish_time: int
-    platform: str = "bili"  # bili / weibo
-    url: str = ""
-    images: Optional[list] = None
-    
-    def __post_init__(self):
-        """确保数据类型正确"""
-        if self.images is None:
-            self.images = []
-        self.author_uid = int(self.author_uid) if self.author_uid else 0
-    
-    @property
-    def full_url(self) -> str:
-        """获取完整URL"""
-        if self.url:
-            return self.url
-        if self.platform == "bili":
-            return f"https://www.bilibili.com/opus/{self.dynamic_id}"
-        elif self.platform == "weibo":
-            return f"https://weibo.com/{self.author_uid}/{self.dynamic_id}"
-        return ""

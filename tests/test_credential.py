@@ -151,15 +151,23 @@ async def test_panel_guest_renders_credentials():
 
 @pytest.mark.asyncio
 async def test_panel_token_quick_login():
-    """?token=快捷令牌→管理员会话并重定向"""
+    """令牌快捷登录收窄（v1.2.0）：/?token=不再建会话（游客200）；
+    /login?token=建管理员会话；携会话渲染后台入口"""
     panel = _panel(token="SECRET")
     panel._collect = lambda: _full_collect_async()
 
     from aiohttp.test_utils import make_mocked_request
+    # 普通页?token= → 游客视图（200、无会话cookie）
     req = make_mocked_request("GET", "/?token=SECRET")
     resp = await panel._make_page_handler("overview")(req)
-    assert resp.status == 302
-    sid = resp.cookies["blivepost_sid"].value
+    assert resp.status == 200
+    assert "blivepost_sid" not in resp.cookies
+
+    # /login?token= → 建管理员会话重定向
+    login_resp = await panel._handle_login_page(
+        make_mocked_request("GET", "/login?token=SECRET"))
+    assert login_resp.status == 302
+    sid = login_resp.cookies["blivepost_sid"].value
     assert panel._session_from_sid(sid)["admin"] is True
     # 携会话渲染
     req2 = make_mocked_request("GET", "/", headers={"Cookie": f"blivepost_sid={sid}"})

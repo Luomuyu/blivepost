@@ -12,6 +12,17 @@ import yaml
 from .env import apply_env_overrides, load_dotenv
 
 
+# 配置文件目录锚点（load时记录）：MySQL/PG部署时数据子库根目录的
+# 定位基准——不随进程CWD漂移（以服务方式在不同工作目录启动时，
+# CWD相对路径会解析到另一处，出现"数据全丢"的假象）
+_CONFIG_DIR: Optional[Path] = Path(".")
+
+
+def config_dir() -> Path:
+    """配置文件所在目录（未load过配置时退化为当前目录）"""
+    return _CONFIG_DIR or Path(".")
+
+
 def _as_str_list(value) -> List[str]:
     """配置值转字符串列表（兼容单个字符串）"""
     if isinstance(value, str):
@@ -50,7 +61,7 @@ class MessageSettings:
     web_panel: bool = False
     web_host: str = "127.0.0.1"
     web_port: int = 8080
-    # Web面板管理员快捷令牌（?token=即管理员登录）；非空时兼作Web会话签名密钥
+    # Web面板管理员快捷令牌（/login?token=即管理员登录）；非空时兼作Web会话签名密钥
     # 的派生来源：登录态跨进程重启保留，修改token即全量登出（未配置时密钥为
     # 进程随机，重启后Web登录态失效——见services/webpanel_auth.py）
     web_token: str = ""
@@ -163,6 +174,10 @@ class Settings:
         
         settings = cls._parse_config(data)
         settings._config_path = path
+
+        # 记录配置目录锚点（供数据子库根目录定位，见config_dir）
+        global _CONFIG_DIR
+        _CONFIG_DIR = path.parent.resolve()
 
         # .env文件与环境变量覆盖（密钥类配置建议走环境变量）
         load_dotenv()
@@ -278,7 +293,7 @@ Setting: # 消息推送设置
   web_panel: "N" # Web状态面板 (游客只读/登录可操作, 默认仅本机访问)
   web_host: "127.0.0.1" # Web面板监听地址
   web_port: 8080 # Web面板端口
-  web_token: "" # Web面板管理员快捷令牌 (设置后 ?token= 即管理员登录, 免输账号密码; 亦作Web会话签名密钥来源, 配置后登录态跨进程重启保留, 修改即全量登出)
+  web_token: "" # Web面板管理员快捷令牌 (设置后 /login?token= 即管理员登录, 免输账号密码; API/动作可用X-Web-Token头; 亦作Web会话签名密钥来源, 配置后登录态跨进程重启保留, 修改即全量登出)
   web_admin_user: "admin" # Web后台管理员账号 (管理员来自config不入库)
   web_admin_password: "" # Web后台管理员口令 (非空才启用登录与后台; 前台用户由后台添加)
   data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)

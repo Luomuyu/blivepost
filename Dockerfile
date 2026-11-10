@@ -8,6 +8,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# 可选：构建期pip镜像（直连pypi.org不可达的网络环境下传入，如国内）：
+#   docker build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple .
+ARG PIP_INDEX_URL=""
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+
 # 系统依赖（playwright chromium运行所需）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
@@ -23,6 +28,15 @@ RUN pip install --no-cache-dir -e . \
 
 # 项目文件
 COPY . .
+
+# 非特权运行用户（v1.2.0审查加固：容器不再以root跑业务进程）。
+# chromium以非root无头运行需--cap-drop不影响（sandbox降级由chromium
+# 自行处理headless场景）；数据/日志目录预建并归属appu，宿主机挂载时
+# 请确保卷目录对该UID(1000)可写（chown 1000或放宽组权限）
+RUN useradd --system --uid 1000 --create-home appuser \
+    && mkdir -p /app/data /app/logs /app/exports \
+    && chown -R appuser:appuser /app
+USER appuser
 
 # 数据与配置挂载点
 VOLUME ["/app/data", "/app/logs"]

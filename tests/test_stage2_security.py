@@ -101,20 +101,29 @@ async def test_qr_login_session_isolated():
 
 # ---------- 3. web_token ----------
 
-def test_web_token_cookie_no_longer_accepted():
-    """长效管理员令牌不再经cookie持久化/接受（防泄漏即永久管理员）"""
+def test_web_token_sources_narrowed():
+    """长效管理员令牌不再经cookie持久化/接受（防泄漏即永久管理员）；
+    URL查询串仅/login页接受（v1.2.0收窄：防token经URL全站传播）"""
     panel = _make_panel(token="SECRET")
     assert panel._web_token_ok(FakeReq(cookies={"web_token": "SECRET"})) is False
-    assert panel._web_token_ok(FakeReq(query={"token": "SECRET"})) is True
+    # 查询串在非/login路径不再接受
+    assert panel._web_token_ok(FakeReq(query={"token": "SECRET"})) is False
+    # /login页查询串可用；头任意路径可用
+    assert panel._web_token_ok(
+        FakeReq(query={"token": "SECRET"}, path="/login")) is True
     assert panel._web_token_ok(FakeReq(headers={"X-Web-Token": "SECRET"})) is True
-    assert panel._web_token_ok(FakeReq(query={"token": "WRONG"})) is False
+    assert panel._web_token_ok(FakeReq(query={"token": "WRONG"},
+                                       path="/login")) is False
 
 
 async def test_token_login_does_not_set_persistent_cookie():
-    """?token=登录只发会话cookie，不再写web_token长效cookie"""
+    """/login?token=登录只发会话cookie，不再写web_token长效cookie；
+    非login路径不建会话（收窄后返回None）"""
     panel = _make_panel(token="SECRET")
+    assert await panel._auth_token_to_admin(
+        FakeReq(query={"token": "SECRET"}, path="/")) is None
     resp = await panel._auth_token_to_admin(FakeReq(query={"token": "SECRET"},
-                                                    path="/"))
+                                                    path="/login"))
     assert resp is not None
     # 未prepare的aiohttp响应：cookie在resp.cookies（SimpleCookie）
     names = set(resp.cookies.keys())

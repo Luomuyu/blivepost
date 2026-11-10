@@ -99,18 +99,18 @@ async def test_schema_version_reset_to_v1(tmp_path):
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
     try:
-        # 新库：初始化v1，应用v7（毫秒时间戳迁移）
+        # 新库：初始化v1，应用v7（毫秒时间戳）+v8（事件表timestamp索引）
         n = await run_migrations(engine)
-        assert n == 1
+        assert n == 2
         async with engine.begin() as conn:
             v = (await conn.execute(
                 text("SELECT MAX(version) FROM schema_version"))).scalar()
-        assert v == 7
+        assert v == 8
 
-        # 已应用的v7不重复执行
+        # 已应用的v7/v8不重复执行
         assert await run_migrations(engine) == 0
 
-        # 模拟旧库：写入v6版本号 → 清退为仅v1+v7（v7保留，不重复应用）
+        # 模拟旧库：写入v6版本号 → 清退为仅v1+v7+v8（v7+保留，不重复应用）
         async with engine.begin() as conn:
             await conn.execute(text(
                 "INSERT OR REPLACE INTO schema_version(version) VALUES (6)"))
@@ -118,7 +118,7 @@ async def test_schema_version_reset_to_v1(tmp_path):
         async with engine.begin() as conn:
             versions = [r[0] for r in (await conn.execute(
                 text("SELECT version FROM schema_version"))).all()]
-        assert versions == [1, 7]
+        assert versions == [1, 7, 8]
     finally:
         await engine.dispose()
 
@@ -162,11 +162,11 @@ async def test_v7_time_columns_to_ms(tmp_path):
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{main_db}")
     try:
-        await run_migrations(engine)  # v7应用于主库+子库
+        await run_migrations(engine)  # v7+v8应用于主库+子库
         async with engine.begin() as conn:
             v = (await conn.execute(
                 text("SELECT MAX(version) FROM schema_version"))).scalar()
-        assert v == 7
+        assert v == 8
 
         async with engine.begin() as conn:
             row = (await conn.execute(text(

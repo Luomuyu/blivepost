@@ -238,7 +238,8 @@ async def _migrate_sub_dbs(main_db_path: str) -> int:
         rooms_dir = main.parent / "rooms"
         if rooms_dir.is_dir():
             files.extend(rooms_dir.rglob("*.db"))
-        for d in (main.parent / "dynamics", Path("data") / "dynamics"):
+        from ..config.settings import config_dir
+        for d in (main.parent / "dynamics", config_dir() / "data" / "dynamics"):
             if d.is_dir():
                 files.extend(d.glob("*.db"))
     for path in sorted(set(files)):
@@ -262,6 +263,81 @@ async def _migrate_time_columns_to_ms(conn, db_type: str) -> None:
         logger.info(f"迁移v7: 时间列毫秒化共转换{n}行/列")
 
 
+# ========== v8：高频事件表 timestamp 单列索引（分析/趋势查询提速） ==========
+
+# EventBase事件表仅存在于SQLite房间子库；高频分析表加timestamp单列索引
+# （复合索引(room_id,timestamp)最左列是room_id，timestamp-only范围查询
+# ——热力图/日分布/趋势/词云——用不上最左前缀，此前为全表扫描）
+# 表名→索引名（与models.py中ORM Index命名一致，避免迁移与create_all各建一份）
+_EVENT_TS_INDEXES = {
+    "danmaku": "idx_danmaku_timestamp",
+    "gift": "idx_gift_timestamp",
+    "super_chat": "idx_sc_timestamp",
+    "guard": "idx_guard_timestamp",
+    "red_pocket": "idx_redpocket_timestamp",
+}
+_EVENT_TS_INDEX_TABLES = frozenset(_EVENT_TS_INDEXES)
+
+
+def _index_sqlite_file(db_path: Path) -> int:
+    """为单个SQLite库补建事件表timestamp索引（CREATE INDEX IF NOT EXISTS幂等）"""
+    import sqlite3
+    created = 0
+    conn = sqlite3.connect(str(db_path), timeout=15)
+    try:
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        for table in tables & _EVENT_TS_INDEX_TABLES:
+            conn.execute(
+                f'CREATE INDEX IF NOT EXISTS "{_EVENT_TS_INDEXES[table]}" '
+                f'ON "{table}" ("timestamp")')
+            created += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return created
+
+
+@migration_handler(8, "高频事件表timestamp单列索引（分析/趋势/词云查询提速）")
+async def _migrate_event_timestamp_indexes(conn, db_type: str) -> None:
+    """v8：主库+全部房间子库补建timestamp单列索引（幂等，SQLite专属路径）"""
+    if db_type != "sqlite":
+        # 事件表只存在于SQLite房间子库（EventBase不受主库类型控制）
+        logger.debug("迁移v8: 非SQLite主库，事件表索引随子库create_all/本迁移的子库路径处理")
+        return
+    created = 0
+    # 主库可能残留旧版事件表（已迁空的遗留）：经当前迁移连接建索引——
+    # 不可另开sqlite3连接（迁移事务持写锁，第二连接会database is locked）
+    res = await conn.execute(text(
+        "SELECT name FROM sqlite_master WHERE type='table'"))
+    main_tables = {r[0] for r in res} & _EVENT_TS_INDEX_TABLES
+    for table in sorted(main_tables):
+        await conn.execute(text(
+            f'CREATE INDEX IF NOT EXISTS "{_EVENT_TS_INDEXES[table]}" '
+            f'ON "{table}" ("timestamp")'))
+        created += 1
+    main_path = await _sqlite_main_db_path(conn)
+    # 子库发现逻辑与v7一致（rooms/目录 + dynamics两布局）
+    files: List[Path] = []
+    if main_path:
+        main = Path(main_path)
+        rooms_dir = main.parent / "rooms"
+        if rooms_dir.is_dir():
+            files.extend(rooms_dir.rglob("*.db"))
+        from ..config.settings import config_dir
+        for d in (main.parent / "dynamics", config_dir() / "data" / "dynamics"):
+            if d.is_dir():
+                files.extend(d.glob("*.db"))
+    for path in sorted(set(files)):
+        try:
+            created += _index_sqlite_file(path)
+        except Exception as e:
+            # 索引缺失仅影响性能不影响正确性：单库失败不中断启动
+            logger.warning(f"迁移v8: 子库{path.name}建索引失败: {e}")
+    if created:
+        logger.info(f"迁移v8: 共补建{created}个timestamp索引")
+
+
 async def run_migrations(engine: AsyncEngine) -> int:
     """
     执行增量迁移
@@ -280,12 +356,12 @@ async def run_migrations(engine: AsyncEngine) -> int:
         if db_type == "sqlite":
             await conn.execute(text(
                 f"CREATE TABLE IF NOT EXISTS {SCHEMA_VERSION_TABLE} ("
-                "version INTEGER PRIMARY KEY, applied_at TIMESTAMP)"
+                "version INTEGER PRIMARY KEY, applied_at BIGINT)"
             ))
         else:
             await conn.execute(text(
                 f"CREATE TABLE IF NOT EXISTS {SCHEMA_VERSION_TABLE} ("
-                "version INT PRIMARY KEY, applied_at DATETIME)"
+                "version INT PRIMARY KEY, applied_at BIGINT)"
             ))
 
         # 旧库v2~v6已清退：版本表中的遗留版本号删除（v7及以后的新迁移

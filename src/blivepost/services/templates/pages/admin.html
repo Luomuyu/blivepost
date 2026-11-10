@@ -39,7 +39,7 @@
                class="bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 text-xs w-40">
       </div>
       <div>
-        <label class="block text-xs text-slate-500 mb-1">密码（≥4位）</label>
+        <label class="block text-xs text-slate-500 mb-1">密码（≥8位）</label>
         <input id="new-password" type="password" placeholder="密码"
                class="bg-slate-800 text-slate-200 rounded-lg px-3 py-2 border border-slate-700 focus:outline-none focus:border-blue-500 text-xs w-40">
       </div>
@@ -107,13 +107,13 @@
 async function addUser(){
   const u = document.getElementById('new-username').value.trim();
   const p = document.getElementById('new-password').value;
-  if(!u || p.length < 4){ alert('请填写用户名和至少4位密码'); return; }
+  if(!u || p.length < 8){ alert('请填写用户名和至少8位密码'); return; }
   await postForm('/web/admin/user/add', {username: u, password: p});
 }
 async function resetUser(username){
-  const p = prompt('为用户「' + username + '」设置新密码（≥4位）：');
+  const p = prompt('为用户「' + username + '」设置新密码（≥8位）：');
   if(p === null) return;
-  if(p.length < 4){ alert('密码至少4位'); return; }
+  if(p.length < 8){ alert('密码至少8位'); return; }
   await postForm('/web/admin/user/password', {username: username, password: p});
 }
 async function deleteUser(username){

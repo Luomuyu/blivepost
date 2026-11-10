@@ -37,7 +37,7 @@ logger = get_logger("commands")
 # 注意：绑定/解绑指令已移除（Web面板操作），正则不得再捕获，
 # 否则无对应分支会落入else被当作"取消监控"反向执行
 _CMD_RE = re.compile(
-    r"[/／]\s*(取消动态|绑定动态|取消监控|监控|sc榜|收入)\s*[:：\s]\s*(\d{2,})"
+    r"[/／]\s*(取消动态|绑定动态|取消监控|监控|sc榜|收入)\s*[:：\s]\s*(\d{2,10})"
     r"(?:\s+((?:\d{8})|(?:\d{4}-\d{2}-\d{2})|[周月]))?\s*$",
     re.IGNORECASE,
 )
@@ -322,10 +322,21 @@ class CommandHandler:
 
         if arg.startswith("仅"):
             room_part = arg[1:].strip().replace("，", ",").replace(" ", "")
-            room_ids = ",".join(
-                r for r in room_part.split(",") if r.strip().isdigit())
-            if not room_ids:
-                return "用法：/艾特全体 仅 房间号[,房间号]（多个房间用逗号分隔）"
+            # int()可解析全角数字但直接存库会与str(room_id)永不匹配——
+            # 统一经int()归一化回半角；限制条数防超room_ids列宽(String(500))
+            rooms = []
+            for r in room_part.split(","):
+                r = r.strip()
+                if not r or len(r) > 10:
+                    continue
+                try:
+                    rooms.append(str(int(r)))
+                except ValueError:
+                    continue
+            rooms = rooms[:30]
+            if not rooms:
+                return "用法：/艾特全体 仅 房间号[,房间号]（多个房间用逗号分隔，最多30个）"
+            room_ids = ",".join(rooms)
             await self.db_service.set_group_at_all_mode(
                 group_openid, "rooms", room_ids)
             return f"已设置：仅房间 {room_ids} 开播时艾特全体"
@@ -516,8 +527,13 @@ class CommandHandler:
 
         note = ""
         # 房间号归一化：填了房间号时换算成主播UID（2026-11-10真机实测
-        # 用户以房间号订阅，轮询的却是错误UID——feed查询空/风控）
-        if self.db_service is not None:
+        # 用户以房间号订阅，轮询的却是错误UID——feed查询空/风控）。
+        # 碰撞守卫：输入恰好等于已有订阅UP的UID时不归一化（UID与房间号
+        # 同数值时优先按UID意图处理，回显解析后UID可见可纠错）
+        known_up_uids = set(
+            getattr(self.binding_store, "get_dynamic_up_uids", lambda: [])()) \
+            if self.binding_store else set()
+        if up_uid not in known_up_uids and self.db_service is not None:
             try:
                 room_uid = await self.db_service.get_room_uid(up_uid)
             except Exception:
@@ -548,8 +564,12 @@ class CommandHandler:
         if self.dynamic_manager is None:
             return "动态监控功能不可用"
 
-        # 与绑定同款房间号归一化（用户常以房间号操作）
-        if self.db_service is not None:
+        # 与绑定同款房间号归一化（用户常以房间号操作）；已是订阅UP的UID
+        # 时不归一化（UID==房间号碰撞优先按UID意图处理）
+        known_up_uids = set(
+            getattr(self.binding_store, "get_dynamic_up_uids", lambda: [])()) \
+            if self.binding_store else set()
+        if up_uid not in known_up_uids and self.db_service is not None:
             try:
                 room_uid = await self.db_service.get_room_uid(up_uid)
             except Exception:

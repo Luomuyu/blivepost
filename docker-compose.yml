@@ -17,6 +17,9 @@ services:
       - ./data:/app/data
       # 运行日志（含logs/botpy.log）
       - ./logs:/app/logs
+      # 注：容器以非特权用户appuser(UID 1000)运行（见Dockerfile）。
+      # Linux宿主机上这些挂载目录需对UID 1000可写：首次启动前
+      # `sudo chown -R 1000:1000 ./data ./logs`（Windows/macOS挂载默认可写）
     # 密钥类配置建议经环境变量注入（也可写入config.yaml）
     # 容器内必须监听0.0.0.0端口映射才能转发；安全性由宿主机侧绑定地址控制
     # 开放面板到局域网：把上方端口映射改为 "8080:8080"，并配置 web_token

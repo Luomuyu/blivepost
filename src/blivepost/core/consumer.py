@@ -332,7 +332,7 @@ class PushQueueConsumer:
             bot.push_media(image, content, groups)
         elif not pushed:
             bot.broadcast(groups, content)
-        logger.info(f"UP主 {up_uid} 新动态已推送到 {len(groups)} 个群"
+        logger.info(f"UP主 {up_uid} 新动态已调度推送到 {len(groups)} 个群"
                     f"（图: {item.get('image_source') or ('URL' if image else '无')}）")
 
     async def _handle_up_live(self, item: dict) -> None:
@@ -362,7 +362,7 @@ class PushQueueConsumer:
             ok = bot.broadcast(groups, content)  # 同步入口，不可await
         if not ok and at_all_groups:
             await self._refund_at_all(at_all_groups)  # 调度层失败退还配额
-        logger.info(f"UP主 {up_uid} 开播提醒已推送到 {len(groups)} 个群")
+        logger.info(f"UP主 {up_uid} 开播提醒已调度推送到 {len(groups)} 个群")
 
     async def _acquire_at_all_groups(self, room_id) -> Optional[list]:
         """房间开播提醒的艾特全体配额（解析推送目标群后判定；无DB/无群返回None）"""

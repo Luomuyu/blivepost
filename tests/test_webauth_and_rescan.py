@@ -142,10 +142,16 @@ async def test_token_quick_login_and_pages(monkeypatch, tmp_path):
         return dict(_FULL_COLLECT)
     panel._collect = fake_collect
 
-    # ?token= → 管理员会话 + 重定向干净URL
+    # 令牌登录收窄（v1.2.0）：普通页?token=不再建会话（游客200无cookie）
     resp = await panel._make_page_handler("overview")(FakeReq(query={"token": "SECRET"}))
-    assert resp.status == 302
-    sid = resp.cookies["blivepost_sid"].value  # cookie经Set-Cookie下发（prepare时应用）
+    assert resp.status == 200
+    assert "blivepost_sid" not in resp.cookies
+
+    # /login?token= → 管理员会话（302重定向）
+    login_resp = await panel._handle_login_page(
+        FakeReq(query={"token": "SECRET"}, path="/login"))
+    assert login_resp.status == 302
+    sid = login_resp.cookies["blivepost_sid"].value  # cookie经Set-Cookie下发（prepare时应用）
     assert panel._session_from_sid(sid)["admin"] is True
 
     # 携会话cookie渲染概览页（回归：viewport/机器人详情）

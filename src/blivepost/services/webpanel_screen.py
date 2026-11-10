@@ -51,10 +51,7 @@ class ScreenMixin:
 
     async def _handle_screen_page(self, request):
         """大屏整页（独立全屏布局，无导航与页头）"""
-        # ?token=快捷令牌→建会话后重定向（与其他页面管线对齐）
-        token_resp = await self._auth_token_to_admin(request)
-        if token_resp is not None:
-            return token_resp
+        # ?token=令牌登录已收窄到/login页（防token经URL传播）
         if self._session(request) is None and not self._web_token_ok(request):
             return self._screen_denied(request)
         ctx = await self._screen_context()

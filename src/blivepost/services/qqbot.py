@@ -1107,10 +1107,20 @@ class QQBotClient:
         qqbot-media://引用，以![动态](url)嵌入Markdown消息——图文一体、
         渲染最佳；Markdown失败降级群files二进制富媒体；再降纯文本。
         素材用后即删（上限100张，90天滑动过期不必留存）。
+
+        队列水位防护（v1.2.0审查修复）：_run闭包捕获最大~4MB截图bytes，
+        队列满载200条最坏~800MB内存尖峰——水位超半数时新任务直接降级
+        纯文本推送（丢图不丢消息），不再携带大图入队。
         """
         if self._loop is None or not self.started:
             logger.error("QQ官方机器人未启动，本地图片推送失败")
             return False
+        queue = self._send_queue
+        if queue is not None and queue.qsize() >= self.SEND_QUEUE_SIZE // 2:
+            logger.warning(
+                f"发送队列高水位({queue.qsize()}/{self.SEND_QUEUE_SIZE})，"
+                f"本地图片推送降级为纯文本（防大图闭包内存尖峰）")
+            return self.push(content, groups)
 
         async def _run() -> bool:
             groups_list = list(groups)
@@ -1148,7 +1158,9 @@ class QQBotClient:
             current_loop = None
         if current_loop is self._loop:
             return self._enqueue_send(coro)
-        asyncio.run_coroutine_threadsafe(coro, self._loop)
+        # 跨线程路径同样走有界队列（run_coroutine_threadsafe直跑会绕过
+        # 队列上限与worker限流）；fire-and-forget，返回已调度
+        self._loop.call_soon_threadsafe(self._enqueue_send, coro)
         return True
 
     async def notify_admins(self, admins: Iterable[str], content: str) -> int:

@@ -93,6 +93,8 @@ class BaseEventHandler:
         异步任务的辅助方法（在事件循环线程内创建后台任务）
 
         有db_service时调度协程（落库/推送），否则安全丢弃。
+        后台任务挂done回调记日志——否则异常只在GC时以
+        "exception was never retrieved"出现，排障无迹可寻。
         """
         try:
             asyncio.get_running_loop()
@@ -101,7 +103,13 @@ class BaseEventHandler:
             coro.close()
             return
         if self.db_service:
-            asyncio.create_task(coro)
+            task = asyncio.create_task(coro)
+
+            def _log_exc(t: asyncio.Task) -> None:
+                if not t.cancelled() and t.exception() is not None:
+                    logger.error(f"后台落库任务失败: {t.exception()}")
+
+            task.add_done_callback(_log_exc)
         else:
             coro.close()
 

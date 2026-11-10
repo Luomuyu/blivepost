@@ -24,8 +24,16 @@ from .models import (
 )
 from ..utils.logger import get_logger
 from ..utils.timeutil import (
-    day_bounds_ms, day_key_ms, ms_to_dt, ms_to_str, now_ms, range_bounds_ms
+    day_bounds_ms, day_key_ms, get_default_timezone, ms_to_dt, ms_to_str,
+    now_ms, range_bounds_ms
 )
+
+
+def _tz_off_ms() -> int:
+    """Setting.timezone的UTC偏移毫秒（SQL分桶口径，与day_key_ms同时区源）"""
+    from datetime import datetime as _dt
+    off = _dt.now(get_default_timezone()).utcoffset()
+    return int(off.total_seconds() * 1000) if off else 0
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -314,8 +322,9 @@ class StatsMixin:
         """
         按日聚合的自然日区间历史数据（Web面板趋势选择器用）
 
-        按日分组在Python侧完成（day_key_ms按Setting.timezone分日；
-        SQL侧对毫秒整数做strftime无法保证跨库与时区正确）。
+        按日分组经SQL侧整数分桶（(timestamp+时区偏移ms)/86400000，房间
+        子库恒为SQLite的整数除法，分日语义与Python侧day_key_ms一致），
+        只回传聚合行——此前全区间行拉回内存逐行计数。
 
         Args:
             start_day/end_day: 起止日期（date/datetime，含首尾）
@@ -331,6 +340,11 @@ class StatsMixin:
             return []
         start_ms = day_bounds_ms(start_day)[0]
         end_ms = day_bounds_ms(end_day)[1]  # 末日次日0点（半开区间右端）
+        tz_off = _tz_off_ms()
+        _DAY_MS = 86_400_000
+
+        def _day_bucket(col):
+            return (col + tz_off) / _DAY_MS
 
         if room_ids:
             managers = [await self._room_manager(r) for r in room_ids]
@@ -343,49 +357,58 @@ class StatsMixin:
             key = (start_dt_local + timedelta(days=i)).strftime("%Y-%m-%d")
             history[key] = {"day": key, "danmaku": 0, "gift_gold": 0.0,
                             "ship_gold": 0.0, "sc_total": 0}
+
+        def _bucket_day(bucket: int) -> Optional[str]:
+            # 日桶序号→日期键（day_key_ms的逆运算）；越界返回None
+            key = ms_to_str(bucket * _DAY_MS - tz_off, "%Y-%m-%d")
+            return key if key in history else None
+
         try:
             for manager in managers:
                 async with manager.get_session() as session:
-                    # 弹幕计数
+                    # 弹幕计数（SQL侧分桶）
+                    b = _day_bucket(DanmakuRecord.timestamp)
                     res = await session.execute(
-                        select(DanmakuRecord.timestamp).where(
+                        select(b, func.count()).where(
                             DanmakuRecord.timestamp >= start_ms,
-                            DanmakuRecord.timestamp < end_ms))
-                    for (ts,) in res.all():
-                        key = day_key_ms(int(ts))
-                        if key in history:
-                            history[key]["danmaku"] += 1
-                    # 礼物（金瓜子，瓜子→元）
+                            DanmakuRecord.timestamp < end_ms).group_by(b))
+                    for db_, cnt in res.all():
+                        day_key = _bucket_day(int(db_))
+                        if day_key:
+                            history[day_key]["danmaku"] += int(cnt)
+                    # 礼物（金瓜子，瓜子→元；SUM下推）
+                    b = _day_bucket(GiftRecord.timestamp)
                     res = await session.execute(
-                        select(GiftRecord.timestamp, GiftRecord.total_price).where(
+                        select(b, func.sum(GiftRecord.total_price)).where(
                             GiftRecord.coin_type == "gold",
                             GiftRecord.timestamp >= start_ms,
-                            GiftRecord.timestamp < end_ms))
-                    for ts, val in res.all():
-                        key = day_key_ms(int(ts))
-                        if key in history:
-                            history[key]["gift_gold"] = round(
-                                history[key]["gift_gold"] + int(val or 0) / 1000, 2)
+                            GiftRecord.timestamp < end_ms).group_by(b))
+                    for db_, val in res.all():
+                        day_key = _bucket_day(int(db_))
+                        if day_key:
+                            history[day_key]["gift_gold"] = round(
+                                history[day_key]["gift_gold"] + int(val or 0) / 1000, 2)
                     # 上舰（瓜子→元）
+                    b = _day_bucket(GuardRecord.timestamp)
                     res = await session.execute(
-                        select(GuardRecord.timestamp,
-                               GuardRecord.price * GuardRecord.num).where(
+                        select(b, func.sum(GuardRecord.price * GuardRecord.num)).where(
                             GuardRecord.timestamp >= start_ms,
-                            GuardRecord.timestamp < end_ms))
-                    for ts, val in res.all():
-                        key = day_key_ms(int(ts))
-                        if key in history:
-                            history[key]["ship_gold"] = round(
-                                history[key]["ship_gold"] + int(val or 0) / 1000, 2)
+                            GuardRecord.timestamp < end_ms).group_by(b))
+                    for db_, val in res.all():
+                        day_key = _bucket_day(int(db_))
+                        if day_key:
+                            history[day_key]["ship_gold"] = round(
+                                history[day_key]["ship_gold"] + int(val or 0) / 1000, 2)
                     # SC（元）
+                    b = _day_bucket(SuperChatRecord.timestamp)
                     res = await session.execute(
-                        select(SuperChatRecord.timestamp, SuperChatRecord.price).where(
+                        select(b, func.sum(SuperChatRecord.price)).where(
                             SuperChatRecord.timestamp >= start_ms,
-                            SuperChatRecord.timestamp < end_ms))
-                    for ts, val in res.all():
-                        key = day_key_ms(int(ts))
-                        if key in history:
-                            history[key]["sc_total"] += int(val or 0)
+                            SuperChatRecord.timestamp < end_ms).group_by(b))
+                    for db_, val in res.all():
+                        day_key = _bucket_day(int(db_))
+                        if day_key:
+                            history[day_key]["sc_total"] += int(val or 0)
         except Exception as e:
             logger.error(f"查询历史趋势失败: {e}")
             return []

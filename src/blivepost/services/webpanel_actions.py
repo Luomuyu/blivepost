@@ -55,7 +55,7 @@ class ActionsMixin:
         form = await request.post()
         username = str(form.get("username", "")).strip()
         password = str(form.get("password", ""))
-        if not username or len(password) < 4:
+        if not username or len(password) < 8:  # OWASP基线最短8位
             return self._action_response()
         created = await self.db_service.create_web_user(username, hash_password(password))
         logger.info(f"后台{'添加' if created else '添加失败(已存在?)'}用户：{username}")
@@ -68,7 +68,7 @@ class ActionsMixin:
         form = await request.post()
         username = str(form.get("username", "")).strip()
         password = str(form.get("password", ""))
-        if not username or len(password) < 4:
+        if not username or len(password) < 8:  # OWASP基线最短8位
             return self._action_response()
         updated = await self.db_service.update_web_user_password(
             username, hash_password(password))

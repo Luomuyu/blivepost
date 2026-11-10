@@ -132,17 +132,31 @@ class RoomProcess:
         return self._process is not None and self._process.is_alive()
 
     async def stop(self) -> None:
-        """停止子进程（先优雅后强杀）"""
+        """停止子进程（先优雅后强杀；terminate仍存活时kill兜底并回收句柄）"""
         self._stopped = True
         self._stop_event.set()
 
         if self._process is not None:
-            await asyncio.to_thread(self._process.join, 3)
-            if self._process.is_alive():
-                self._process.terminate()
-                await asyncio.to_thread(self._process.join, 3)
+            proc = self._process
+            await asyncio.to_thread(proc.join, 3)
+            if proc.is_alive():
+                proc.terminate()
+                await asyncio.to_thread(proc.join, 3)
+            if proc.is_alive():
+                # 兜底强杀（Windows下kill等价terminate；仍失败仅告警，
+                # 进程句柄一并close防泄漏——此后不再操作该进程对象）
+                logger.warning(f"房间 {self.room_id} 监控进程terminate后仍存活，kill兜底")
+                try:
+                    proc.kill()
+                    await asyncio.to_thread(proc.join, 3)
+                except Exception as e:
+                    logger.error(f"房间 {self.room_id} 强杀监控进程失败: {e}")
             logger.info(f"房间 {self.room_id} 监控进程已停止")
             self._process = None
+            try:
+                proc.close()
+            except Exception:
+                pass
 
         if self._watcher is not None:
             self._watcher.cancel()
@@ -237,6 +251,14 @@ class MonitorManager:
         """
         rid = int(room_id)
 
+        # 房间信息查询走网络（同步requests最长10s+）：放在锁外执行，
+        # 避免阻塞其他ensure/remove/suspend/stop_all
+        try:
+            room_info = await self.get_room_info(rid)
+        except Exception as e:
+            logger.error(f"获取房间 {rid} 信息失败: {e}")
+            room_info = None
+
         async with self._lock:
             if manual:
                 # 用户主动确保监控：解除暂停；显式ensure视为新的监控意图，崩溃计数清零
@@ -246,12 +268,6 @@ class MonitorManager:
             if existing is not None and existing.is_alive:
                 logger.info(f"房间 {rid} 已存在监控进程，忽略")
                 return False, None
-
-            try:
-                room_info = await self.get_room_info(rid)
-            except Exception as e:
-                logger.error(f"获取房间 {rid} 信息失败: {e}")
-                room_info = None
 
             # 从账号池取用登录cookie（房间亲和优先，池空则游客连接）
             account = await self._pick_account(rid)
@@ -355,6 +371,9 @@ class MonitorManager:
 
         async with self._lock:
             room = self._rooms.pop(rid, None)
+            # 亲和映射同步清理（防长期运行下随历史房间数无界增长）
+            self._room_account.pop(rid, None)
+            self._crash_counts.pop(rid, None)
 
         if room is None:
             return False

@@ -10,7 +10,6 @@ from .live import (
     GiftInfo,
     SuperChatInfo,
     GuardInfo,
-    DynamicInfo,
 )
 
 __all__ = [
@@ -22,5 +21,4 @@ __all__ = [
     "GiftInfo",
     "SuperChatInfo",
     "GuardInfo",
-    "DynamicInfo",
 ]

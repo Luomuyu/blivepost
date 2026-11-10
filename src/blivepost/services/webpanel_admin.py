@@ -53,11 +53,8 @@ class AdminMixin:
 
     async def _handle_admin_page(self, request):
         """管理后台：用户管理/推送开关/数据导出"""
-        # ?token=快捷令牌→先建管理员会话并重定向干净URL（否则仅凭token渲染
-        # 页面但无会话cookie，页头仍显示游客——与登录页/普通页管线对齐）
-        token_resp = await self._auth_token_to_admin(request)
-        if token_resp is not None:
-            return token_resp
+        # ?token=令牌登录已收窄到/login页（防token经URL传播）；本页凭
+        # 管理员会话cookie或X-Web-Token头访问
         denied = self._require_admin_page(request)
         if denied is not None:
             raise denied

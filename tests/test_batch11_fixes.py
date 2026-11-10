@@ -356,18 +356,28 @@ async def test_get_group_role_parsing_and_cache():
 # ---------- token建会话与已移出群过滤（第十一批反馈二） ----------
 
 async def test_admin_token_login_establishes_session():
-    """/admin?token= → 先建会话再重定向（原来仅渲染无sid，页头仍是游客）"""
+    """令牌登录收窄（v1.2.0审查）：/login?token=建管理员会话；
+    /admin?token=不再建会话（防token经URL全站传播→浏览器历史/代理日志）"""
+    from aiohttp import web
     from blivepost.services.webpanel import WebPanel
     panel = WebPanel(None, None, None, None, None, token="SECRET",
                      admin_password="p")
-    resp = await panel._handle_admin_page(FakeReq(query={"token": "SECRET"},
-                                                  path="/admin"))
-    # 应为302重定向（去token干净URL）并携带会话cookie，而非直接200渲染
+    # /login?token= → 302 + 管理员会话cookie
+    resp = await panel._handle_login_page(FakeReq(query={"token": "SECRET"},
+                                                  path="/login"))
     assert resp.status == 302
     assert "blivepost_sid" in resp.cookies
     sid = resp.cookies["blivepost_sid"].value
     sess = panel._session_from_sid(sid)
     assert sess is not None and sess["admin"] is True
+    # /admin?token= → 不建会话（无cookie，302去登录页）
+    try:
+        await panel._handle_admin_page(FakeReq(query={"token": "SECRET"},
+                                               path="/admin"))
+        raise AssertionError("admin?token= 游客应302去登录页")
+    except web.HTTPFound as resp:
+        assert resp.location == "/login?err=2"
+        assert "blivepost_sid" not in resp.cookies
 
 
 class FakeReq:
@@ -380,18 +390,19 @@ class FakeReq:
         self.remote = "127.0.0.1"
 
 
-async def test_screen_token_login_establishes_session(monkeypatch):
-    """/screen?token= → 建会话重定向（对齐页面管线）"""
+async def test_screen_token_login_via_login_page(monkeypatch):
+    """/screen?token= 不再建会话；大屏凭会话cookie或X-Web-Token头访问"""
     from blivepost.services.webpanel import WebPanel
     panel = WebPanel(None, None, None, None, None, token="SECRET")
 
-    async def fake_ctx():
-        return {}
-
-    monkeypatch.setattr(panel, "_screen_context", fake_ctx)
     resp = await panel._handle_screen_page(FakeReq(query={"token": "SECRET"},
                                                    path="/screen"))
-    assert resp.status == 302 and "blivepost_sid" in resp.cookies
+    assert resp.status in (200, 302)  # 游客拒绝路径（HX-Redirect 200或302）
+
+    # X-Web-Token头任意路径可用（脚本/自动化通道）
+    denied = panel._web_token_ok(FakeReq(headers={"X-Web-Token": "SECRET"},
+                                         path="/screen"))
+    assert denied is True
 
 
 async def test_load_groups_active_only_filters_removed(tmp_path):

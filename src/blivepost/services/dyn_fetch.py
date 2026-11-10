@@ -35,14 +35,23 @@ _ALLOWED_PREFIX = "https://api.bilibili.com/x/polymer/web-dynamic/"
 
 
 class _BrowserHolder:
-    """主进程内全局唯一无头浏览器（异步API；惰性启动，损坏自动重建）"""
+    """主进程内全局唯一无头浏览器（异步API；惰性启动，损坏自动重建）
+
+    双页分离（v1.2.0审查修复）：单页时代prepare（opus渲染+截图最长~75s）
+    会把并发的/dyn-fetch（60-90s轮询取数）阻塞在同一把页面锁上，子进程
+    40s超时后回退requests链→412→误退避误告警。现取数与渲染各用独立
+    页面+独立锁（同一浏览器上下文，共享cookie），互不阻塞。
+    """
 
     def __init__(self):
         self._pw: Any = None
         self._browser: Any = None
-        self._page: Any = None
+        self._ctx: Any = None
+        self._page: Any = None       # 取数页（API JSON导航）
+        self._ppage: Any = None      # 渲染页（opus页+截图）
         self._cookie_string: str = ""
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()    # 取数页
+        self._plock = asyncio.Lock()   # 渲染页
 
     def set_cookies(self, cookie_string: str) -> None:
         """更新cookie（账号切换时调用；下次浏览器重建生效）"""
@@ -68,8 +77,10 @@ class _BrowserHolder:
                        for n, _, v in [pair.strip().partition("=")]]
             if cookies:
                 await ctx.add_cookies(cookies)
+            self._ctx = ctx
             self._page = await ctx.new_page()
-            logger.info("动态取数浏览器已就绪（全局单实例）")
+            self._ppage = await ctx.new_page()
+            logger.info("动态取数浏览器已就绪（全局单实例，取数/渲染双页）")
             return True
         except Exception as e:
             logger.warning(f"动态取数浏览器启动失败: {e}")
@@ -97,13 +108,14 @@ class _BrowserHolder:
                 return None
 
     async def close(self) -> None:
-        for attr in ("_page", "_browser", "_pw"):
+        # 关上下文即同时关两页；逐级关并各自置None（部分失败不影响后续）
+        for attr in ("_ctx", "_browser", "_pw"):
             obj = getattr(self, attr)
             if obj is None:
                 continue
             try:
-                if attr == "_page":
-                    await obj.context.close()
+                if attr == "_ctx":
+                    await obj.close()
                 elif attr == "_browser":
                     await obj.close()
                 else:
@@ -111,6 +123,8 @@ class _BrowserHolder:
             except Exception:
                 pass
             setattr(self, attr, None)
+        self._page = None
+        self._ppage = None
 
 
 # opus页面正文/标题/图片/头像的DOM提取脚本（在页面上下文执行）
@@ -204,27 +218,27 @@ class DynFetchService:
     async def _render_opus(self, dynamic_id: str) -> Optional[dict]:
         """opus页渲染提取内容（标题/正文/作者/原图URL列表）；失败None。
 
-        调用方须已持有self._holder._lock（渲染与后续截图须在同一持锁
-        区间内完成——中途释放会让并发/dyn-fetch把页面导航走，截图元素
-        不在页面上）。
+        使用渲染专用页（_ppage，与取数页分离互不阻塞）；调用方须已持有
+        self._holder._plock（渲染与后续截图须在同一持锁区间内完成——
+        中途释放会让并发prepare把页面导航走，截图元素不在页面上）。
         """
         url = f"https://www.bilibili.com/opus/{dynamic_id}"
         if not await self._holder._ensure():
             return None
         try:
-            await self._holder._page.goto(url, timeout=30000)
-            await self._holder._page.wait_for_selector(
+            await self._holder._ppage.goto(url, timeout=30000)
+            await self._holder._ppage.wait_for_selector(
                 ".bili-opus-view", timeout=15000)
-            return await self._holder._page.evaluate(_OPUS_EXTRACT_JS)
+            return await self._holder._ppage.evaluate(_OPUS_EXTRACT_JS)
         except Exception as e:
             logger.warning(f"opus页渲染失败(动态{dynamic_id}): {e}")
             return None
 
     async def _screenshot_view(self) -> Optional[bytes]:
         """截图.bili-opus-view元素（渲染失败返回None）；调用前须已导航到
-        opus页且持有self._holder._lock"""
+        opus页且持有self._holder._plock"""
         try:
-            locator = self._holder._page.locator(".bili-opus-view").first
+            locator = self._holder._ppage.locator(".bili-opus-view").first
             return await locator.screenshot()
         except Exception as e:
             logger.warning(f"opus截图失败: {e}")
@@ -360,9 +374,9 @@ class DynFetchService:
 
         import base64
         async with self._prepare_lock:
-            # 渲染+截图同一持锁区间：与并发/dyn-fetch（fetch_json拿同一把
-            # 页面锁导航API地址）互斥，防止渲染与截图之间页面被导航走
-            async with self._holder._lock:
+            # 渲染+截图同一持锁区间（渲染专用页_plock，与取数页互不阻塞）：
+            # 防止渲染与截图之间页面被并发prepare导航走
+            async with self._holder._plock:
                 content = await self._render_opus(dynamic_id) or {}
                 # ① opus页.bili-opus-view截图（保真美观，用户决策优先）
                 shot = await self._screenshot_view()

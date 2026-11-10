@@ -88,7 +88,7 @@ class DatabaseManager:
                 echo=False,
                 future=True,
                 connect_args={
-                    "timeout": 15,          # busy_timeout(ms)：锁等待而非立即报错
+                    "timeout": 15,          # busy_timeout（sqlite3 connect参数单位为秒）：锁等待而非立即报错
                     "check_same_thread": False,
                 },
                 pool_pre_ping=True,

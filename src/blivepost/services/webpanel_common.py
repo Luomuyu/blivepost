@@ -32,7 +32,9 @@ _env.filters["ms2str"] = ms_to_str
 
 _SESSION_COOKIE = "blivepost_sid"
 _SESSION_TTL = timedelta(days=7)
-_PBKDF2_ITERATIONS = 120_000
+# OWASP 2023建议PBKDF2-SHA256 ≥600k；格式含迭代数，旧120k哈希仍可验
+# （仅新创建的口令用新迭代数，无需迁移）
+_PBKDF2_ITERATIONS = 600_000
 
 # 全局推送开关注册表：name -> (显示名, config默认值字段)
 SWITCH_DEFS = [

@@ -50,7 +50,9 @@ class DatabaseService(EventWriterMixin, StatsMixin, AdminMixin, AnalyticsMixin):
                 # 按主库文件名隔离子库目录（同目录多主库互不串库）
                 base = Path(db_path).parent / "rooms" / Path(db_path).stem
             else:
-                base = Path("data") / "rooms"
+                # MySQL/PG主库无文件路径：锚定配置文件目录而非进程CWD
+                from ..config.settings import config_dir
+                base = config_dir() / "data" / "rooms"
             self._registry = RoomDbRegistry(base)
         return self._registry
 

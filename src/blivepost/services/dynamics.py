@@ -450,6 +450,8 @@ def _init_seen_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=5)
     try:
+        # 注意：dynamic_seen结构与database/models.py的DynamicSeenRecord
+        # 双源定义，改列须两侧同步（含migrations.TIME_COLUMNS）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS dynamic_seen ("
             "dynamic_id TEXT PRIMARY KEY, up_uid INTEGER, "
@@ -835,12 +837,24 @@ class DynamicManager:
         if proc.is_alive():
             proc.terminate()
             await asyncio.to_thread(proc.join, 3)
+        if proc.is_alive():
+            # 兜底强杀（仍失败仅告警；句柄close防泄漏）
+            logger.warning(f"UP主 {uid} 轮询进程terminate后仍存活，kill兜底")
+            try:
+                proc.kill()
+                await asyncio.to_thread(proc.join, 3)
+            except Exception as e:
+                logger.error(f"UP主 {uid} 强杀轮询进程失败: {e}")
         if watcher is not None:
             watcher.cancel()
             try:
                 await watcher
             except (asyncio.CancelledError, Exception):
                 pass
+        try:
+            proc.close()
+        except Exception:
+            pass
         logger.info(f"UP主 {uid} 动态轮询进程已停止")
         return True
 
@@ -936,13 +950,16 @@ class LiveStateWatcher:
             if info["live"] and not was_live:
                 went_live += 1
                 logger.info(f"UP主 {uid} 开播：{info['title']}")
-                try:
-                    self.push_queue.put({
-                        "type": "up_live",
-                        "up_uid": uid,
-                        "room_id": info["room_id"],
-                        "title": info["title"],
-                    }, timeout=5)
-                except Exception as e:
-                    logger.error(f"开播提醒写入队列失败: {e}")
+                # put投递到执行器：队列满时最长阻塞5秒，不得占用主事件循环
+                def _put(u=uid, i=info):
+                    try:
+                        self.push_queue.put({
+                            "type": "up_live",
+                            "up_uid": u,
+                            "room_id": i["room_id"],
+                            "title": i["title"],
+                        }, timeout=5)
+                    except Exception as e:
+                        logger.error(f"开播提醒写入队列失败: {e}")
+                await asyncio.to_thread(_put)
         return went_live

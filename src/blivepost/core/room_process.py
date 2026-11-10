@@ -69,24 +69,37 @@ class QueuePushService(PushService):
         self._queue = queue
         self.room_id = room_id
 
+    def _put(self, item: dict) -> bool:
+        """队列写入。mp.Queue.put在队列满时阻塞最长5秒——不得占用子进程
+        事件循环（否则父进程消费停滞时弹幕处理/心跳被拖住）：在事件循环
+        内时投递到执行器线程执行（fire-and-forget，异常由_put_sync记录），
+        非循环上下文（无running loop）退化为直接写。"""
+        def _put_sync() -> bool:
+            try:
+                self._queue.put(item, timeout=5)
+                return True
+            except Exception as e:
+                logger.error(f"队列写入失败({item.get('type')}): {e}")
+                return False
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return _put_sync()
+        loop.run_in_executor(None, _put_sync)
+        return True
+
     def send_message(self, message: str, room_id=None,
                      keyboard: Optional[dict] = None) -> bool:
         return self._forward(message, media=None, keyboard=keyboard)
 
     def push_live_start(self, room_info: LiveRoomInfo) -> bool:
         """开播推送经队列转发（部件+按钮），主进程侧执行完整降级链"""
-        try:
-            self._queue.put(
-                {"type": "push_live_start", "room_id": self.room_id,
-                 "content": self._live_start_text(room_info),
-                 "media": self._live_start_image(room_info),
-                 "keyboard": live_enter_keyboard(room_info.room_id)},
-                timeout=5
-            )
-            return True
-        except Exception as e:
-            logger.error(f"开播推送写入队列失败: {e}")
-            return False
+        return self._put(
+            {"type": "push_live_start", "room_id": self.room_id,
+             "content": self._live_start_text(room_info),
+             "media": self._live_start_image(room_info),
+             "keyboard": live_enter_keyboard(room_info.room_id)})
 
     def push_live_end(self, room_info: LiveRoomInfo, stats: LiveStats) -> bool:
         return self._forward(
@@ -96,15 +109,7 @@ class QueuePushService(PushService):
 
     def notify_not_login(self, room_id) -> bool:
         """登录凭证失效上报：经队列发回主进程处理"""
-        try:
-            self._queue.put(
-                {"type": "not_login", "room_id": int(room_id)},
-                timeout=5
-            )
-            return True
-        except Exception as e:
-            logger.error(f"凭证失效上报写入队列失败: {e}")
-            return False
+        return self._put({"type": "not_login", "room_id": int(room_id)})
 
     def _forward(self, message: str, media: Optional[str],
                  keyboard: Optional[dict] = None) -> bool:
@@ -112,17 +117,10 @@ class QueuePushService(PushService):
         if not content:
             logger.warning("消息内容为空，跳过发送")
             return False
-        try:
-            self._queue.put(
-                {"type": "push", "room_id": self.room_id, "content": content,
-                 "media": media, "keyboard": keyboard,
-                 "switch": self._switch_tag},
-                timeout=5
-            )
-            return True
-        except Exception as e:
-            logger.error(f"推送请求写入队列失败: {e}")
-            return False
+        return self._put(
+            {"type": "push", "room_id": self.room_id, "content": content,
+             "media": media, "keyboard": keyboard,
+             "switch": self._switch_tag})
 
 
 async def _reconcile_loop(
@@ -283,6 +281,14 @@ async def _room_process_async(
     reconcile_task.cancel()
     if not parent_task.done():
         parent_task.cancel()
+
+    # 显式关闭自建的cookie会话（_own_session=False时blivedm不负责关闭，
+    # 不关会留下"Unclosed client session"噪音并延迟到进程退出才回收）
+    if session is not None:
+        try:
+            await session.close()
+        except Exception:
+            pass
 
 
 def _room_process_main(room_id: int, settings: Settings, push_queue, stop_event,

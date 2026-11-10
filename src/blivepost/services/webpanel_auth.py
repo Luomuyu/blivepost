@@ -184,22 +184,43 @@ class AuthMixin:
         return bool(sess and sess["admin"])
 
     def _web_token_ok(self, request) -> bool:
-        """管理员快捷令牌校验（未配置token时不可用；常量时间比较防时序侧信道）"""
+        """管理员快捷令牌校验（未配置token时不可用；常量时间比较防时序侧信道）
+
+        取值来源（v1.2.0审查收窄）：X-Web-Token头任意路径可用；URL查询串
+        仅/login页接受——?token=会落入浏览器历史/代理日志/Referer，开放在
+        全站等于把管理员凭证经URL传播。
+        """
         if not self.token:
             return False
-        provided = (request.query.get("token")
-                    or request.headers.get("X-Web-Token")
-                    or "")
+        provided = request.headers.get("X-Web-Token", "")
+        if not provided and request.path == "/login":
+            provided = request.query.get("token", "")
+        if not provided:
+            return False
         # 比较bytes：str入参含非ASCII时compare_digest会抛TypeError
         return secrets.compare_digest(
             provided.encode("utf-8"), self.token.encode("utf-8"))
 
-    def _set_session_cookie(self, resp: web.Response, sid: str) -> None:
+    def _set_session_cookie(self, resp: web.Response, sid: str,
+                            request=None) -> None:
+        # HTTPS部署（反代X-Forwarded-Proto=https或直连https）时加Secure，
+        # 防sid在明文链路传输；纯HTTP内网部署不设（设了cookie会被丢弃）
+        secure = False
+        if request is not None:
+            proto = (request.headers.get("X-Forwarded-Proto")
+                     or getattr(request, "scheme", "") or "")
+            secure = proto.lower() == "https"
         resp.set_cookie(_SESSION_COOKIE, sid, max_age=int(_SESSION_TTL.total_seconds()),
-                        httponly=True, samesite="Lax", path="/")
+                        httponly=True, samesite="Lax", path="/", secure=secure)
 
     async def _auth_token_to_admin(self, request):
-        """?token=管理员快捷令牌→创建管理员会话并重定向到干净URL（无令牌返回None）"""
+        """/login?token=管理员快捷令牌→创建管理员会话并重定向到干净URL
+
+        仅/login路径生效（v1.2.0审查收窄：?token=经URL传播会落入浏览器
+        历史/代理日志/Referer；其余路径用X-Web-Token头）。无令牌返回None。
+        """
+        if (request.path or "/") != "/login":
+            return None
         provided = request.query.get("token") or ""
         if not (self.token and provided and
                 secrets.compare_digest(provided.encode("utf-8"),
@@ -208,7 +229,7 @@ class AuthMixin:
         sid = self._create_session(self.admin_user, is_admin=True)
         target = request.path or "/"
         resp = web.HTTPFound(target)
-        self._set_session_cookie(resp, sid)
+        self._set_session_cookie(resp, sid, request)
         logger.info(f"Web面板令牌登录（管理员）：{request.remote}")
         return resp
 
@@ -322,7 +343,7 @@ class AuthMixin:
         self._clear_login_failures(ip_key, user_key)
         sid = self._create_session(user, is_admin)
         resp = web.HTTPFound("/admin" if is_admin else "/")
-        self._set_session_cookie(resp, sid)
+        self._set_session_cookie(resp, sid, request)
         logger.info(f"Web面板登录：{user}（{'管理员' if is_admin else '用户'}，{request.remote}）")
         return resp
 

@@ -3,10 +3,10 @@
 数据库存储服务 - 管理功能（AdminMixin）
 """
 
+import asyncio
 import json
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
@@ -36,7 +36,23 @@ GROUP_PUSH_SWITCHES = ("anchor", "guard_achievement", "system_event", "room_chan
 logger = get_logger("db_service")
 
 
+def _serialized_upsert(coro_fn):
+    """写路径串行化装饰器：SELECT-then-INSERT型upsert在并发协程下可
+    同时判定"不存在"而双双INSERT（第二个触发唯一约束被记为"失败"，
+    但行实际已存在）。单进程asyncio下用一把锁串行化全部upsert消除
+    竞态（配置类写量极低，无吞吐损失）。"""
+    import functools
+
+    @functools.wraps(coro_fn)
+    async def wrapper(self, *args, **kwargs):
+        async with AdminMixin._save_lock:
+            return await coro_fn(self, *args, **kwargs)
+    return wrapper
+
+
 class AdminMixin:
+    # upsert串行锁（类级共享：进程内单DatabaseService实例）
+    _save_lock = asyncio.Lock()
     """管理功能混入（绑定/账号池/订阅/好友与群/主播与直播间信息、Web面板用户与推送开关、导出与旧数据迁移；组合进DatabaseService）"""
 
     if TYPE_CHECKING:
@@ -48,6 +64,7 @@ class AdminMixin:
 
     # ========== 绑定记录 ==========
 
+    @_serialized_upsert
     async def save_binding(
         self,
         group_openid: str,
@@ -169,6 +186,7 @@ class AdminMixin:
 
     # ========== Cookie账号池 ==========
 
+    @_serialized_upsert
     async def save_cookie_account(
         self,
         uid: int,
@@ -344,6 +362,7 @@ class AdminMixin:
 
     # ========== 动态订阅 ==========
 
+    @_serialized_upsert
     async def save_dynamic_binding(self, group_openid: str, up_uid: int, up_name: str = "") -> None:
         """保存/更新动态订阅（同群同UP仅一条）"""
         try:
@@ -411,6 +430,7 @@ class AdminMixin:
 
     # ========== 好友与群记录 ==========
 
+    @_serialized_upsert
     async def save_friend(self, openid: str, name: str = "",
                           del_flag: int = 0, receive: int = 1,
                           union_openid: Optional[str] = None) -> None:
@@ -472,6 +492,7 @@ class AdminMixin:
         except Exception as e:
             logger.error(f"回填好友union_openid失败: {e}")
 
+    @_serialized_upsert
     async def save_group(self, group_openid: str, name: str = "",
                          del_flag: int = 0, receive: int = 1) -> None:
         """保存/更新群记录（按openid upsert）"""
@@ -574,6 +595,7 @@ class AdminMixin:
 
     # ========== 主播与直播间信息快照 ==========
 
+    @_serialized_upsert
     async def save_streamer_info(self, uid: int, uname: str = "", face: str = "",
                                  room_id: int = 0) -> None:
         """保存/更新主播信息（按uid upsert；字段仅有值时覆盖）"""
@@ -596,6 +618,7 @@ class AdminMixin:
         except Exception as e:
             logger.error(f"保存主播信息失败(uid={uid}): {e}")
 
+    @_serialized_upsert
     async def save_live_room_info(self, room_id: int, uid: int = 0, title: str = "",
                                   short_id: int = 0, live_status: Optional[int] = None,
                                   area_name: str = "", parent_area_name: str = "",
@@ -782,7 +805,9 @@ class AdminMixin:
             total += os.path.getsize(main_path)
         registry = self._ensure_registry()
         files = set(registry.existing_db_files())
-        for d in (registry.base_dir.parent / "dynamics", Path("data") / "dynamics"):
+        from ..config.settings import config_dir
+        for d in (registry.base_dir.parent / "dynamics",
+                  config_dir() / "data" / "dynamics"):
             if d.is_dir():
                 files.update(d.rglob("*.db"))
         total += sum(f.stat().st_size for f in files if f.exists())
@@ -858,6 +883,7 @@ class AdminMixin:
         """主库文件路径（用于后台数据导出；由DatabaseConfig提供）"""
         return self.db_manager.config.sqlite_path
 
+    @_serialized_upsert
     async def create_web_user(self, username: str, password_hash: str) -> bool:
         """新建前台用户（用户名唯一）；已存在返回False"""
         try:
@@ -902,6 +928,7 @@ class AdminMixin:
             logger.error(f"列出Web用户失败: {e}")
             return []
 
+    @_serialized_upsert
     async def update_web_user_password(self, username: str,
                                        password_hash: str) -> bool:
         """重置前台用户口令（用户不存在返回False）"""
@@ -1095,9 +1122,12 @@ class AdminMixin:
                 if record is None:
                     return {"mode": "daily", "room_ids": ""}
                 return {"mode": record.mode, "room_ids": record.room_ids or ""}
-        except Exception:
+        except Exception as e:
+            # 静默回落daily会把off的群当daily判定——至少留痕可排查
+            logger.error(f"查询at_all配置失败({group_openid})，回落daily: {e}")
             return {"mode": "daily", "room_ids": ""}
 
+    @_serialized_upsert
     async def set_push_switch(self, name: str, enabled: Optional[bool] = None,
                               allow_modify: Optional[bool] = None) -> bool:
         """更新推送开关（行缺失则按给定值或默认关创建）；有变更返回True"""
