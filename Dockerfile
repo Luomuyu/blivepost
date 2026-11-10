@@ -39,15 +39,20 @@ RUN useradd --system --uid 1000 --create-home appuser \
     && mkdir -p /app/data /app/logs /app/exports \
     && chown -R appuser:appuser /app
 
-# heredoc方式内联entrypoint（避免仓库中.sh文件受git换行符转换影响）
+# heredoc方式内联entrypoint（避免仓库中.sh文件受git换行符转换影响；
+# 需BuildKit/Dockerfile frontend≥1.4，Docker 23+默认启用）
 COPY <<'EOF' /app/docker-entrypoint.sh
 #!/bin/sh
 set -e
 if [ "$(id -u)" = "0" ]; then
-    # 挂载目录属主修正（幂等；数据目录很大时可按需注释掉chown -R）
-    chown -R appuser:appuser /app/data /app/logs /app/exports || true
-    # 降权到appuser后执行（--init-groups初始化补充组，HOME供chromium用）
-    exec setpriv --reuid=1000 --regid=1000 --init-groups \
+    # 挂载目录属主修正（幂等；数据目录很大时可按需注释掉chown -R）。
+    # 挂载后端不支持chown（CIFS/只读bind等）时仅告警——降权后若无法
+    # 写入会与旧root容器遗留文件同样表现为启动PermissionError
+    chown -R appuser:appuser /app/data /app/logs /app/exports \
+        || echo "WARN: chown挂载目录失败，appuser可能无法写入data/logs"
+    # 降权到appuser后执行（--init-groups重置补充组；--no-new-privs
+    # 纵深防御禁止子进程经setuid等提权；HOME供chromium用）
+    exec setpriv --reuid=1000 --regid=1000 --init-groups --no-new-privs \
         env HOME=/home/appuser "$@"
 fi
 # 已是非root（docker run --user appuser ...场景）直接执行

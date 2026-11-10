@@ -1159,8 +1159,13 @@ class QQBotClient:
         if current_loop is self._loop:
             return self._enqueue_send(coro)
         # 跨线程路径同样走有界队列（run_coroutine_threadsafe直跑会绕过
-        # 队列上限与worker限流）；fire-and-forget，返回已调度
-        self._loop.call_soon_threadsafe(self._enqueue_send, coro)
+        # 队列上限与worker限流）；fire-and-forget，返回已调度。stop竞态
+        # 下loop可能已关闭——RuntimeError在外呼线程抛出无意义，吞掉即可
+        try:
+            self._loop.call_soon_threadsafe(self._enqueue_send, coro)
+        except RuntimeError:
+            coro.close()
+            logger.warning("跨线程推送时事件循环已关闭，消息丢弃")
         return True
 
     async def notify_admins(self, admins: Iterable[str], content: str) -> int:

@@ -30,7 +30,12 @@ _HOUR_MS = 3_600_000
 
 
 def _tz_off_ms() -> int:
-    """Setting.timezone的UTC偏移毫秒（分桶口径，与day_key_ms同时区源）"""
+    """Setting.timezone的UTC偏移毫秒（分桶口径，与day_key_ms同时区源）
+
+    注：取查询时刻的固定偏移——DST时区（America/*等）跨夏令时切换日的
+    历史数据会与Python侧fromtimestamp的逐条历史偏移差1小时桶；默认
+    Asia/Shanghai无夏令时，不受影响。
+    """
     off = datetime.now(get_default_timezone()).utcoffset()
     return int(off.total_seconds() * 1000) if off else 0
 

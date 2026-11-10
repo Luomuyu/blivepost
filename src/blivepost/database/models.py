@@ -49,7 +49,7 @@ class EventBase(DeclarativeBase):
 
     索引说明：各事件表 room_id 不建单列索引——复合索引 (room_id, timestamp)
     的最左前缀已覆盖按房间查询。timestamp 单列索引仅加在高频分析表
-    （danmaku/gift/super_chat/guard/red_pocket，v8迁移为旧子库补建）——
+    （danmaku/gift/super_chat/guard/red_pocket，create_all自动建）——
     复合索引最左列是room_id，timestamp-only范围查询（分析/趋势/词云）
     用不上最左前缀。create_all 不会删除旧库中已存在的冗余索引（无害）。
     """

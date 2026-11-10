@@ -43,6 +43,9 @@ class ApiV1Mixin:
         db_service: Any  # 类型由WebPanel组合时确定，mypy经Any绕行
         monitor_manager: Any
         message_settings: Any
+        # 鉴权能力（AuthMixin提供，speakers类型用）
+        _session: Any
+        _web_token_ok: Any
 
     # 限速计数：IP -> (窗口起点monotonic, 计数)
     _api_rate: dict = {}
@@ -135,7 +138,10 @@ class ApiV1Mixin:
             return denied
         if self.db_service is None:
             return web.json_response({"error": "db unavailable"}, status=503)
-        room_id = int(request.query.get("room_id", "0") or 0)
+        try:
+            room_id = int(request.query.get("room_id", "0") or 0)
+        except ValueError:
+            return web.json_response({"error": "bad room_id"}, status=400)
         if room_id:
             ids = [room_id]
         elif hasattr(self.db_service, 'list_room_ids'):
@@ -165,11 +171,19 @@ class ApiV1Mixin:
         if self.db_service is None:
             return web.json_response({"error": "db unavailable"}, status=503)
         atype = request.query.get("type", "heatmap")
-        room_id = int(request.query.get("room_id", "0") or 0)
+        try:
+            room_id = int(request.query.get("room_id", "0") or 0)
+        except ValueError:
+            return web.json_response({"error": "bad room_id"}, status=400)
         if atype == "heatmap":
             data = await self.db_service.get_activity_heatmap(
                 room_id=room_id, days=7)
         elif atype == "speakers":
+            # 观众身份明细（uid/uname）超出聚合口径：需面板登录会话
+            # （或X-Web-Token头），API token鉴权不覆盖私网模式的匿名LAN访问
+            if self._session(request) is None and not self._web_token_ok(request):
+                return web.json_response({"error": "login required"},
+                                          status=401)
             data = await self.db_service.get_top_speakers(
                 room_id=room_id, days=7, limit=20)
         elif atype == "distribution":

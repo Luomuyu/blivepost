@@ -451,7 +451,7 @@ def _init_seen_db(path: Path) -> None:
     conn = sqlite3.connect(path, timeout=5)
     try:
         # 注意：dynamic_seen结构与database/models.py的DynamicSeenRecord
-        # 双源定义，改列须两侧同步（含migrations.TIME_COLUMNS）
+        # 双源定义，改列须两侧同步
         conn.execute(
             "CREATE TABLE IF NOT EXISTS dynamic_seen ("
             "dynamic_id TEXT PRIMARY KEY, up_uid INTEGER, "

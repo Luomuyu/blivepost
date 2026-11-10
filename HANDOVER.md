@@ -1,7 +1,7 @@
 # BLivePost 交接文档
 
-> 生成日期：2026-11-11（v1.2.0全项目审查后更新） ｜ 对应版本：v1.2.0（第十一~十六批+审查修复已并入；正文历史批次描述未逐条重写，以 git log 与 README 更新日志为准）
-> 用途：供后续开发者/维护者快速接手。项目细节以 `PROJECT.md`（批次完整记录）、`README.md`（用户视角）、`REVIEW.md`（审查记录，第七轮=2026-11-10四阶段整改）为准，本文档是入口与摘要。
+> 生成日期：2026-11-11（v1.2.0全项目复审后更新） ｜ 对应版本：v1.2.0（第十一~十七批+迁移器重置已并入；正文历史批次描述未逐条重写，以 git log 与 README 更新日志为准）
+> 用途：供后续开发者/维护者快速接手。项目细节以 `PROJECT.md`（批次完整记录）、`README.md`（用户视角）、`REVIEW.md`（审查记录，第十三轮=2026-11-11迁移器重置复审）为准，本文档是入口与摘要。
 
 ---
 
@@ -32,7 +32,7 @@ src/blivepost/
 ├── database/
 │   ├── models.py          # Base(主库) + EventBase(子库) 两套元数据；全部表定义
 │   ├── manager.py         # DatabaseManager（引擎/建表/迁移入口；SQLite WAL+busy_timeout；密码URL转义）
-│   ├── migrations.py      # DDL迁移(v2~v6) + MIGRATION_HANDLERS函数型迁移(v5)
+│   ├── migrations.py      # 轻量迁移框架（2026-11-11重置：注册表空，启动仅版本表归一v1）
 │   ├── service.py         # DatabaseService 组合类 + 子库路由（房间→子库名进程内缓存）
 │   ├── service_events.py  # EventWriterMixin：全部事件写入
 │   ├── service_stats.py   # StatsMixin：汇总/历史/词云查询
@@ -49,7 +49,7 @@ src/blivepost/
 │   ├── bindings.py        # BindingStore 群绑定+动态订阅（bind/unbind时播种/清理群推送设置）
 │   ├── push.py            # PushService：Markdown→富媒体→文本降级链；_switch/_groups标记上下文
 │   ├── report.py          # DailyReportJob 日/周/月结算（失败当日重试；发送前查运行时开关+按群过滤）
-│   ├── commands.py        # QQ群指令（/监控 /取消监控 /查询 等；绑定/解绑指令已移除且正则不捕获）
+│   ├── commands.py        # QQ群指令（/监控 /取消监控 /状态 /收入 等查询指令；绑定/解绑指令已移除且正则不捕获）
 │   ├── admin_commands.py  # 私聊管理员指令
 │   ├── qqbot.py           # QQBotClient（websocket、主动消息、有界发送队列+worker背压）
 │   ├── cookie_pool.py     # B站账号池（轮转/亲和/失效上报）
@@ -67,7 +67,7 @@ src/blivepost/
 - **主库**（`data/blivepost.db`，类型可配 MySQL/PG）：绑定关系 `group_binding`、`bot_group`（群简介/分类/标签/成员数）、`friend`、`cookie_account`、`dynamic_binding`、`room_db`（房间→子库映射）、`web_user`（前台用户，pbkdf2口令哈希）、`push_switch`（全局推送开关，enabled+allow_modify）、`group_at_all`（群艾特全体当日使用记录，第八批）。
 - **房间子库** `data/rooms/room_<id>.db`：10张事件表 + **`group_push_setting`**（第六十批新增：每绑定群对本房间7项推送开关；行缺省回落全局开关，绑定/开启监控时自动播种继承全局，解绑清理）。
 - **动态子库** `data/dynamics/up_<uid>.db`：`dynamic_seen`（已见动态判重）。
-- 迁移：启动自动跑（旧库事件表搬子库、列补齐、monitored列类型更正等）；**新表靠 create_all 自动建，无需迁移条目**；改列类型等DDL覆盖不了的变更必须注册 MIGRATION_HANDLERS（第二十四批教训）。
+- Schema迁移：2026-11-11重置——注册表为空，启动仅把版本表归一为v1，结构由create_all建出；create_all覆盖不了的变更才注册MIGRATIONS/MIGRATION_HANDLERS（版本≥2、须幂等）。旧库事件数据搬子库的运行时迁移保留在service_admin.migrate_legacy_events。
 
 ## 四、鉴权与权限模型（第五十九批起，重要）
 
@@ -76,13 +76,13 @@ src/blivepost/
 | 游客 | 默认 | 只读浏览所有页面与只读接口；**一切动作接口 401** |
 | 前台用户 | 后台添加，存 `web_user` 表 | 可操作（添加房间/推送群/动态订阅/扫码登录等）；可改「前台可改(allow_modify)」的全局与群独立开关 |
 | 管理员 | `Setting.web_admin_user/web_admin_password`（**口令非空才启用**） | 全部权限 + `/admin` 后台（用户增改删/全局推送开关/数据导出） |
-| web_token 快捷令牌 | `Setting.web_token` | `?token=` 即建管理员会话（老令牌兼容） |
+| web_token 快捷令牌 | `Setting.web_token` | `/login?token=` 即建管理员会话；API/动作可用X-Web-Token头 |
 
 - 会话：HMAC签名 sid + cookie `blivepost_sid`（7天）。web_token 非空时密钥由其派生，**登录态跨进程重启保留**；未配置 web_token 时进程随机密钥（重启失效）；修改 web_token=全量登出。单会话吊销=jti内存黑名单（v1.2.0起，登出即吊销；重启清空，改web_token全量登出）（第八批签名会话，第十五批补吊销）
 - 群独立推送设置的修改权限沿用对应全局开关的 allow_modify；管理员不受限。
 - `/screen` 数据大屏需登录；`/admin` 需管理员。
 
-## 五、本开发周期完成内容（第五十一～六十六批，详见 PROJECT.md 批次表）
+## 五、本开发周期完成内容（第五十一～六十六批及2026-11第七~十一批，详见 PROJECT.md 批次表）
 
 **WebUI 交互重构（51~58批）**
 - 直播/动态监控页均拆「上半段管理表 + 下半段群绑定状态」两段；群绑定行点击展开群详情（群信息+推送设置徽标）
@@ -116,7 +116,7 @@ src/blivepost/
 - **测试**：200→**251**；新增 qqbot 发送链路18例、__main__ 冒烟11例、审查回归37例；pyflakes/mypy 双零
 
 **第八批（2026-11-10，遗留清零+新功能）**
-- **开播提醒自动艾特全体**：每群每自然日1次（平台配额），当天首次开播提醒（房间开播推送与UP开播提醒均计）自动在正文嵌入 `<qqbot-at-everyone />`（QQ官方文本交互嵌入格式，Markdown与文本降级均生效）；配额登记主库 `group_at_all` 表（调度即占用，发送失败不退还——保守防重复艾特）；消费者判定配额，bot层逐群嵌入；自定义bot经签名探测兼容（不支持 at_all_groups 参数则原样发送）
+- **开播提醒自动艾特全体**：每群每自然日1次（平台配额），当天首次开播提醒（房间开播推送与UP开播提醒均计）自动在正文嵌入 `<qqbot-at-everyone />`（QQ官方文本交互嵌入格式，Markdown与文本降级均生效）；配额登记主库 `group_at_all` 表（调度即占用，发送失败不退还——保守防重复艾特；v1.2.0起改为失败退款且保留群艾特模式配置）；消费者判定配额，bot层逐群嵌入；自定义bot经签名探测兼容（不支持 at_all_groups 参数则原样发送）
 - **遗留清零**：push上下文改contextvars（并发安全）、webpanel N+1并行化+主播名TTL缓存、动态轮询WbiSigner复用（nav请求~1次/小时）+漏推中间动态修复（全部未见动态按时间序推送）+连续异常告警（10轮≈15分钟私聊管理员）、子进程独立日志文件（room_<id>/dyn_<uid>后缀，防多进程轮转冲突）、会话签名cookie持久化（HMAC签名sid，web_token派生密钥，重启不掉登录）、群推送设置QQ指令入口（/推送设置 概览/明细/单项开关/恢复，权限同控制指令）、大屏主题跟随系统日间模式（CSS变量+prefers-color-scheme）
 - **开播/下播消息形态**（第八批末追加）：下播消息移除"直播地址："行；开播消息仅 Markdown 形态移除该行（跳转入口仅保留「进入直播间」按钮），富媒体与文本降级保留；按钮 keyboard 的 data 由 `bilibili://live/{id}` 改为 `https://live.bilibili.com/{id}`（QQ 不支持协议链接拉起B站客户端）
 - 测试：251→**318**（+67）；pyflakes/mypy 双零；wheel 76文件
@@ -131,18 +131,18 @@ src/blivepost/
 ```bash
 # 开发（仓库根）
 pip install -e ".[dev]"        # 依赖含 jieba
-pytest tests/                  # 当前 318 个用例，全绿，无需联网
+pytest tests/                  # 当前 381 个用例，全绿，无需联网
 pyflakes src tests             # 零告警
 mypy src                       # 零错误
 blivepost -c config.yaml       # 运行；chromium 装运行目录 ms-playwright/
 
 # 发布给真机（WheelTest）
 python -m build --wheel --outdir dist
-WheelTest/.venv/Scripts/python -m pip install --force-reinstall --no-deps dist/blivepost-1.1.0-py3-none-any.whl
+WheelTest/.venv/Scripts/python -m pip install --force-reinstall --no-deps dist/blivepost-1.2.0-py3-none-any.whl
 # ⚠️ --no-deps 跳过依赖：新环境需手动 pip install jieba（及 wheel 新增的其他依赖）
 
 # Docker
-docker compose up --build      # config.yaml/data/logs 挂载，端口8080（BLIVEPOST_WEB_HOST=0.0.0.0 已生效）
+docker compose up --build -d   # config.yaml/data/logs/exports 挂载，宿主机127.0.0.1:18080→容器8080（容器内必须监听0.0.0.0）
 ```
 
 - 真机环境在 `WheelTest/`（venv + config.yaml + data/）；改动后「重建 wheel → 装 WheelTest → 重启进程 → 真机验证」是固定交付节奏。
@@ -153,7 +153,7 @@ docker compose up --build      # config.yaml/data/logs 挂载，端口8080（BLI
 | 键 | 说明 |
 |---|---|
 | `web_panel` / `web_host` / `web_port` | 面板开关与监听（默认仅本机） |
-| `web_token` | 管理员快捷令牌（`?token=` 即管理员登录） |
+| `web_token` | 管理员快捷令牌（`/login?token=` 即管理员登录；API/动作用X-Web-Token头） |
 | `web_admin_user` / `web_admin_password` | 后台管理员；**口令非空才启用登录与后台**（WheelTest 的 config 目前口令为空，需自行填写后重启） |
 | `debug` | Y 时 DEBUG 日志输出（排障明细），并放开 jieba 内部日志 |
 | 8个推送开关（anchor/guard_achievement/...） | 仅作**首次播种的全局默认值**；运行时以后台/DB 为准 |

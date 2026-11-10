@@ -295,8 +295,11 @@ async def test_dynamics_page_group_bindings(tmp_path):
     assert b["member_count"] == 42
     assert any(ps["label"] == "动态监控" for ps in ctx["push_settings"])
 
-    # 整页渲染：下半段标题与群行/详情行出现
-    req = make_mocked_request("GET", "/dynamics")  # token为空时不鉴权
+    # 整页渲染：下半段标题与群行/详情行出现（dynamics为登录门禁页，
+    # 注入管理员会话cookie后渲染）
+    sid = panel._create_session("tester", is_admin=True)
+    req = make_mocked_request(
+        "GET", "/dynamics", headers={"Cookie": f"blivepost_sid={sid}"})
     resp = await panel._make_page_handler("dynamics")(req)
     assert resp.status == 200
     body = resp.text
@@ -475,6 +478,34 @@ async def _build_event_db(path):
     async with engine.begin() as conn:
         await conn.run_sync(EventBase.metadata.create_all)
     await engine.dispose()
+
+
+# 高频分析表的 timestamp 单列索引（迁移器重置后由create_all建出——
+# 复合索引最左列是room_id，timestamp-only查询用不上最左前缀）
+_EVENT_TABLES_WITH_TS_INDEX = {
+    "danmaku": "idx_danmaku_timestamp",
+    "gift": "idx_gift_timestamp",
+    "super_chat": "idx_sc_timestamp",
+    "guard": "idx_guard_timestamp",
+    "red_pocket": "idx_redpocket_timestamp",
+}
+
+
+@pytest.mark.asyncio
+async def test_event_tables_timestamp_single_indexes(tmp_path):
+    """新子库create_all建出5个timestamp单列索引且仅覆盖timestamp列"""
+    import sqlite3
+
+    path = tmp_path / "idx.db"
+    await _build_event_db(path)
+    conn = sqlite3.connect(path)
+    try:
+        for table, index_name in _EVENT_TABLES_WITH_TS_INDEX.items():
+            indexes = _index_columns(conn, table)
+            assert index_name in indexes, f"{table} 缺索引 {index_name}"
+            assert indexes[index_name] == ["timestamp"]
+    finally:
+        conn.close()
 
 
 @pytest.mark.asyncio

@@ -52,6 +52,10 @@ class _BrowserHolder:
         self._cookie_string: str = ""
         self._lock = asyncio.Lock()    # 取数页
         self._plock = asyncio.Lock()   # 渲染页
+        # 启动互斥锁：双页分离后取数/渲染两把页面锁互不互斥，_ensure可能
+        # 被并发执行——不加锁会双浏览器启动泄漏（后写者覆盖引用，先启动
+        # 的Chromium再无人close）或半初始化窗口（_page就绪而_ppage仍None）
+        self._ensure_lock = asyncio.Lock()
 
     def set_cookies(self, cookie_string: str) -> None:
         """更新cookie（账号切换时调用；下次浏览器重建生效）"""
@@ -60,32 +64,38 @@ class _BrowserHolder:
     async def _ensure(self) -> bool:
         if self._page is not None:
             return True
-        try:
-            import os
-            from pathlib import Path
-            # chromium内核路径与登录模块一致（运行目录ms-playwright/）
-            if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(
-                    Path.cwd() / "ms-playwright")
-            from playwright.async_api import async_playwright
-            self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(headless=True)
-            ctx = await self._browser.new_context()
-            cookies = [{"name": n, "value": v,
-                        "domain": ".bilibili.com", "path": "/"}
-                       for pair in self._cookie_string.split(";") if "=" in pair
-                       for n, _, v in [pair.strip().partition("=")]]
-            if cookies:
-                await ctx.add_cookies(cookies)
-            self._ctx = ctx
-            self._page = await ctx.new_page()
-            self._ppage = await ctx.new_page()
-            logger.info("动态取数浏览器已就绪（全局单实例，取数/渲染双页）")
-            return True
-        except Exception as e:
-            logger.warning(f"动态取数浏览器启动失败: {e}")
-            await self.close()
-            return False
+        async with self._ensure_lock:
+            if self._page is not None:  # 双重检查：等待期间他人已完成启动
+                return True
+            try:
+                import os
+                from pathlib import Path
+                # chromium内核路径与登录模块一致（运行目录ms-playwright/）
+                if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
+                    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(
+                        Path.cwd() / "ms-playwright")
+                from playwright.async_api import async_playwright
+                self._pw = await async_playwright().start()
+                self._browser = await self._pw.chromium.launch(headless=True)
+                ctx = await self._browser.new_context()
+                cookies = [{"name": n, "value": v,
+                            "domain": ".bilibili.com", "path": "/"}
+                           for pair in self._cookie_string.split(";") if "=" in pair
+                           for n, _, v in [pair.strip().partition("=")]]
+                if cookies:
+                    await ctx.add_cookies(cookies)
+                self._ctx = ctx
+                # 两页同一赋值块内先后创建：_page先置位即对并发方宣告就绪，
+                # 其后无await直抵_ppage赋值，消除半初始化窗口
+                page = await ctx.new_page()
+                ppage = await ctx.new_page()
+                self._page, self._ppage = page, ppage
+                logger.info("动态取数浏览器已就绪（全局单实例，取数/渲染双页）")
+                return True
+            except Exception as e:
+                logger.warning(f"动态取数浏览器启动失败: {e}")
+                await self.close()
+                return False
 
     async def fetch_json(self, url: str) -> Optional[dict]:
         """页面导航到API URL读正文JSON；失败关闭浏览器待下次重建"""
@@ -386,7 +396,11 @@ class DynFetchService:
             if shot and len(shot) <= _MAX_DIRECT_BYTES:
                 image_b64 = base64.b64encode(shot).decode("ascii")
                 image_source = "screenshot"
-            if image_b64 is None:
+            if image_b64 is None and not content:
+                # 渲染整体失败（浏览器不可用等）时不落卡片档——空内容只会
+                # 渲出"B站动态"抬头+页脚的近空白图，不如直接走URL/纯文本
+                pass
+            elif image_b64 is None:
                 # ② PIL本地渲染卡片（含作者头像；截图失败/超限时兜底）。
                 # 网络拉头像可能较慢，不占页面锁
                 card = await asyncio.to_thread(

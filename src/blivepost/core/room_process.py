@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import concurrent.futures
 import os
 
 import aiohttp
@@ -30,6 +31,11 @@ logger = get_logger("manager")
 # 子进程内直播状态校正间隔（秒）
 RECONCILE_INTERVAL = 90
 
+# 子进程队列入队专用单线程执行器：mp.Queue.put为阻塞调用不得占事件循环；
+# 单线程保证FIFO（开播→下播等事件的到达顺序），默认执行器多线程会乱序
+_queue_put_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="qput")
+
 
 class QueueDbBridge:
     """
@@ -48,9 +54,12 @@ class QueueDbBridge:
             raise AttributeError(name)
 
         async def _save(**kwargs) -> None:
+            # timeout对齐QueuePushService._put：父进程停滞+将来队列设上限
+            # 时不让to_thread线程永久阻塞（asyncio.run收尾join会挂起子进程）
             await asyncio.to_thread(
                 self._queue.put,
-                {"type": "db", "method": name, "kwargs": kwargs}
+                {"type": "db", "method": name, "kwargs": kwargs},
+                True, 5,
             )
 
         return _save
@@ -70,9 +79,11 @@ class QueuePushService(PushService):
         self.room_id = room_id
 
     def _put(self, item: dict) -> bool:
-        """队列写入。mp.Queue.put在队列满时阻塞最长5秒——不得占用子进程
-        事件循环（否则父进程消费停滞时弹幕处理/心跳被拖住）：在事件循环
-        内时投递到执行器线程执行（fire-and-forget，异常由_put_sync记录），
+        """队列写入。mp.Queue当前无上限（父进程消费停滞时子进程feeder
+        线程阻塞、内部缓冲增长——真正的背压在主进程有界发送队列），put
+        仍传timeout=5为将来设上限预留；阻塞调用不得占子进程事件循环
+        （否则父进程停滞时弹幕处理/心跳被拖住）：在事件循环内时投递到
+        单线程执行器（FIFO保序，fire-and-forget，异常在执行器内记录），
         非循环上下文（无running loop）退化为直接写。"""
         def _put_sync() -> bool:
             try:
@@ -86,7 +97,7 @@ class QueuePushService(PushService):
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return _put_sync()
-        loop.run_in_executor(None, _put_sync)
+        loop.run_in_executor(_queue_put_executor, _put_sync)
         return True
 
     def send_message(self, message: str, room_id=None,

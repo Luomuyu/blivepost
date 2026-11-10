@@ -30,7 +30,11 @@ from ..utils.timeutil import (
 
 
 def _tz_off_ms() -> int:
-    """Setting.timezone的UTC偏移毫秒（SQL分桶口径，与day_key_ms同时区源）"""
+    """Setting.timezone的UTC偏移毫秒（SQL分桶口径，与day_key_ms同时区源）
+
+    注：固定偏移近似——DST时区跨夏令时切换日有1小时误差（默认
+    Asia/Shanghai无夏令时，不受影响）。
+    """
     from datetime import datetime as _dt
     off = _dt.now(get_default_timezone()).utcoffset()
     return int(off.total_seconds() * 1000) if off else 0

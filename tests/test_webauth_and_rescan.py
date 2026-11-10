@@ -166,9 +166,14 @@ async def test_token_quick_login_and_pages(monkeypatch, tmp_path):
     assert "bot" in body and "在线" in body
     assert "后台" in body  # 管理员身份显示后台入口
 
-    # 错误token不做会话：直接404？——无token query时页面照常200（游客）
-    resp_guest = await panel._make_page_handler("live")(FakeReq())
-    assert resp_guest.status == 200
+    # 运营情报页（live/groups/dynamics/analytics/accounts）游客302登录；
+    # 聚合页（如records）游客照常200
+    from aiohttp import web as _web
+    try:
+        await panel._make_page_handler("live")(FakeReq())
+        raise AssertionError("游客访问live页应302登录")
+    except _web.HTTPFound as resp_guest:
+        assert resp_guest.location == "/login"
 
     # 直播监控页（含群选项/房间表/删除模式/刷新图标）
     resp2 = await panel._make_page_handler("live")(CookieReq())

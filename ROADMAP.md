@@ -1,6 +1,6 @@
 # BLivePost 开发路线图
 
-> 制定日期：2026-11-10 ｜ 基线：master @ b5b0750（第十批后，318 用例全绿，pyflakes/mypy 零告警）
+> 制定日期：2026-11-10（2026-11-11增补：v1.2.0发布+迁移器重置，现状381用例） ｜ 原基线：master @ b5b0750（第十批后，318 用例全绿）
 > 本文档是方向与计划入口；批次完成后由 PROJECT.md/HANDOVER.md/REVIEW.md 记录实际结果，本文只做增量修订。
 
 ---
@@ -76,7 +76,7 @@
 - 实施要点：
   1. `Setting.timezone`（默认 `Asia/Shanghai`）——展示层转换的唯一时区来源；新增统一的 `ts → "YYYY-MM-DD HH:MM"` 工具（webpanel 模板过滤器、指令回复、结算文案共用）
   2. Schema：全部 `DateTime` 时间列（主库 + 房间子库10张事件表 + 动态子库）改 `BigInteger`（毫秒）；沿用第十批 `id_pk_type` 同款 with_variant 方言处理
-  3. **迁移**（本批核心风险点）：注册函数型迁移（MIGRATION_HANDLERS）——遍历全部子库逐表 `ALTER`（SQLite 走重建表，MySQL 走即时 ALTER+UPDATE），naive datetime 值按 `Setting.timezone` 解释后转 ms；**先主库+单张事件表试点验证，再全面铺开**；迁移前后行数/抽样值比对断言
+  3. **迁移**（原方案，已于2026-11-11随迁移器重置移除——无生产库不需旧库迁移，结构由create_all直接建出）：~~注册函数型迁移遍历全部子库逐表ALTER~~
   4. 查询层：按天/区间聚合、词云范围、日结算边界、趋势历史全部改时间戳区间比较（`day_start_ms ≤ ts < next_day_ms` 半开区间，消除现 23:59:59 `<=` 漏秒问题）
   5. 排序/展示：模板与指令中的日期格式化统一走工具函数；CSV/JSON 导出补原始 ms 列
 - **验收**：迁移真机演练（备份→迁移→数据比对）；跨日边界用例（00:00 整点事件归属）；改 `Setting.timezone` 后展示随之变化；版本号 bump 1.2.0 + CHANGELOG（README 更新日志节扩写）

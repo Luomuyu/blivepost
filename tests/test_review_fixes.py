@@ -149,41 +149,6 @@ async def test_wait_stop_event_exits_on_set():
 
 # ---------- 第二轮：逐项修复回归 ----------
 
-async def test_v8_event_timestamp_indexes(tmp_path):
-    """v8迁移：高频事件表建timestamp单列索引（主库遗留表+房间子库）"""
-    import sqlite3
-    from sqlalchemy.ext.asyncio import create_async_engine
-    from blivepost.database.migrations import run_migrations
-
-    main_db = tmp_path / "t.db"
-    conn = sqlite3.connect(main_db)
-    conn.execute("CREATE TABLE danmaku (id INTEGER PRIMARY KEY, timestamp BIGINT)")
-    conn.execute("CREATE TABLE gift (id INTEGER PRIMARY KEY, timestamp BIGINT)")
-    conn.commit(); conn.close()
-    sub = tmp_path / "rooms" / "t" / "room_1.db"
-    sub.parent.mkdir(parents=True)
-    conn = sqlite3.connect(sub)
-    conn.execute("CREATE TABLE super_chat (id INTEGER PRIMARY KEY, timestamp BIGINT)")
-    conn.commit(); conn.close()
-
-    engine = create_async_engine(f"sqlite+aiosqlite:///{main_db}")
-    try:
-        await run_migrations(engine)
-    finally:
-        await engine.dispose()
-
-    conn = sqlite3.connect(main_db)
-    idx = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='index'")}
-    conn.close()
-    assert "idx_danmaku_timestamp" in idx and "idx_gift_timestamp" in idx
-    conn = sqlite3.connect(sub)
-    idx2 = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='index'")}
-    conn.close()
-    assert "idx_sc_timestamp" in idx2  # super_chat缩写名与ORM一致
-
-
 async def test_sql_bucketing_matches_python_keys(tmp_path):
     """SQL整数分桶与Python侧day_key_ms/hour_key_ms等价（含跨日样本）"""
     from blivepost.config.settings import Settings
@@ -267,3 +232,98 @@ def test_send_queue_watermark_degrades_to_text():
         # 还原被替换的property（避免污染其他测试）
         QQBotClient.started = property(lambda self: (
             self._task is not None and not self._task.done()))
+
+
+# ---------- 第三轮：迁移器重置后复审修复 ----------
+
+class _FakeReq:
+    """轻量请求桩（鉴权相关测试用）"""
+
+    def __init__(self, query=None, headers=None, cookies=None, path="/"):
+        self.query = query or {}
+        self.headers = headers or {}
+        self.cookies = cookies or {}
+        self.path = path
+        self.remote = "127.0.0.1"
+
+
+async def test_operational_pages_guest_gated():
+    """运营情报页（accounts/groups/live/dynamics/analytics）游客302登录；
+    聚合页（overview）游客可看且AppID隐藏"""
+    from aiohttp import web
+    from blivepost.services.webpanel import WebPanel
+
+    panel = WebPanel(None, None, None, None, None, token="TK")
+
+    async def fake_ctx(key):
+        return {}
+
+    panel._page_context = fake_ctx
+    for page in ("accounts", "groups", "live", "dynamics", "analytics"):
+        with pytest.raises(web.HTTPFound) as ei:
+            await panel._make_page_handler(page)(_FakeReq(path=f"/{page}"))
+        assert ei.value.location == "/login", page
+
+
+async def test_token_login_failures_locked_by_ip():
+    """/login?token=失败按IP计入防爆破锁定（web_token兼作会话密钥源，
+    猜中即管理员——令牌路径不能无限速暴力尝试）"""
+    from blivepost.services.webpanel import WebPanel
+
+    panel = WebPanel(None, None, None, None, None, token="SECRET")
+
+    class Req(_FakeReq):
+        def __init__(self, token):
+            super().__init__(query={"token": token}, path="/login")
+
+    for _ in range(WebPanel.LOGIN_MAX_FAILURES):
+        assert await panel._auth_token_to_admin(Req("wrong")) is None
+    # 锁定期间正确令牌也被拒绝
+    assert await panel._auth_token_to_admin(Req("SECRET")) is None
+    # 正常路径：未锁定时正确令牌建立管理员会话
+    panel2 = WebPanel(None, None, None, None, None, token="SECRET")
+    resp = await panel2._auth_token_to_admin(Req("SECRET"))
+    assert resp is not None and resp.status == 302
+    assert panel2._session_from_sid(
+        resp.cookies["blivepost_sid"].value)["admin"] is True
+
+
+def test_speakers_api_requires_login():
+    """/api/v1/analytics?type=speakers 观众身份明细需面板登录（401）"""
+    from blivepost.services.api_v1 import ApiV1Mixin
+
+    class Panel(ApiV1Mixin):
+        def __init__(self):
+            self.message_settings = None
+            self._api_rate = {}
+            self.db_service = None
+            self._sess = None
+            self._tok_ok = False
+
+        def _session(self, request):
+            return self._sess
+
+        def _web_token_ok(self, request):
+            return self._tok_ok
+
+    class Db:
+        @staticmethod
+        async def get_top_speakers(**kw):
+            return []
+
+    class Req:
+        remote = "127.0.0.1"
+        headers = {}
+        query = {"type": "speakers"}
+
+    import asyncio
+    panel = Panel()
+    resp = asyncio.run(panel._handle_api_v1_analytics(Req()))
+    assert resp.status == 503  # db_service为None先503——改挂DB后再验401
+    panel.db_service = Db()
+    panel._sess = None
+    resp = asyncio.run(panel._handle_api_v1_analytics(Req()))
+    assert resp.status == 401  # 有DB但无会话：身份明细拒绝
+    panel._sess = {"user": "u"}
+    resp = asyncio.run(panel._handle_api_v1_analytics(Req()))
+    assert resp.status == 200  # 登录后放行

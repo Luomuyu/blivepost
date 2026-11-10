@@ -192,8 +192,13 @@ class PagesMixin:
 
     # ========== 页面与局部渲染 ==========
 
+    # 运营情报页（群openid/绑定关系/账号池/观众身份明细）：整页要求登录，
+    # 游客可见的仅聚合数据页（概览/记录/趋势/词云——AppID已另行隐藏）
+    LOGIN_GATED_PAGES = frozenset({"accounts", "groups", "live", "dynamics",
+                                    "analytics"})
+
     def _make_page_handler(self, key: str):
-        """生成页面GET处理器（HTMX请求返回内容片段，普通请求返回完整布局；游客可浏览）"""
+        """生成页面GET处理器（HTMX请求返回内容片段，普通请求返回完整布局；游客可浏览聚合页）"""
         nav = [(path, key_, title) for key_, (path, title) in self.PAGES.items()]
 
         async def _handler(request):
@@ -201,8 +206,8 @@ class PagesMixin:
             # 见webpanel_auth._web_token_ok）；此处仅做会话/令牌头判定
             is_guest = (self._session(request) is None
                         and not self._web_token_ok(request))
-            if is_guest and key == "accounts":
-                # 账号池页=运营情报（UID/昵称/到期/扫码入池），整页要求登录
+            if is_guest and key in self.LOGIN_GATED_PAGES:
+                # 运营情报页（群openid/绑定关系/账号池/观众明细）要求登录
                 raise web.HTTPFound("/login")
             ctx = await self._page_context(key)
             if is_guest:

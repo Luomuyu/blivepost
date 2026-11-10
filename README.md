@@ -53,7 +53,7 @@ pip install -e .
 
 ```yaml
 # BLivePost 配置文件
-# 版本: 1.0.0
+# 版本: 1.2.0
 
 Admin: # 管理员设置（权限组逐级包含：main ⊇ openids ⊇ default）
   openids: [] # 管理员名单 (私聊管理命令+群控制指令+普通通知；包含default用户权限)
@@ -77,12 +77,18 @@ Setting: # 消息推送设置
   room_change: "N" # 房间信息变更推送
   dynamic_monitor: "N" # 动态监控总开关 (关闭时/绑定动态 不可用)
   daily_report: "N" # 每日结算推送 (每天00:05, 仅推有数据的房间, 消耗主动消息配额)
+  backup_hour: 4 # 定时备份时刻(时)
+  backup_minute: 30 # 定时备份时刻(分)
+  backup_keep: 7 # 备份保留份数(0=关闭定时备份)
+  web_api_public: "N" # REST API v1公网开关 (N=仅私网, Y=对外开放强制X-API-Token)
+  web_api_token: "" # REST API独立token (公网模式必填)
+  timezone: "Asia/Shanghai" # 展示层时区 (IANA名称)
   weekly_report: "N" # 每周结算推送 (每周一00:05推送上周汇总)
   monthly_report: "N" # 每月结算推送 (每月1日00:05推送上月汇总)
-  web_panel: "N" # Web状态面板 (只读, 默认仅本机访问)
+  web_panel: "N" # Web状态面板 (游客只读/登录可操作, 默认仅本机访问)
   web_host: "127.0.0.1" # Web面板监听地址
   web_port: 8080 # Web面板端口
-  web_token: "" # Web面板管理员快捷令牌 (设置后 ?token= 即管理员登录, 免输账号密码; 亦作Web会话签名密钥来源, 配置后登录态跨进程重启保留, 修改即全量登出)
+  web_token: "" # Web面板管理员快捷令牌 (设置后 /login?token= 即管理员登录; API/动作可用X-Web-Token头; 亦作Web会话签名密钥来源, 配置后登录态跨进程重启保留, 修改即全量登出)
   web_admin_user: "admin" # Web后台管理员账号 (管理员来自config不入库)
   web_admin_password: "" # Web后台管理员口令 (非空才启用登录与后台; 前台用户由后台添加)
   data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)
@@ -207,7 +213,7 @@ blivepost/
 │ 进程层   RoomProcess（房间监控）/ 动态轮询子进程     │
 │         跨进程队列：推送/落库/失效上报/新动态        │
 ├──────────────────────────────────────────────────┤
-│ 存储层   database/（SQLAlchemy异步，14张表）        │
+│ 存储层   database/（SQLAlchemy异步，23张表）        │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -265,6 +271,8 @@ Template:
 | system_event | 系统事件推送（切断/警告/禁言/房管） | Y |
 | room_change | 房间信息变更推送 | N |
 | daily_report | 每日结算推送（每天00:05，仅推送有数据的房间；模板可用`Template.daily_report`自定义） | N |
+| weekly_report | 每周结算推送（每周一00:05推送上周汇总） | N |
+| monthly_report | 每月结算推送（每月1日00:05推送上月汇总） | N |
 
 开播/下播推送始终开启（含封面富媒体），不设开关。注意`daily_report`会消耗主动消息配额（未放量约4条/月/群），按需开启。
 
@@ -371,7 +379,8 @@ class MyPushService(PushService):
 - 🔧 配置链修复：`backup_*`/`web_api_*`/`timezone`此前未从YAML读入（静默失效），现已解析并支持环境变量覆盖
 - 🔧 子进程稳定性：房间子进程停等改纯异步轮询（修复线程池耗尽导致的静默失效与僵尸进程）；房间子库启用WAL
 - 🔧 Web面板游客脱敏：账号池页与AppID需登录可见（与`/api/status`口径一致）
-- 🔧 审查遗留逐项修复：动态取数浏览器取数/渲染双页分离（消除prepare阻塞fetch的串行瓶颈）；v8迁移为高频事件表补timestamp单列索引+分析/趋势SQL侧整数分桶聚合（大房间不再全表扫描/全量拉内存）；发送队列高水位本地图降级文本（防~800MB内存尖峰）；PBKDF2升至600k+口令最短8位；`?token=`收窄到`/login`页（API/动作用`X-Web-Token`头）；Docker镜像非root运行；upsert写锁串行化；子库数据根锚定配置目录（不随CWD漂移）；房间子进程队列入队/会话关闭/kill兜底等健壮性加固
+- 💥 迁移器重置（2026-11-11决策）：未公开发布无生产库，历史迁移（v2~v8）全部清退、版本表归一v1，数据库结构由create_all直接建出——**仅支持全新库或已毫秒化的库**
+- 🔧 审查遗留逐项修复：动态取数浏览器取数/渲染双页分离（消除prepare阻塞fetch的串行瓶颈）；高频事件表timestamp单列索引（create_all自动建）+分析/趋势SQL侧整数分桶聚合（大房间不再全表扫描/全量拉内存）；发送队列高水位本地图降级文本（防~800MB内存尖峰）；PBKDF2升至600k+口令最短8位；`?token=`收窄到`/login`页（API/动作用`X-Web-Token`头；曾把`/screen?token=`配进OBS源的用户需先在浏览器完成一次`/login?token=`换取7天cookie）；Docker镜像非root运行；upsert写锁串行化；子库数据根锚定配置目录（不随CWD漂移）；房间子进程队列入队/会话关闭/kill兜底等健壮性加固
 
 ### v1.1.0 (2026-09)
 

@@ -17,8 +17,10 @@ services:
       - ./data:/app/data
       # 运行日志（含logs/botpy.log）
       - ./logs:/app/logs
+      # 备份与导出产物（定时备份zip/CSV/JSON——不挂载会随容器重建丢失）
+      - ./exports:/app/exports
       # 注：容器以非特权用户appuser(UID 1000)运行——entrypoint启动时自动
-      # 修正data/logs属主后降权（见Dockerfile），宿主机无需手工chown；
+      # 修正data/logs/exports属主后降权（见Dockerfile），宿主机无需手工chown；
       # 时区默认TZ=Asia/Shanghai，可在environment中覆盖
     # 密钥类配置建议经环境变量注入（也可写入config.yaml）
     # 容器内必须监听0.0.0.0端口映射才能转发；安全性由宿主机侧绑定地址控制

@@ -223,9 +223,11 @@ async def test_check_periodic_weekly(tmp_path):
 
     ps = PushServiceStub()
     job = DailyReportJob(store, ps, svc, weekly=True, monthly=True)
-    # 直接调用 _push_range 验证周结逻辑
+    # 直接调用 _push_range 验证周结逻辑（end+1秒余量：窗口右端为半开区间
+    # ts<end，刚写入的礼物与本行now可能同毫秒桶而被排除——偶发竞态）
     now = datetime.now()
-    n = await job._push_range("【每周结算】", now - timedelta(days=7), now)
+    n = await job._push_range("【每周结算】", now - timedelta(days=7),
+                              now + timedelta(seconds=1))
     assert n == 1
     assert len(ps.bot.text) == 1
     assert "每周结算" in ps.bot.text[0][0]

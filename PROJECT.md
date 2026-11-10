@@ -1,6 +1,6 @@
 # BLivePost 项目信息
 
-> 最后更新：2026-11-11（第十七批·全项目审查修复后）——批次表已补第十一~十七批
+> 最后更新：2026-11-11（v1.2.0·第十七批后全项目复审）——批次表已补第十一~十七批
 
 B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm），将开播/下播、天选、大航海成就、系统事件、房间变更等事件通过QQ官方机器人（自建qq-botpy-v2，接口兼容官方botpy）推送到QQ群（各类事件均有独立开关）；弹幕、礼物、舰长、SC、红包仅记录日志并存入数据库（供群指令查询、汇总与CSV/JSON导出），不推送。内置B站账号Cookie池：扫码登录添加账号、多账号轮转监控、房间亲和绑定、临近过期自动刷新、失效自动轮换+每日自动重扫、池耗尽预警并分级私聊提醒管理员。支持群指令订阅B站UP主动态（wbi签名轮询、富媒体推送、开播联动，总开关默认关闭）与可选Web状态面板（token鉴权、SVG趋势图、账号健康）。
 
@@ -40,7 +40,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 - **Docker**（Dockerfile）：python:3.14-slim + chromium系统依赖；依赖层缓存优化；chromium烘焙至 `/app/ms-playwright`（容器内运行目录）；`/app/data`与`/app/logs`挂载点；`EXPOSE 8080`；配置经挂载`/app/config.yaml`提供
 - **chromium安装位置**：本地运行装到运行目录 `ms-playwright/`（`PLAYWRIGHT_BROWSERS_PATH`由bili_login模块设默认值，显式环境变量优先）；`.dockerignore`/`.gitignore`已排除该目录
 - **.env与环境变量**（config/env.py）：`.env`文件 + `BLIVEPOST_`前缀环境变量覆盖（`_QQBOT_APP_ID/_APP_SECRET`、`_ADMIN_OPENIDS/_MAIN_OPENIDS`、`_SESSDATA`、`_WEB_TOKEN/_WEB_PORT`、`_DB_*`、`_REDIS_*`）
-- **wheel**：`blivepost-1.1.0-py3-none-any.whl`（含py.typed）
+- **wheel**：`blivepost-1.2.0-py3-none-any.whl`（含py.typed）
 - **官方API对齐**（QQ开放平台v2文档核对）：群/单聊消息（`msg_type` 0文本/2markdown/7富媒体，`msg_id`被动5分钟有效，`msg_seq`同ID下须递增）；富媒体分片上传（upload_prepare→PUT→part_finish）；指令面板`/v2/panels`系
 - **频控依据**：认证60/qpm、未认证30/qpm、单关系20/qpm、每群每天1000条
 
@@ -102,8 +102,8 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 
 ## 数据存储
 
-- SQLAlchemy 2.0异步引擎，SQLite/MySQL/PostgreSQL；14张表；聚合SQL；明细导出CSV/JSON
-- **Schema迁移器**（database/migrations.py）：版本表+增量DDL，旧库自动升级（v2 use_count、v3 friend.union_openid）；**任何表结构变更必须同步注册MIGRATIONS条目**
+- SQLAlchemy 2.0异步引擎，SQLite/MySQL/PostgreSQL；23张表；聚合SQL；明细导出CSV/JSON
+- **Schema迁移器**（database/migrations.py）：2026-11-11重置——无生产库，历史迁移（v2~v8）全部清退，启动仅把版本表归一为v1；结构由models.py的create_all直接建出。**今后新表仍靠create_all；create_all覆盖不了的变更（改列/加索引/数据换算）才注册MIGRATIONS/MIGRATION_HANDLERS（版本号≥2，须幂等）**
 - **永久保留策略**：`data_retention_days=0`，代码不含自动删除；体积超`db_size_warn_mb`（默认500MB）私聊提醒主管理员，治理靠`/导出`归档
 
 ## 修复批次记录（摘要）
@@ -154,8 +154,8 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 2026-11 第十三批（群内体验） | @全体三模式（daily/rooms/off，/艾特全体指令）；未知指令difflib模糊提示；/帮助按权限分组 |
 | 2026-11 第十四批（数据价值） | 观众分析页（7天×24h热力图+高频发言榜+弹幕量日分布SVG）；REST API v1（/api/v1/*，私网默认+web_api_public公网开关+独立token+限速60/min/IP） |
 | 2026-11 第十五批（v1.2.0清理） | 移除LiveMonitor旧库API（README扩展开发重写为PushService/DatabaseService两路径）；botpy私有属性收敛botpy_compat适配层；会话jti吊销（登出即失效+容量上限5000） |
-| 2026-11 第十六批（全库毫秒时间戳） | 31处DateTime列改BigInteger(13位ms)；v7幂等迁移（真机2984行）；查询层半开区间；展示层ms_to_str+Setting.timezone；analytics去strftime改聚合 |
-| 2026-11 第十七批（全项目审查修复） | 5路并行深度审查+逐项修复：P0（_parse_config漏析6新字段/api_v1公网死代码+漏await/房间子进程线程池耗尽与僵尸/艾特退款清配置/子库缺WAL/游客AppID泄露/v7 MySQL顺序）；P1（浏览器双页分离消串行瓶颈/v8事件表timestamp索引+SQL整数分桶聚合/发送队列水位降级/PBKDF2 600k+口令8位/?token收窄/login/Docker非root/upsert写锁/config_dir锚定数据根/now_local时区统一等20+项）；版本1.2.0+CHANGELOG；376+用例 |
+| 2026-11 第十六批（全库毫秒时间戳） | 31处DateTime列改BigInteger(13位ms)；查询层半开区间；展示层ms_to_str+Setting.timezone；analytics去strftime改聚合。2026-11-11迁移器重置：无生产库，历史迁移全部清退、版本表归一v1，结构由create_all直接建出 |
+| 2026-11 第十七批（全项目审查修复） | 5路并行深度审查+逐项修复：P0（_parse_config漏析6新字段/api_v1公网死代码+漏await/房间子进程线程池耗尽与僵尸/艾特退款清配置/子库缺WAL/游客AppID泄露）；P1（浏览器双页分离消串行瓶颈/事件表timestamp索引+SQL整数分桶聚合/发送队列水位降级/PBKDF2 600k+口令8位/?token收窄/login/Docker非root/upsert写锁/config_dir锚定数据根/now_local时区统一等20+项）；版本1.2.0+CHANGELOG；376+用例 |
 | 2026-09 第六十五批（词云首次渲染错位修复） | **根因**：布局脚本在页面样式/布局未稳定时执行（Tailwind CDN异步注入样式、HTMX交换settle前的时序竞争），绝对定位的词被锚定到错误的祖先元素——词云飞出容器盖住导航区，resize触发重排后才归位。**修复**：容器自带`position:relative`内联锚定（不再依赖JS时序）；布局延迟执行——双requestAnimationFrame后先排一次，页面load与htmx:afterSettle再各兜底重排（幂等）；直接加载与HTMX导航两路径实测30词全部落在容器内 |
 | 2026-09 第六十四批（DEBUG日志开关+jieba噪音静默） | **DEBUG日志由`Setting.debug`控制**：Logger新增apply_debug——配置加载后统一应用级别（debug=N默认INFO，logger.debug的排障明细如推送丢弃/分片上传响应不再出现在终端；debug=Y输出DEBUG）；jieba词典构建日志（"Building prefix dict.../Loading model..."）不再污染终端——wordcloud导入时默认静默至WARNING，apply_debug(debug=Y)时随开关联动放开；新增日志开关测试；200测试全过 |
 | 2026-09 第六十三批（数据大屏） | 新增**数据大屏**（/screen，登录后可访问；独立全屏布局无导航页头）：顶栏实时时钟（秒级）+六张KPI卡（机器人状态/监控房间存活/动态订阅轮询/绑定群与推送关系/账号池/数据库体积）+近7天趋势（SVG柱=弹幕、折线=礼物元，悬停明细）+房间今日排行（按收入降序）+最近下播卡片；数据局部30秒HTMX轮询自动刷新（交换后重绘图表）。**鉴权**：游客拒绝——整页302跳登录页、HTMX局部返回HX-Redirect；页头新增「大屏」入口（登录用户可见，新窗口打开，适合投在副屏/电视）。新增访问控制与渲染回归测试；199测试全过；浏览器实测1600×1000全屏布局 |
@@ -186,7 +186,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 | 2026-09 第三十七批（存储架构：每直播间子库） | **直播间事件数据按房间拆分为独立sqlite子库**：弹幕/礼物/舰长/SC/天选/红包/大航海成就/系统事件/房间变更/开播下播10张事件表迁至`data/rooms/<主库文件名>/room_<id>.db`（EventBase元数据，sqlite专用，**不受config数据库类型控制**）；主库仅新增room_db映射表（房间→子库文件名）；DatabaseService路由层：11个写入与单房读取按映射路由，跨房聚合（趋势/汇总/下播记录/表行数）扇出全部子库合并，对外方法签名不变（队列桥/报表/指令零改动）；**旧库事件数据启动自动迁移**（查500→写子库→删主库，数据不丢，幂等）；**动态已见表**：每UP独立子库`data/dynamics/up_<uid>.db`（dynamic_seen表，动态ID持久判重——发布后删除的旧动态/进程重启均不再触发推送，替代旧last_seen内存比较；动态是UP维度故按同样隔离原则落到每UP子库而非房间子库）；Web面板数据库体积改为主库+全部子库合计；新增专项测试（路由/扇出/迁移/动态判重）；174测试全过、静态零告警 |
 | 2026-09 第三十六批（开播推送按钮） | 开播推送携带「进入直播间」按钮keyboard：线框样式(style=0)、所有人可点击(permission.type=2)、跳转`bilibili://live/房间号`（唤起B站客户端）；bot层send_group_message/media支持keyboard参数（**带按钮发送失败自动去按钮重发**——按钮需平台单独授权，保证推送必达）；keyboard经子进程队列桥透传（开播推送从房间子进程发出）；富媒体失败回退文本同样携带按钮；自定义bot鸭子类型兼容（签名探测回退旧调用）。后按官方v2群消息接口文档修正按钮字段：style=1蓝色线框（0为灰）、visited_label点击后文字（无visited_color字段）、移除非文档字段clicked_data/at_bot_show、补unsupport_tips版本过低提示 | 新增`Setting.debug`（Y/N，默认N）：开启后收到群聊/私聊消息时输出发送者身份明细（user_openid/member_openid/union_openid/union_user_account/username/member_role/id，仅输出携带的字段；群消息附group_openid）；QQBotClient经构造参数透传至_PushClient；支持.env/环境变量覆盖；README配置样例同步 |
 
-各批次过程细节见REVIEW.md（十轮审查记录）与git历史。
+各批次过程细节见REVIEW.md（十三轮审查记录）与git历史。
 
 ## 真机验证状态
 
@@ -218,13 +218,13 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ```bash
 pip install -e .           # 安装（自动安装全部依赖，含PyPI的qq-botpy-v2）
 pip install -e ".[dev]"    # 开发环境
-pytest tests/              # 单元测试（318个，无需联网）
+pytest tests/              # 单元测试（381个，无需联网）
 flake8 src/ tests/         # lint（零告警）
 blivepost -c config.yaml   # 运行；chromium装到运行目录ms-playwright/（已装秒级跳过）
 
 # Docker
 docker build -t blivepost .
-docker run -v $(pwd)/config.yaml:/app/config.yaml -v $(pwd)/data:/app/data -p 8080:8080 blivepost
+docker compose up --build -d   # 推荐；等价 docker run -p 127.0.0.1:18080:8080 blivepost
 
 # 密钥经环境变量（推荐）或工作目录.env文件
 export BLIVEPOST_QQBOT_APP_SECRET="..."   # 敏感信息不落config.yaml
@@ -241,4 +241,4 @@ export BLIVEPOST_ADMIN_OPENIDS="openid1,openid2"
 - Redis不可达时0.5秒TCP预检快速跳过，不拖慢启动
 - 多实例部署：各实例独立工作目录即可完全隔离（chromium也随目录隔离）
 - 数据库体积超阈值私聊提醒主管理员；代码不自动删除数据
-- 审查报告见REVIEW.md（十轮，最新2026-11-10）
+- 审查报告见REVIEW.md（十三轮，最新2026-11-11）

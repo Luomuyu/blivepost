@@ -214,21 +214,31 @@ class AuthMixin:
                         httponly=True, samesite="Lax", path="/", secure=secure)
 
     async def _auth_token_to_admin(self, request):
-        """/login?token=管理员快捷令牌→创建管理员会话并重定向到干净URL
+        """/login?token=管理员快捷令牌→创建管理员会话并重定向首页
 
         仅/login路径生效（v1.2.0审查收窄：?token=经URL传播会落入浏览器
         历史/代理日志/Referer；其余路径用X-Web-Token头）。无令牌返回None。
+
+        防爆破：web_token兼作会话签名密钥派生源，猜中即管理员——令牌
+        尝试失败按IP计入登录失败锁定（复用表单登录的窗口/锁定机制），
+        IP锁定期间直接拒绝尝试。
         """
         if (request.path or "/") != "/login":
             return None
         provided = request.query.get("token") or ""
-        if not (self.token and provided and
-                secrets.compare_digest(provided.encode("utf-8"),
-                                        self.token.encode("utf-8"))):
+        if not provided:
             return None
+        ip_key = f"ip:{request.remote or 'unknown'}"
+        if self._login_locked(ip_key):
+            return None
+        if not (self.token and secrets.compare_digest(
+                provided.encode("utf-8"), self.token.encode("utf-8"))):
+            self._record_login_failure(ip_key)
+            logger.warning(f"Web面板令牌校验失败：{request.remote}")
+            return None
+        self._clear_login_failures(ip_key)
         sid = self._create_session(self.admin_user, is_admin=True)
-        target = request.path or "/"
-        resp = web.HTTPFound(target)
+        resp = web.HTTPFound("/")
         self._set_session_cookie(resp, sid, request)
         logger.info(f"Web面板令牌登录（管理员）：{request.remote}")
         return resp

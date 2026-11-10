@@ -93,12 +93,24 @@ function renderSpeakers(items){
     el.innerHTML = '<tr><td colspan="3" class="py-6 text-center text-slate-500">暂无数据</td></tr>';
     return;
   }
-  el.innerHTML = items.slice(0, 20).map((u, i) => `
-    <tr class="border-t border-slate-800">
-      <td class="py-2 pr-2 text-slate-500">${i + 1}</td>
-      <td class="py-2 pr-2 text-slate-300">${u.uname || u.uid}</td>
-      <td class="py-2 pr-2 kpi-num text-blue-400">${u.count}</td>
-    </tr>`).join('');
+  // uname来自观众弹幕（外部可控）：经DOM API+textContent渲染，
+  // 不得innerHTML拼接（存储型XSS会在面板源执行脚本）
+  el.replaceChildren();
+  items.slice(0, 20).forEach((u, i) => {
+    const tr = document.createElement('tr');
+    tr.className = 'border-t border-slate-800';
+    const tdRank = document.createElement('td');
+    tdRank.className = 'py-2 pr-2 text-slate-500';
+    tdRank.textContent = i + 1;
+    const tdName = document.createElement('td');
+    tdName.className = 'py-2 pr-2 text-slate-300';
+    tdName.textContent = u.uname || u.uid;
+    const tdCount = document.createElement('td');
+    tdCount.className = 'py-2 pr-2 kpi-num text-blue-400';
+    tdCount.textContent = u.count;
+    tr.append(tdRank, tdName, tdCount);
+    el.append(tr);
+  });
 }
 
 function renderDistribution(items){
