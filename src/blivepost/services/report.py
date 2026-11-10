@@ -258,8 +258,8 @@ class DailyReportJob:
         return (
             f"{title}直播间{room_id} {s['day']}\n"
             f"· 弹幕：{s['danmaku_count']}条\n"
-            f"· 礼物：{s['gift_gold']}元（{s['gift_count']}次）\n"
-            f"· 上舰：{s['ship_total']}元（{s['ship_count']}次）\n"
-            f"· SC：{s['sc_total']}元（{s['sc_count']}次）\n"
+            f"· 礼物：{s['gift_gold']:.2f}元（{s['gift_count']}次）\n"
+            f"· 上舰：{s['ship_total']:.2f}元（{s['ship_count']}次）\n"
+            f"· SC：{s['sc_total']:.2f}元（{s['sc_count']}次）\n"
             f"· 红包：{s['red_pocket']}电池"
         )

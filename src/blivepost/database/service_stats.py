@@ -80,7 +80,8 @@ class StatsMixin:
                 for k, v in other.items():
                     if k == "day":
                         continue
-                    merged[k] = round(merged[k] + v, 1) if isinstance(merged[k], float) \
+                    # 收入类保留两位到分位（避免浮点尾差如4.499999999999999）
+                    merged[k] = round(merged[k] + v, 2) if isinstance(merged[k], float) \
                         else merged[k] + v
             return merged
 
@@ -141,9 +142,10 @@ class StatsMixin:
                 row = res.one()
 
                 summary["danmaku_count"] = row.danmaku_count or 0
-                summary["gift_gold"] = round(int(row.gift_gold) / 1000, 1)
+                # 收入类保留两位到分位（瓜子÷1000得元，统一round(...,2)防浮点尾差）
+                summary["gift_gold"] = round(int(row.gift_gold) / 1000, 2)
                 summary["gift_count"] = row.gift_count
-                summary["ship_total"] = round(int(row.ship_gold) / 1000, 1)
+                summary["ship_total"] = round(int(row.ship_gold) / 1000, 2)
                 summary["ship_count"] = row.ship_count
                 summary["sc_total"] = int(row.sc_total)
                 summary["sc_count"] = row.sc_count
@@ -277,6 +279,10 @@ class StatsMixin:
                         for rec in result.scalars().all()
                     )
             merged.sort(key=lambda d: d["end_time"] or datetime.min, reverse=True)
+            # end_time格式化为字符串：裸datetime经json_response序列化会500
+            for row in merged:
+                if row["end_time"] is not None:
+                    row["end_time"] = row["end_time"].strftime("%Y-%m-%d %H:%M")
             return merged[:limit]
         except Exception as e:
             logger.error(f"查询下播记录失败: {e}")
@@ -358,8 +364,9 @@ class StatsMixin:
                 sc = await _by_day(manager, SuperChatRecord, func.sum(SuperChatRecord.price))
                 for day, row in history.items():
                     row["danmaku"] += danmaku.get(day, 0)
-                    row["gift_gold"] = round(row["gift_gold"] + gift.get(day, 0) / 1000, 1)
-                    row["ship_gold"] = round(row["ship_gold"] + ship.get(day, 0) / 1000, 1)
+                    # 收入类保留两位到分位（防浮点尾差）
+                    row["gift_gold"] = round(row["gift_gold"] + gift.get(day, 0) / 1000, 2)
+                    row["ship_gold"] = round(row["ship_gold"] + ship.get(day, 0) / 1000, 2)
                     row["sc_total"] += sc.get(day, 0)
         except Exception as e:
             logger.error(f"查询历史趋势失败: {e}")

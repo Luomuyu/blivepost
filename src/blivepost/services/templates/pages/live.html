@@ -61,6 +61,7 @@
                   {% for g in group_options %}
                   <label class="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-slate-700 text-xs">
                     <input type="checkbox" name="groups" value="{{ g[0] }}" class="accent-blue-500 push-cb"
+                           {% if g[0] in r.push_group_openids %}checked{% endif %}
                            onchange="updatePushDisplay('{{ r.room_id }}')">
                     <span>{{ g[1] or g[0] }}</span>
                     <span class="text-slate-500 font-mono ml-auto">{{ g[0] }}</span>
@@ -226,7 +227,13 @@ function savePush(roomId, groups){
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded', 'HX-Request': 'true'},
     body: body.toString(),
-  }).then(() => {
+  }).then(resp => {
+    if(!resp.ok){
+      /* 静默吞掉401会让"保存无效"毫无反馈——明确提示 */
+      alert(resp.status === 401 ? '保存失败：当前为游客只读，请先登录' :
+            '保存失败（HTTP ' + resp.status + '），请稍后重试');
+      return;
+    }
     collapsePushEditor(roomId);
     refreshLivePage();
   });

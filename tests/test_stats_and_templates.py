@@ -88,9 +88,9 @@ async def test_income_command(env):
     await seed_records(service)
     r = await ch.handle(FakeMsg("/收入 23058", "G"))
     assert "弹幕：2条" in r
-    assert "礼物：1.0元（1次）" in r
-    assert "上舰：138.0元（1次）" in r
-    assert "SC：80元（2次）" in r
+    assert "礼物：1.00元（1次）" in r
+    assert "上舰：138.00元（1次）" in r
+    assert "SC：80.00元（2次）" in r
     assert "红包：20电池" in r
 
 

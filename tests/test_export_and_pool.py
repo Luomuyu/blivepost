@@ -70,9 +70,9 @@ async def test_week_month_query(env):
     await svc.save_gift(room_id=23058, uid=1, uname="u", gift_id=1, gift_name="g",
                         num=10, price=100, coin_type="gold")
     r = await ch.handle(FakeMsg("/收入 23058 周", "G"))
-    assert "礼物：1.0元" in r and "~" in r  # 范围文本
+    assert "礼物：1.00元" in r and "~" in r  # 范围文本
     r = await ch.handle(FakeMsg("/收入 23058 月", "G"))
-    assert "礼物：1.0元" in r
+    assert "礼物：1.00元" in r
 
 
 async def test_summary_range_empty(tmp_path):

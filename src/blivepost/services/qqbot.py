@@ -186,6 +186,8 @@ class QQBotClient:
         # 有界发送队列与工作协程（start时创建；防fire-and-forget任务无限堆积）
         self._send_queue: Optional[asyncio.Queue] = None
         self._send_workers: list = []
+        # 已确认不支持艾特全体的群（发送被拒后降级成功前记录；进程生命周期内不再尝试）
+        self._at_all_unsupported: set = set()
         # 主动消息权限拒绝提示的去重：{group_openid: 上次提示的monotonic时刻}
         self._deny_warned: dict = {}
 
@@ -541,6 +543,9 @@ class QQBotClient:
 
         at_all_groups中的群在正文前嵌入 <qqbot-at-everyone />（@全部成员，
         文本/图文/markdown消息均支持解析；平台每群每日1次配额由调用方判定）。
+
+        艾特全体被平台拒绝（常见：机器人无群管理员权限）时自动去标签降级
+        重发普通消息（消息必达优先于艾特），该群记入本会话不支持集合不再尝试。
         """
         from .push import live_markdown_content
 
@@ -548,15 +553,31 @@ class QQBotClient:
         # <qqbot-at-everyone />也只会消耗该群当日平台配额，无需程序侧防护
         at_all = set(at_all_groups or [])
         success = True
+
+        async def _send_pair(group: str, body: str) -> bool:
+            """单群发送链：Markdown → 文本降级"""
+            sent = await self.send_group_markdown(
+                group, live_markdown_content(body, media), keyboard=keyboard)
+            if not sent:
+                text = body + f"\n图片：{media}" if media else body
+                sent = await self.send_group_message(group, text)
+            return sent
+
         for group in groups:
             group_content = content
-            if group in at_all:
+            use_at_all = group in at_all and group not in self._at_all_unsupported
+            if group in at_all and group in self._at_all_unsupported:
+                logger.info(f"群{group}本会话已确认不支持艾特全体，跳过艾特")
+            if use_at_all:
                 group_content = f"<qqbot-at-everyone /> {content}"
-            sent = await self.send_group_markdown(
-                group, live_markdown_content(group_content, media), keyboard=keyboard)
-            if not sent:
-                text = group_content + f"\n图片：{media}" if media else group_content
-                sent = await self.send_group_message(group, text)
+            sent = await _send_pair(group, group_content)
+            if not sent and use_at_all:
+                # 艾特全体被拒（无群管理员权限等）→ 去标签降级重发，保证消息必达
+                logger.warning(
+                    f"群{group} 艾特全体发送失败（机器人可能无群管理员权限），"
+                    f"降级为普通消息重发")
+                self._at_all_unsupported.add(group)
+                sent = await _send_pair(group, content)
             if not sent:
                 success = False
             await asyncio.sleep(0.5)  # 避免发送过快

@@ -95,8 +95,8 @@ def _aggregate_monthly(daily: list) -> list:
         m["ship_gold"] += row.get("ship_gold", 0) or 0
         m["sc_total"] += row.get("sc_total", 0) or 0
     for m in months.values():
-        m["gift_gold"] = round(m["gift_gold"], 1)
-        m["ship_gold"] = round(m["ship_gold"], 1)
+        m["gift_gold"] = round(m["gift_gold"], 2)
+        m["ship_gold"] = round(m["ship_gold"], 2)
     return [months[k] for k in sorted(months)]
 
 

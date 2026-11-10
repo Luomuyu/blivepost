@@ -241,6 +241,8 @@ class PagesMixin:
                     "streamer": await self.db_service.get_streamer_name(rec.uid)
                                 if rec.uid else "",
                     "push_groups": push_names,
+                    # openid列表：行内群编辑器复选框回显勾选用（push_groups是名称仅展示）
+                    "push_group_openids": list(push_groups),
                     "monitored": bool(push_groups),
                     "alive": bool(push_groups) and self.monitor_manager is not None
                              and self.monitor_manager.has(rec.room_id),

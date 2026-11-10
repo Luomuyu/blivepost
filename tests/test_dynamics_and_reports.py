@@ -190,7 +190,7 @@ async def test_summary_command(env):
     await svc.save_gift(room_id=100, uid=1, uname="u", gift_id=1, gift_name="g",
                         num=10, price=100, coin_type="gold")
     r = await ch.handle(FakeMsg("/汇总", "G1"))
-    assert "汇总" in r and "礼物：1.0元" in r and "1个房间" in r
+    assert "汇总" in r and "礼物：1.00元" in r and "1个房间" in r
     r2 = await ch.handle(FakeMsg("/汇总 周", "G1"))
     assert r2 is not None and "近7天" in r2
 

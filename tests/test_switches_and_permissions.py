@@ -237,11 +237,11 @@ async def test_income_with_date_param(perm_env):
 
     # 默认今天（有数据）
     r = await ch.handle(FakeMsg("/收入 23058", "G"))
-    assert "礼物：1.0元" in r
+    assert "礼物：1.00元" in r
     # 昨天日期（无数据）
     ymd = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
     r = await ch.handle(FakeMsg(f"/收入 23058 {ymd}", "G"))
-    assert "礼物：0.0元（0次）" in r and yesterday.strftime("%Y-%m-%d") in r
+    assert "礼物：0.00元（0次）" in r and yesterday.strftime("%Y-%m-%d") in r
     # 非法日期：正则整体不匹配，命令被忽略
     r = await ch.handle(FakeMsg("/收入 23058 bad", "G"))
     assert r is None
