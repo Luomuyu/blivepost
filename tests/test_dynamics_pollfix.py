@@ -592,3 +592,123 @@ async def test_consumer_dynamic_alert_notifies_admins():
                             "consecutive": 10})
     assert ps.bot_client.sent[0][0] == ["ADM1"]
     assert "111" in ps.bot_client.sent[0][1] and "10" in ps.bot_client.sent[0][1]
+
+
+def test_poll_once_signed_blocked_falls_back_unsigned(monkeypatch):
+    """签名请求被风控(412/非JSON)→自动回退无签名请求并成功解析（2026-11-10真机实证场景）"""
+    import blivepost.services.dynamics as dyn
+
+    class _FakeSigner:
+        def sign_url_params(self, params):
+            return "deadbeef", "1700000000"
+
+    calls = []
+
+    class _Resp:
+        def __init__(self, payload, status=200, text=None):
+            self._payload, self.status, self.text = payload, status, text or ""
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("Expecting value: line 1 column 1 (char 0)")
+            return self._payload
+
+    ok_payload = {"code": 0, "data": {"items": [
+        {"id_str": "900", "modules": {
+            "module_tag": {"text": "置顶"},
+            "module_author": {"name": "UP", "pub_ts": 1}}},
+        {"id_str": "901", "modules": {
+            "module_author": {"name": "UP", "pub_ts": 2}}},
+    ]}}
+
+    def fake_get(url, headers=None, timeout=None):
+        calls.append(url)
+        if "w_rid=" in url:
+            return _Resp(None, status=412, text="<!DOCTYPE html>...")  # 风控HTML
+        return _Resp(ok_payload)
+
+    monkeypatch.setattr(dyn.requests, "get", fake_get)
+    infos = dyn._poll_once(111, cookie_string="buvid3=X; SESSDATA=Y",
+                           wbi=_FakeSigner())
+    assert [i["dynamic_id"] for i in infos] == ["901"]      # 置顶跳过
+    assert len(calls) == 2 and "w_rid=" in calls[0] and "w_rid=" not in calls[1]
+    assert calls[1] == calls[0].split("&wts=")[0]           # 去签名URL
+
+
+def test_poll_once_both_fail_returns_none(monkeypatch):
+    """签名与无签名均失败→None（计异常轮，触发连续告警）"""
+    import blivepost.services.dynamics as dyn
+
+    class _FakeSigner:
+        def sign_url_params(self, params):
+            return "ab", "12"
+
+    class _Resp:
+        status = 412
+
+        def json(self):
+            raise ValueError("Expecting value")
+
+    monkeypatch.setattr(dyn.requests, "get",
+                        lambda url, headers=None, timeout=None: _Resp())
+    assert dyn._poll_once(111, cookie_string="c", wbi=_FakeSigner()) is None
+
+
+def test_poll_once_sends_full_cookie(monkeypatch):
+    """请求头携带完整cookie（buvid3等风控必需项），而非仅SESSDATA"""
+    import blivepost.services.dynamics as dyn
+
+    class _FakeSigner:
+        def sign_url_params(self, params):
+            return "ab", "12"
+
+    captured = {}
+
+    class _Resp:
+        def json(self):
+            return {"code": 0, "data": {"items": []}}
+
+    def fake_get(url, headers=None, timeout=None):
+        captured["cookie"] = headers.get("cookie")
+        return _Resp()
+
+    monkeypatch.setattr(dyn.requests, "get", fake_get)
+    dyn._poll_once(111, cookie_string="buvid3=X; SESSDATA=Y", wbi=_FakeSigner())
+    assert captured["cookie"] == "buvid3=X; SESSDATA=Y"
+
+
+async def test_bind_dynamic_normalizes_room_id_to_uid():
+    """/绑定动态 填房间号→自动换算UP的UID（2026-11-10真机以房间号订阅致轮询错UID）"""
+    from blivepost.services.commands import CommandHandler
+
+    class Store:
+        def __init__(self):
+            self.bound = []
+
+        async def bind_dynamic(self, group, up_uid):
+            self.bound.append(up_uid)
+            return True
+
+        def get_dynamic_up_name(self, up_uid):
+            return ""
+
+    class Mgr:
+        enabled = True
+
+        def __init__(self):
+            self.ensured = []
+
+        async def ensure(self, up_uid, baseline_first=False):
+            self.ensured.append((up_uid, baseline_first))
+            return True, None
+
+    class Db:
+        async def get_room_uid(self, room_id):
+            return 36296621 if room_id == 3060820 else 0
+
+    store, mgr = Store(), Mgr()
+    ch = CommandHandler(store, None, db_service=Db(), dynamic_manager=mgr)
+    reply = await ch._bind_dynamic("G1", 3060820)          # 输入的是房间号
+    assert store.bound == [36296621]                        # 绑定的是UID
+    assert mgr.ensured[0][0] == 36296621
+    assert "已自动换算为UP主UID" in reply

@@ -158,7 +158,8 @@ def test_live_enter_keyboard_structure():
     kb = live_enter_keyboard(9646546)
     btn = kb["content"]["rows"][0]["buttons"][0]
     assert btn["render_data"]["label"] == "进入直播间"
-    assert btn["render_data"]["visited_label"] == "跳转中…"
+    # visited_label已移除：平台无自动恢复能力，设了会停留在"跳转中…"不回弹
+    assert "visited_label" not in btn["render_data"]
     assert btn["render_data"]["style"] == 1  # 蓝色线框（官方style取值：0灰/1蓝线框）
     assert btn["action"]["permission"]["type"] == 2  # 所有人可点击
     assert btn["action"]["type"] == 0  # 跳转按钮

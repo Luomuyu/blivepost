@@ -191,6 +191,18 @@ def _build_cookie_session(cookie_string: str):
     return session
 
 
+async def _parent_watch(interval: float = 30.0) -> None:
+    """父进程存活监视：父进程消失时返回（驱动主循环退出，防泄漏）"""
+    import multiprocessing
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        # 非spawn场景（直接运行本模块）无父进程概念，挂起等取消即可
+        await asyncio.Event().wait()
+        return
+    while parent.is_alive():
+        await asyncio.sleep(interval)
+
+
 async def _room_process_async(
     room_id: int,
     settings: Settings,
@@ -227,11 +239,20 @@ async def _room_process_async(
     stop_task = asyncio.create_task(
         asyncio.to_thread(stop_event.wait), name=f"stop-{room_id}"
     )
+    # 父进程存活自检：主进程被强杀时stop_event不会置位、子进程泄漏续跑
+    # （2026-11-10真机累积多个泄漏进程）——父进程消失则自行退出
+    parent_task = asyncio.create_task(
+        _parent_watch(), name=f"parent-watch-{room_id}"
+    )
     reconcile_task = asyncio.create_task(
         _reconcile_loop(room_id, push_service.bilibili_api, lambda: handler, stop_event)
     )
 
-    done, _ = await asyncio.wait({join_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+    done, _ = await asyncio.wait(
+        {join_task, stop_task, parent_task}, return_when=asyncio.FIRST_COMPLETED)
+
+    if parent_task in done and not stop_task.done():
+        logger.warning(f"房间 {room_id} 父进程已退出，子进程自动结束（防泄漏）")
 
     if stop_task in done and not join_task.done():
         # 主进程要求停止
@@ -246,6 +267,8 @@ async def _room_process_async(
         logger.warning(f"房间 {room_id} 弹幕连接退出: {exc}")
 
     reconcile_task.cancel()
+    if not parent_task.done():
+        parent_task.cancel()
 
 
 def _room_process_main(room_id: int, settings: Settings, push_queue, stop_event,

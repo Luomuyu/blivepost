@@ -38,6 +38,8 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
 }
 POLL_MIN, POLL_MAX = 60, 90  # 轮询间隔随机范围（秒）
+# 连续失败退避区间（风控期降频，让封锁自然冷却）
+BACKOFF_MIN, BACKOFF_MAX = 300, 600
 REBUILD_DELAY = 5
 # 连续异常（请求失败/风控响应）告警阈值（轮）：约10轮*60-90秒≈15分钟，超过后经队列告警一次
 ALERT_FAIL_ROUNDS = 10
@@ -191,13 +193,14 @@ def _extract_content(modules: dict) -> Tuple[str, str]:
     return summary[:80], image
 
 
-def _poll_once(up_uid: int, sessdata: str = "", wbi=None) -> Optional[List[dict]]:
+def _poll_once(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[List[dict]]:
     """
     查询UP主动态列表（置顶跳过，返回全部可见条目）
 
     Args:
         up_uid: UP主UID
-        sessdata: 登录凭证（可选，游客也可查询）
+        cookie_string: 完整cookie（含buvid3等风控必需项；仅SESSDATA会412，
+            2026-11-10真机实证；空串=游客）
         wbi: WBI签名器（轮询循环应传入_WbiSignerCache复用实例）
 
     Returns:
@@ -205,21 +208,40 @@ def _poll_once(up_uid: int, sessdata: str = "", wbi=None) -> Optional[List[dict]
         {"dynamic_id", "author", "pub_ts", "summary", "image"}；请求异常或
         接口风控/错误响应（code!=0，如-352/-412）返回None——与正常空列表
         区分，供连续异常计数告警（_DynamicPollSession）。
+
+    风控自愈（2026-11-10真机实证）：带WBI签名的请求412（平台轮换mixin
+    表致旧签名反被判风控）而无签名+完整cookie正常——签名请求失败时自动
+    回退无签名重试一次；若未来平台强制签名，无签名失败亦计异常轮。
     """
     headers = dict(HEADERS)
-    if sessdata:
-        headers["cookie"] = f"SESSDATA={sessdata}"
-        headers["referer"] = f"https://space.bilibili.com/{up_uid}/dynamic"
-    try:
-        resp = requests.get(
-            _build_dynamic_url(up_uid, wbi), headers=headers, timeout=10
-        )
-        data = resp.json()
-        code = data.get("code")
-        if code != 0:
-            # 接口风控/错误响应：与真实空数据区分，计为异常轮
-            logger.warning(f"查询UP主{up_uid}动态接口返回异常码 {code}")
+    headers["referer"] = f"https://space.bilibili.com/{up_uid}/dynamic"
+    if cookie_string:
+        headers["cookie"] = cookie_string
+
+    def _fetch(url: str) -> Optional[dict]:
+        """单次请求：返回解析后的data dict；风控/异常返回None"""
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            if data.get("code") != 0:
+                logger.warning(f"查询UP主{up_uid}动态接口返回异常码 {data.get('code')}")
+                return None
+            return data
+        except Exception as e:
+            logger.warning(f"查询UP主{up_uid}动态请求失败(HTTP层): {e}")
             return None
+
+    signed_url = _build_dynamic_url(up_uid, wbi)
+    data = _fetch(signed_url)
+    if data is None and "w_rid=" in signed_url:
+        # 签名请求被风控（412/空响应/异常码）→ 去签名重试
+        unsigned_url = signed_url.split("&wts=")[0]
+        logger.info(f"UP主{up_uid} 签名请求被风控，回退无签名请求")
+        data = _fetch(unsigned_url)
+    if data is None:
+        return None
+
+    try:
         items = (data.get("data") or {}).get("items") or []
         infos: List[dict] = []
         for item in items:
@@ -490,10 +512,13 @@ class _DynamicPollSession:
 
 
 def _dynamic_process_main(up_uid: int, push_queue, stop_event,
-                          sessdata: str = "", state_path=None,
+                          cookie_string: str = "", state_path=None,
                           dynamics_dir=None, log_dir=None,
                           baseline_first: bool = False) -> None:
-    """动态轮询子进程入口（spawn）；baseline_first见_DynamicPollSession"""
+    """动态轮询子进程入口（spawn）；baseline_first见_DynamicPollSession
+
+    cookie_string传完整cookie（buvid3等风控必需；仅SESSDATA会412）
+    """
     from ..utils.logger import Logger
 
     # 独立日志文件（blivepost_dyn_<uid>.<日期>.log）：与父进程及房间子进程
@@ -511,7 +536,13 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
     logger = get_logger("dynamic")
 
     logger.info(f"UP主 {up_uid} 动态轮询进程已启动 (pid={os.getpid()})")
+    # 父进程存活自检：主进程被强杀（kill -9/taskkill）时stop_event不会置位，
+    # 子进程会泄漏续跑（2026-11-10真机累积11个泄漏进程）——每轮检查父进程
+    parent_proc = multiprocessing.parent_process()
     while not stop_event.is_set():
+        if parent_proc is not None and not parent_proc.is_alive():
+            logger.warning("父进程已退出，动态轮询子进程自动退出（防泄漏）")
+            return
         # 直播联动：读取主进程批量维护的共享状态文件（子进程不单独发请求），
         # UP主在播时暂停动态轮询以降低请求量
         state = _read_live_state(up_uid, path=state_path)
@@ -526,9 +557,13 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
             stop_event.wait(LIVE_PAUSE_POLL)
             continue
 
-        session.handle(_poll_once(up_uid, sessdata, signer))
-        # 随机间隔轮询
-        stop_event.wait(random.randint(POLL_MIN, POLL_MAX))
+        session.handle(_poll_once(up_uid, cookie_string, signer))
+        # 轮询间隔：正常60-90秒；连续失败≥3轮进入退避（5-10分钟）——
+        # 风控期高频重试只会延长封锁（2026-11-10真机教训），成功后恢复
+        if session.fail_streak >= 3:
+            stop_event.wait(random.randint(BACKOFF_MIN, BACKOFF_MAX))
+        else:
+            stop_event.wait(random.randint(POLL_MIN, POLL_MAX))
 
 
 class DynamicManager:
@@ -592,16 +627,17 @@ class DynamicManager:
             if uid in self._processes and self._processes[uid].is_alive():
                 return False, ""
 
-            sessdata = ""
+            cookie_string = ""
             if self.cookie_pool is not None:
                 account = await self.cookie_pool.acquire()
                 if account is not None:
-                    sessdata = account.sessdata
+                    # 完整cookie（含buvid3等风控必需项；仅SESSDATA实测412）
+                    cookie_string = account.cookie_string or ""
 
             stop_event = self._ctx.Event()
             proc = self._ctx.Process(
                 target=_dynamic_process_main,
-                args=(uid, self.push_queue, stop_event, sessdata, self.state_path,
+                args=(uid, self.push_queue, stop_event, cookie_string, self.state_path,
                       self.dynamics_dir, self.log_dir, baseline_first),
                 name=f"dynamic-{uid}",
             )

@@ -388,9 +388,21 @@ class CommandHandler:
         return HELP_TEXT
 
     async def _bind_dynamic(self, group_openid: str, up_uid: int) -> str:
-        """绑定群与UP主动态（启动轮询进程）"""
+        """绑定群与UP主动态（启动轮询进程；输入房间号时自动归一化为UP的UID）"""
         if self.dynamic_manager is None or not self.dynamic_manager.enabled:
             return "动态监控未启用，请联系机器人所有者在配置中开启（Setting.dynamic_monitor）"
+
+        note = ""
+        # 房间号归一化：填了房间号时换算成主播UID（2026-11-10真机实测
+        # 用户以房间号订阅，轮询的却是错误UID——feed查询空/风控）
+        if self.db_service is not None:
+            try:
+                room_uid = await self.db_service.get_room_uid(up_uid)
+            except Exception:
+                room_uid = 0
+            if room_uid:
+                note = f"\n（输入的{up_uid}是房间号，已自动换算为UP主UID）"
+                up_uid = room_uid
 
         is_new = await self.binding_store.bind_dynamic(group_openid, up_uid)
         # 用户主动订阅：首轮无条件基线化——防止取消订阅后重新订阅时，
@@ -399,13 +411,22 @@ class CommandHandler:
         name = self.binding_store.get_dynamic_up_name(up_uid)
         name_text = f"（{name}）" if name else ""
         if is_new:
-            return f"已订阅UP主{up_uid}{name_text}的动态，更新将推送到本群"
-        return f"UP主{up_uid}{name_text}的动态已在订阅中，本群推送已开启"
+            return f"已订阅UP主{up_uid}{name_text}的动态，更新将推送到本群{note}"
+        return f"UP主{up_uid}{name_text}的动态已在订阅中，本群推送已开启{note}"
 
     async def _unbind_dynamic(self, group_openid: str, up_uid: int) -> str:
-        """解除动态订阅（最后一个订阅群取消后停止轮询进程）"""
+        """解除动态订阅（最后一个订阅群取消后停止轮询进程；房间号自动归一化）"""
         if self.dynamic_manager is None:
             return "动态监控功能不可用"
+
+        # 与绑定同款房间号归一化（用户常以房间号操作）
+        if self.db_service is not None:
+            try:
+                room_uid = await self.db_service.get_room_uid(up_uid)
+            except Exception:
+                room_uid = 0
+            if room_uid:
+                up_uid = room_uid
 
         removed = await self.binding_store.unbind_dynamic(group_openid, up_uid)
         if not removed:

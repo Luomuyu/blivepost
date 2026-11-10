@@ -43,7 +43,8 @@ def live_enter_keyboard(room_id) -> dict:
 
     字段依据官方文档（v2_groups_group_openid_messages.post）：
       - render_data.style: 0=灰色线框 1=蓝色线框 3=白底红字 4=蓝底白字
-      - render_data.visited_label: 点击后按钮文字（无visited_color字段）
+      - 不设render_data.visited_label：平台无点击后自动恢复能力，设了会
+        停留在跳转文案不回弹（真机2026-11-10反馈移除）
       - action.permission.type: 2=所有人
       - action.type: 0=跳转按钮（http或协议链接）
 
@@ -60,7 +61,8 @@ def live_enter_keyboard(room_id) -> dict:
                     "id": "enter_live_room",
                     "render_data": {
                         "label": "进入直播间",
-                        "visited_label": "跳转中…",
+                        # 不设visited_label：平台无"点击后自动恢复"能力，
+                        # 设了会停留在跳转文案不回弹（真机2026-11-10反馈）
                         "style": 1,  # 1=蓝色线框
                     },
                     "action": {
