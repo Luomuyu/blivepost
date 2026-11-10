@@ -14,14 +14,19 @@ import multiprocessing
 import os
 import random
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
 from ..config.settings import Settings
 from ..utils.logger import get_logger
+
+
+if TYPE_CHECKING:
+    from .wbi import WbiSigner
 
 
 logger = get_logger("dynamics")
@@ -34,6 +39,13 @@ HEADERS = {
 }
 POLL_MIN, POLL_MAX = 60, 90  # 轮询间隔随机范围（秒）
 REBUILD_DELAY = 5
+# 连续异常（请求失败/风控响应）告警阈值（轮）：约10轮*60-90秒≈15分钟，超过后经队列告警一次
+ALERT_FAIL_ROUNDS = 10
+# dynamic_seen判重表每UP保留条数上限：超出部分按动态id数值序删除更旧的，
+# 防止长期订阅下表无限膨胀（id为毫秒级递增数字串，数值序即发布序）
+SEEN_KEEP_LIMIT = 500
+# 动态子进程日志目录默认值（未显式指定时与CLI --log-dir默认值一致）
+DEFAULT_LOG_DIR = "logs"
 
 
 def _build_dynamic_url(up_uid: int, wbi=None) -> str:
@@ -42,7 +54,8 @@ def _build_dynamic_url(up_uid: int, wbi=None) -> str:
 
     Args:
         up_uid: UP主UID
-        wbi: WbiSigner实例（None时尝试新建）
+        wbi: WBI签名器（WbiSigner实例或可复用的_WbiSignerCache；
+            None时尝试新建，轮询循环应传入复用实例避免每轮nav取钥）
 
     Returns:
         str: 完整URL
@@ -58,6 +71,58 @@ def _build_dynamic_url(up_uid: int, wbi=None) -> str:
     except Exception as e:
         logger.warning(f"WBI签名失败，使用无签名URL: {e}")
     return f"{DYNAMIC_API_BASE}?{params}"
+
+
+class _WbiSignerCache:
+    """
+    轮询循环内复用的WBI签名器
+
+    每轮新建WbiSigner会导致每UP每60-90秒多发一次nav请求取WBI密钥
+    （nav高频无登录态访问是风控高发点）。WBI密钥约1天有效，这里在
+    轮询循环内复用同一签名器实例，按小时级TTL惰性重建，签名失败
+    （nav取钥失败等）时丢弃实例待下一轮重建。
+
+    实现与WbiSigner相同的sign_url_params鸭子类型接口，可直接作为
+    wbi参数传入_poll_once/_build_dynamic_url。
+    """
+
+    # 外层TTL取12小时（略短于WbiSigner内部到次日零点的密钥缓存）：
+    # 过短（如1小时）会让nav取钥回升到~24次/天/UP，违背降低nav频率的初衷；
+    # 密钥真正失效时签名失败会触发invalidate即时重建，无需依赖短TTL兜底
+    REFRESH_SECONDS = 12 * 3600
+
+    def __init__(self, now: Optional[Callable[[], float]] = None):
+        """
+        Args:
+            now: 时钟函数（可注入，测试用）；默认time.monotonic——TTL判定
+                度量单调流逝时间，不受系统墙钟跳变（NTP校时/休眠唤醒）影响
+        """
+        self._signer: Optional["WbiSigner"] = None
+        self._built_at: float = 0.0
+        self._now: Callable[[], float] = now or time.monotonic
+
+    def _build(self) -> "WbiSigner":
+        from .wbi import WbiSigner
+        self._signer = WbiSigner()
+        self._built_at = self._now()
+        return self._signer
+
+    def acquire(self) -> "WbiSigner":
+        """获取可复用的签名器实例（未创建或超TTL时重建）"""
+        if self._signer is None or self._now() - self._built_at >= self.REFRESH_SECONDS:
+            return self._build()
+        return self._signer
+
+    def invalidate(self) -> None:
+        """签名失败时丢弃实例（下一轮自动重建）"""
+        self._signer = None
+
+    def sign_url_params(self, params: str) -> Tuple[str, str]:
+        """签名URL参数；签名失败（空w_rid）时丢弃实例，降级由调用方处理"""
+        w_rid, wts = self.acquire().sign_url_params(params)
+        if not w_rid:
+            self.invalidate()
+        return w_rid, wts
 
 
 def _extract_content(modules: dict) -> Tuple[str, str]:
@@ -126,16 +191,20 @@ def _extract_content(modules: dict) -> Tuple[str, str]:
     return summary[:80], image
 
 
-def _poll_once(up_uid: int, sessdata: str = "", wbi=None) -> Optional[dict]:
+def _poll_once(up_uid: int, sessdata: str = "", wbi=None) -> Optional[List[dict]]:
     """
-    查询UP主最新动态
+    查询UP主动态列表（置顶跳过，返回全部可见条目）
 
     Args:
         up_uid: UP主UID
         sessdata: 登录凭证（可选，游客也可查询）
+        wbi: WBI签名器（轮询循环应传入_WbiSignerCache复用实例）
 
     Returns:
-        Optional[dict]: {"dynamic_id", "author", "pub_ts"}；查询失败返回None
+        Optional[List[dict]]: 按接口顺序（新到旧）的动态信息列表，每项含
+        {"dynamic_id", "author", "pub_ts", "summary", "image"}；请求异常或
+        接口风控/错误响应（code!=0，如-352/-412）返回None——与正常空列表
+        区分，供连续异常计数告警（_DynamicPollSession）。
     """
     headers = dict(HEADERS)
     if sessdata:
@@ -146,26 +215,34 @@ def _poll_once(up_uid: int, sessdata: str = "", wbi=None) -> Optional[dict]:
             _build_dynamic_url(up_uid, wbi), headers=headers, timeout=10
         )
         data = resp.json()
-        items = data.get("data", {}).get("items") or []
-        if not items:
+        code = data.get("code")
+        if code != 0:
+            # 接口风控/错误响应：与真实空数据区分，计为异常轮
+            logger.warning(f"查询UP主{up_uid}动态接口返回异常码 {code}")
             return None
-        first = items[0]
-        modules = first.get("modules") or {}
-        # 跳过置顶动态
-        if (modules.get("module_tag") or {}).get("text") == "置顶":
-            if len(items) < 2:
-                return None
-            first = items[1]
-            modules = first.get("modules") or {}
-        author = modules.get("module_author") or {}
-        summary, image = _extract_content(modules)
-        return {
-            "dynamic_id": first.get("id_str", ""),
-            "author": (author.get("name") or ""),
-            "pub_ts": author.get("pub_ts") or 0,
-            "summary": summary,
-            "image": image,
-        }
+        items = (data.get("data") or {}).get("items") or []
+        infos: List[dict] = []
+        for item in items:
+            modules = item.get("modules") or {}
+            # 跳过置顶动态。已知行为：发布即置顶的动态在置顶期间被跳过、
+            # 不记入已见；取消置顶后它重新出现在feed中，届时作为"新动态"
+            # 补推（延迟推送）。置顶动态多为长期广告/公告，实时推送反而
+            # 刷屏，此权衡可接受，不改逻辑
+            if (modules.get("module_tag") or {}).get("text") == "置顶":
+                continue
+            dynamic_id = item.get("id_str") or ""
+            if not dynamic_id:
+                continue
+            author = modules.get("module_author") or {}
+            summary, image = _extract_content(modules)
+            infos.append({
+                "dynamic_id": dynamic_id,
+                "author": (author.get("name") or ""),
+                "pub_ts": author.get("pub_ts") or 0,
+                "summary": summary,
+                "image": image,
+            })
+        return infos
     except Exception as e:
         logger.warning(f"查询UP主{up_uid}动态失败: {e}")
         return None
@@ -288,7 +365,8 @@ def load_seen_dynamic_ids(up_uid: int, dynamics_dir=None) -> set:
 
 
 def save_seen_dynamic_ids(up_uid: int, ids, dynamics_dir=None) -> None:
-    """记录动态ID（INSERT OR IGNORE，防止发布后删除的旧动态再次触发）"""
+    """记录动态ID（INSERT OR IGNORE，防止发布后删除的旧动态再次触发）；
+    记录后修剪判重表，按动态id数值序仅保留最新SEEN_KEEP_LIMIT条（防膨胀）"""
     path = _seen_db_path(up_uid, dynamics_dir)
     try:
         _init_seen_db(path)
@@ -299,24 +377,136 @@ def save_seen_dynamic_ids(up_uid: int, ids, dynamics_dir=None) -> None:
                 "VALUES(?, ?, ?)",
                 [(i, up_uid, datetime.now().isoformat(timespec="seconds")) for i in ids],
             )
+            # 修剪：按dynamic_id数值序保留最新SEEN_KEEP_LIMIT条，更旧的删除。
+            # 不做COUNT前置判断——未超限时DELETE无行可删，代价可忽略
+            conn.execute(
+                "DELETE FROM dynamic_seen WHERE rowid NOT IN ("
+                "SELECT rowid FROM dynamic_seen "
+                "ORDER BY CAST(dynamic_id AS INTEGER) DESC LIMIT ?)",
+                (SEEN_KEEP_LIMIT,),
+            )
             conn.commit()
         finally:
             conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        # 写失败仅影响判重（最坏情况：下轮重复推一次），记日志便于排查，
+        # 不中断轮询
+        logger.error(f"记录已见动态失败(UP主{up_uid}): {e}")
+
+
+class _DynamicPollSession:
+    """
+    单UP主轮询会话状态（动态子进程内使用）
+
+    - 漏推修复：一轮取列表中全部未见过的动态（已见ID持久化判重），
+      按发布时间从旧到新逐条经队列上报——UP短时间连发多条时中间
+      动态不再漏推；
+    - 基线轮：首轮仅记录不推送（空库首启/升级防刷屏；baseline_first
+      供重新订阅场景强制基线化，防止停订期间的新动态被一次性补推）；
+    - 风控告警：连续异常（请求失败/风控响应）超过阈值（ALERT_FAIL_ROUNDS轮）
+      时经队列告警一次；恢复正常响应（含空列表）后重置计数（可再次告警），
+      告警后持续异常期间不重复告警。
+    """
+
+    def __init__(self, up_uid: int, seen: set, push_queue, dynamics_dir=None,
+                 alert_rounds: int = ALERT_FAIL_ROUNDS,
+                 baseline_first: bool = False):
+        """
+        Args:
+            up_uid: UP主UID
+            seen: 已见动态ID集合（load_seen_dynamic_ids加载，含持久化判重）
+            push_queue: 跨进程队列（新动态/告警上报主进程）
+            dynamics_dir: 已见动态子库目录
+            alert_rounds: 连续异常告警阈值（轮）
+            baseline_first: True时首轮无条件基线化（seen非空也把当前可见动态
+                全部记为已见、不推送）——用于取消订阅后重新订阅，防止停订
+                期间的新动态被一次性补推；False（默认）按seen表是否为空判定
+                （进程重启/开关恢复等运行中恢复沿用已见记录，不因恢复漏推）
+        """
+        self.up_uid = up_uid
+        self.seen = seen
+        self.push_queue = push_queue
+        self.dynamics_dir = dynamics_dir
+        self.alert_rounds = alert_rounds
+        # 基线轮：首轮仅记录不推送（防升级/首启/重订阅刷屏）。默认seen表
+        # 非空即视为已基线化；baseline_first=True则强制基线化一轮
+        self.baseline = True if baseline_first else not seen
+        self.fail_streak = 0
+        self.alerted = False
+
+    def handle(self, infos: Optional[List[dict]]) -> None:
+        """
+        处理一轮轮询结果
+
+        Args:
+            infos: _poll_once返回的动态列表（None=请求异常/风控响应）
+        """
+        if infos is None:
+            # 仅异常（请求失败/接口风控响应）计连续失败；正常空列表
+            # （UP删光动态/当前全部置顶）是有效响应，与有数据一同走
+            # 下方重置逻辑，不参与告警计数
+            self._count_failure()
+            return
+        # 恢复正常响应（含空列表）：重置连续计数与告警去重标记
+        self.fail_streak = 0
+        self.alerted = False
+        fresh = [i for i in infos
+                 if i.get("dynamic_id") and i["dynamic_id"] not in self.seen]
+        if not fresh:
+            return
+        self.seen.update(i["dynamic_id"] for i in fresh)
+        save_seen_dynamic_ids(
+            self.up_uid, [i["dynamic_id"] for i in fresh], self.dynamics_dir
+        )
+        if self.baseline:
+            self.baseline = False  # 首批仅作基线，不推送
+            return
+        # feed按新到旧返回：按发布时间从旧到新逐条上报，连发多条不漏推
+        for info in sorted(fresh, key=lambda x: x.get("pub_ts") or 0):
+            logger.info(f"UP主 {self.up_uid} 发布新动态 {info['dynamic_id']}")
+            self._put({"type": "dynamic", "up_uid": self.up_uid, **info})
+
+    def _count_failure(self) -> None:
+        """连续异常（请求失败/风控响应）计数，超过阈值经队列告警一次（去重：不重复告警）"""
+        self.fail_streak += 1
+        if self.fail_streak < self.alert_rounds or self.alerted:
+            return
+        self.alerted = True
+        logger.error(
+            f"UP主 {self.up_uid} 动态接口连续{self.fail_streak}轮异常"
+            f"（请求失败/风控），经队列上报管理员告警"
+        )
+        self._put({
+            "type": "dynamic_alert",
+            "up_uid": self.up_uid,
+            "consecutive": self.fail_streak,
+        })
+
+    def _put(self, item: dict) -> None:
+        try:
+            self.push_queue.put(item, timeout=5)
+        except Exception as e:
+            logger.error(f"动态上报写入队列失败: {e}")
 
 
 def _dynamic_process_main(up_uid: int, push_queue, stop_event,
                           sessdata: str = "", state_path=None,
-                          dynamics_dir=None) -> None:
-    """动态轮询子进程入口（spawn）"""
+                          dynamics_dir=None, log_dir=None,
+                          baseline_first: bool = False) -> None:
+    """动态轮询子进程入口（spawn）；baseline_first见_DynamicPollSession"""
     from ..utils.logger import Logger
 
-    Logger().setup(name="blivepost", console=True)
+    # 独立日志文件（blivepost_dyn_<uid>.<日期>.log）：与父进程及房间子进程
+    # 分离，避免多进程同写一文件在Windows轮转时PermissionError丢日志
+    Logger().setup(name="blivepost", log_dir=log_dir or DEFAULT_LOG_DIR,
+                   console=True, log_suffix=f"dyn_{up_uid}")
     # 已见动态列表持久于每UP独立sqlite子库：按ID判重，发布后删除的
     # 旧动态/进程重启都不会再触发推送（替代旧last_seen比较逻辑）
     seen = load_seen_dynamic_ids(up_uid, dynamics_dir)
-    baseline = not seen  # 空库首轮：仅记录基线不推送（防升级/首启刷屏）
+    session = _DynamicPollSession(up_uid, seen, push_queue, dynamics_dir,
+                                  baseline_first=baseline_first)
+    # WBI签名器在轮询循环内复用（小时级TTL惰性重建+失败重建），避免每轮nav取钥
+    signer = _WbiSignerCache()
     up_live = False
     logger = get_logger("dynamic")
 
@@ -336,22 +526,7 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
             stop_event.wait(LIVE_PAUSE_POLL)
             continue
 
-        info = _poll_once(up_uid, sessdata)
-        if info and info["dynamic_id"]:
-            did = info["dynamic_id"]
-            if did not in seen:
-                seen.add(did)
-                save_seen_dynamic_ids(up_uid, [did], dynamics_dir)
-                if baseline:
-                    baseline = False  # 首条仅作基线，不推送
-                else:
-                    logger.info(f"UP主 {up_uid} 发布新动态 {did}")
-                    try:
-                        push_queue.put(
-                            {"type": "dynamic", "up_uid": up_uid, **info}, timeout=5
-                        )
-                    except Exception as e:
-                        logger.error(f"动态上报写入队列失败: {e}")
+        session.handle(_poll_once(up_uid, sessdata, signer))
         # 随机间隔轮询
         stop_event.wait(random.randint(POLL_MIN, POLL_MAX))
 
@@ -365,7 +540,8 @@ class DynamicManager:
     """
 
     def __init__(self, settings: Settings, push_queue, cookie_pool=None,
-                 enabled: bool = False, state_path=None, dynamics_dir=None):
+                 enabled: bool = False, state_path=None, dynamics_dir=None,
+                 log_dir=None):
         """
         初始化动态管理器
 
@@ -375,6 +551,7 @@ class DynamicManager:
             cookie_pool: Cookie账号池（轮询凭证，可选）
             enabled: 动态监控总开关（Setting.dynamic_monitor，默认关闭）
             state_path: 直播状态共享文件路径（实例私有，默认数据目录）
+            log_dir: 子进程日志目录（None时子进程用默认logs/，独立文件名）
         """
         self.settings = settings
         self.push_queue = push_queue
@@ -382,6 +559,7 @@ class DynamicManager:
         self.enabled = enabled
         self.state_path = state_path
         self.dynamics_dir = dynamics_dir
+        self.log_dir = log_dir
 
         self._ctx = multiprocessing.get_context("spawn")
         self._ups: Dict[int, Any] = {}
@@ -390,12 +568,17 @@ class DynamicManager:
         self._watchers: Dict[int, asyncio.Task] = {}
         self._lock = asyncio.Lock()
 
-    async def ensure(self, up_uid: int) -> Tuple[bool, str]:
+    async def ensure(self, up_uid: int, baseline_first: bool = False) -> Tuple[bool, str]:
         """
         确保UP主动态轮询进程存在（不存在则创建，已存在则忽略）
 
         Args:
             up_uid: UP主UID
+            baseline_first: 新建进程首轮是否无条件基线化（当前可见动态全部
+                记为已见、不推送）。用户主动订阅（命令/面板）传True——防止
+                取消订阅后重新订阅时，停订期间的新动态被一次性补推；
+                False（默认）沿用seen表判重——进程重启/崩溃重建/开关恢复等
+                运行中恢复场景不漏推。进程已存活时本参数无效果
 
         Returns:
             Tuple[bool, str]: (是否新建进程, UP主名，未知时为空串)
@@ -419,7 +602,7 @@ class DynamicManager:
             proc = self._ctx.Process(
                 target=_dynamic_process_main,
                 args=(uid, self.push_queue, stop_event, sessdata, self.state_path,
-                      self.dynamics_dir),
+                      self.dynamics_dir, self.log_dir, baseline_first),
                 name=f"dynamic-{uid}",
             )
             proc.start()
@@ -444,6 +627,7 @@ class DynamicManager:
         await asyncio.sleep(REBUILD_DELAY)
         if up_uid in self._processes:
             await self.remove(up_uid)
+            # 运行中恢复（崩溃重建）：baseline_first保持默认False，沿用seen表判重
             await self.ensure(up_uid)
 
     async def remove(self, up_uid: int) -> bool:

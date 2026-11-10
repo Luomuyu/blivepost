@@ -183,6 +183,8 @@ async def main_async(
     qqbot = None
     monitor_manager = None
     db_manager = None
+    db_service = None
+    dynamic_manager = None
     daily_report = None
     live_watcher = None
     consumer = None
@@ -190,6 +192,7 @@ async def main_async(
     admin_handler = None
     streamer_refresher = None
     group_refresher = None
+    maintainer = None
 
     try:
         # 加载配置（文件不存在时自动生成默认配置）
@@ -273,7 +276,7 @@ async def main_async(
         dynamic_manager = DynamicManager(
             settings, monitor_manager.push_queue, cookie_pool=cookie_pool,
             enabled=settings.message.dynamic_monitor, state_path=state_path,
-            dynamics_dir=dynamics_dir,
+            dynamics_dir=dynamics_dir, log_dir=log_dir,
         )
 
         # 启动QQ官方机器人
@@ -292,11 +295,13 @@ async def main_async(
                     group_admin_openids=_merge_unique(
                         settings.admin.openids, settings.admin.main_openids
                     ),
+                    dynamic_manager=dynamic_manager,
                 ),
                 c2c_handler=admin_handler,
                 contact_handler=ContactEventHandler(
                     contact_store, binding_store, monitor_manager,
-                    db_service=db_service
+                    db_service=db_service,
+                    dynamic_manager=dynamic_manager,
                 ),
             )
             push_service.contact_store = contact_store
@@ -457,6 +462,13 @@ async def main_async(
         except Exception:
             pass
 
+        # 停止动态轮询子进程（与房间监控同级，缺此步泄漏轮询任务）
+        try:
+            if dynamic_manager is not None:
+                await dynamic_manager.stop_all()
+        except Exception:
+            pass
+
         # 停止每日结算、Cookie维护与直播状态watcher
         try:
             if daily_report is not None:
@@ -469,7 +481,8 @@ async def main_async(
         except Exception:
             pass
         try:
-            await maintainer.stop()
+            if maintainer is not None:
+                await maintainer.stop()
         except Exception:
             pass
 
@@ -491,7 +504,12 @@ async def main_async(
         if qqbot:
             await qqbot.stop()
 
-        # 关闭数据库连接
+        # 关闭数据库连接（先释放房间子库engine，再关主库）
+        try:
+            if db_service is not None:
+                await db_service.aclose()
+        except Exception:
+            pass
         if db_manager:
             await db_manager.close()
 

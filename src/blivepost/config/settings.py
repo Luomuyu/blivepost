@@ -50,6 +50,9 @@ class MessageSettings:
     web_panel: bool = False
     web_host: str = "127.0.0.1"
     web_port: int = 8080
+    # Web面板管理员快捷令牌（?token=即管理员登录）；非空时兼作Web会话签名密钥
+    # 的派生来源：登录态跨进程重启保留，修改token即全量登出（未配置时密钥为
+    # 进程随机，重启后Web登录态失效——见services/webpanel_auth.py）
     web_token: str = ""
     # Web后台管理员（config设置；口令非空才启用后台登录，登录后可管用户/推送开关/导出）
     web_admin_user: str = "admin"
@@ -240,9 +243,9 @@ Admin: # 管理员设置
 QQBot: # QQ官方机器人设置 (基于botpy)
   app_id: "" # 机器人AppID
   app_secret: "" # 机器人AppSecret
-  # 推送目标群通过群指令建立绑定（@机器人发送 /绑定 房间号），无需在此配置
+  # 推送目标群通过群指令（@机器人 /监控 房间号）或Web面板添加，无需在此配置
 
-# 动态监控通过群指令订阅（@机器人 /绑定动态 UP主UID），无需配置
+# 动态监控通过群指令订阅（@机器人 /绑定动态 UP主UID）或Web面板添加，无需配置
 
 Live: # 直播间设置
   live_id: "" # 直播间房间号
@@ -257,10 +260,10 @@ Setting: # 消息推送设置
   daily_report: "N" # 每日结算推送 (每天00:05, 仅推有数据的房间, 消耗主动消息配额)
   weekly_report: "N" # 每周结算推送 (每周一00:05推送上周汇总)
   monthly_report: "N" # 每月结算推送 (每月1日00:05推送上月汇总)
-  web_panel: "N" # Web状态面板 (只读, 默认仅本机访问)
+  web_panel: "N" # Web状态面板 (游客只读/登录可操作, 默认仅本机访问)
   web_host: "127.0.0.1" # Web面板监听地址
   web_port: 8080 # Web面板端口
-  web_token: "" # Web面板管理员快捷令牌 (设置后 ?token= 即管理员登录, 免输账号密码)
+  web_token: "" # Web面板管理员快捷令牌 (设置后 ?token= 即管理员登录, 免输账号密码; 亦作Web会话签名密钥来源, 配置后登录态跨进程重启保留, 修改即全量登出)
   web_admin_user: "admin" # Web后台管理员账号 (管理员来自config不入库)
   web_admin_password: "" # Web后台管理员口令 (非空才启用登录与后台; 前台用户由后台添加)
   data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)
@@ -293,6 +296,13 @@ Template: # 推送文案模板 (可选, 留空使用内置模板; str.format占�
   live_start: ""
   # 下播模板额外占位符: {like_count} {duration} {danmaku_count} {gold_count} {ship_count} {sc_count}
   live_end: ""
+  # 其余可选模板: anchor({award} {danmu} {require}) / guard_achievement({content})
+  # cut_off({reason}) / warning({reason}) / daily_report({day} {rooms} 等汇总字段)
+  anchor: ""
+  guard_achievement: ""
+  cut_off: ""
+  warning: ""
+  daily_report: ""
 """
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(default_config, encoding="utf-8")

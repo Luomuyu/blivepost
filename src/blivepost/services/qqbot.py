@@ -156,9 +156,16 @@ class QQBotClient:
     官方消息接口要求机器人保持websocket在线，因此botpy Client在
     start()后常驻后台任务，消息发送通过client.api进行。
 
-    消息发送入口push()是线程安全的：在事件循环内直接创建任务，
+    消息发送入口push()是线程安全的：经有界发送队列由固定数量
+    工作协程消费（限制并发与内存占用，队列满时丢弃并告警），
     在其他线程（如动态监控线程）中调度到主事件循环。
     """
+
+    # 发送队列容量与工作协程数：超出容量的推送丢弃（防内存无限增长）
+    SEND_QUEUE_SIZE = 200
+    SEND_WORKERS = 2
+    # stop时等待队列排空的上限秒数
+    SEND_DRAIN_TIMEOUT = 30.0
 
     def __init__(self, app_id: str, app_secret: str, debug: bool = False):
         """
@@ -176,6 +183,9 @@ class QQBotClient:
         self._client: Optional[_PushClient] = None
         self._task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # 有界发送队列与工作协程（start时创建；防fire-and-forget任务无限堆积）
+        self._send_queue: Optional[asyncio.Queue] = None
+        self._send_workers: list = []
         # 主动消息权限拒绝提示的去重：{group_openid: 上次提示的monotonic时刻}
         self._deny_warned: dict = {}
 
@@ -255,6 +265,12 @@ class QQBotClient:
             return
 
         self._loop = asyncio.get_running_loop()
+        # 有界发送队列：push入队、固定worker消费（限并发+背压丢弃）
+        self._send_queue = asyncio.Queue(maxsize=self.SEND_QUEUE_SIZE)
+        self._send_workers = [
+            asyncio.create_task(self._send_worker(), name=f"qqbot-send-{i}")
+            for i in range(self.SEND_WORKERS)
+        ]
         intents = (
             botpy.Intents(public_messages=True)
             if (command_handler is not None or c2c_handler is not None
@@ -324,8 +340,28 @@ class QQBotClient:
             logger.error(f"botpy客户端异常退出: {exc}")
 
     async def stop(self) -> None:
-        """停止botpy客户端（含start循环派生的ws/心跳/事件子任务）"""
-        # 先取消start任务：botpy的start循环经ensure_future派生ws子任务且不保留
+        """停止botpy客户端（含发送worker与start循环派生的ws/心跳/事件子任务）"""
+        # 先收尾发送worker：排入哨兵让worker处理完队列余量后退出，
+        # 超时（或队列满无法排哨兵）则取消（放弃剩余未发送消息）
+        send_queue = self._send_queue
+        if self._send_workers and send_queue is not None:
+            for _ in self._send_workers:
+                try:
+                    send_queue.put_nowait(None)
+                except asyncio.QueueFull:
+                    break
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._send_workers),
+                    timeout=self.SEND_DRAIN_TIMEOUT,
+                )
+            except (asyncio.TimeoutError, Exception):
+                for worker in self._send_workers:
+                    worker.cancel()
+            self._send_workers = []
+            self._send_queue = None
+
+        # 取消start任务：botpy的start循环经ensure_future派生ws子任务且不保留
         # 句柄，取消不会传播到子任务；若留给事件循环拆除时强杀，会产出
         # CancelledError回溯、"会话未正常回队"与Unclosed client session噪音
         if self._task is not None:
@@ -494,70 +530,126 @@ class QQBotClient:
 
     async def _broadcast_message(self, groups: Iterable[str], content: str,
                                  media: Optional[str] = None,
-                                 keyboard: Optional[dict] = None) -> bool:
+                                 keyboard: Optional[dict] = None,
+                                 at_all_groups: Optional[Iterable[str]] = None) -> bool:
         """
         消息推送降级链（单群）：Markdown(原生嵌图/按钮) → 文本
 
         所有推送统一Markdown优先——原生markdown支持图片语法（免模板、
         群聊对所有机器人开放），封面/图片直接嵌入正文，按钮仅Markdown下
         渲染；Markdown失败（无权限/接口异常）降级纯文本（图片以URL保留）。
+
+        at_all_groups中的群在正文前嵌入 <qqbot-at-everyone />（@全部成员，
+        文本/图文/markdown消息均支持解析；平台每群每日1次配额由调用方判定）。
         """
         from .push import live_markdown_content
 
+        # 注：@全体配额由平台按群每日1次硬性限制——正文即便被注入
+        # <qqbot-at-everyone />也只会消耗该群当日平台配额，无需程序侧防护
+        at_all = set(at_all_groups or [])
         success = True
         for group in groups:
+            group_content = content
+            if group in at_all:
+                group_content = f"<qqbot-at-everyone /> {content}"
             sent = await self.send_group_markdown(
-                group, live_markdown_content(content, media), keyboard=keyboard)
+                group, live_markdown_content(group_content, media), keyboard=keyboard)
             if not sent:
-                text = content + f"\n图片：{media}" if media else content
+                text = group_content + f"\n图片：{media}" if media else group_content
                 sent = await self.send_group_message(group, text)
             if not sent:
                 success = False
             await asyncio.sleep(0.5)  # 避免发送过快
         return success
 
+    async def _send_worker(self) -> None:
+        """发送工作协程：从有界队列取任务串行执行（None为stop哨兵）"""
+        assert self._send_queue is not None
+        while True:
+            coro = await self._send_queue.get()
+            try:
+                if coro is None:
+                    return  # stop哨兵：退出worker
+                await coro
+            except asyncio.CancelledError:
+                coro.close()
+                raise
+            except Exception as e:
+                logger.error(f"推送任务执行失败: {e}")
+            finally:
+                self._send_queue.task_done()
+
+    def _enqueue_send(self, coro) -> bool:
+        """把推送协程放入有界队列（须在主循环内调用）；满则丢弃；stop收尾窗口拒绝"""
+        queue = self._send_queue
+        if queue is None:
+            # stop()先置空队列后取消client任务的窗口期：直接丢弃防AssertionError
+            coro.close()
+            return False
+        try:
+            queue.put_nowait(coro)
+            return True
+        except asyncio.QueueFull:
+            coro.close()
+            logger.error(
+                f"发送队列已满（{self.SEND_QUEUE_SIZE}），丢弃一条推送——"
+                f"消费速率不足，检查发送失败日志")
+            return False
+
     def push(self, content: str, groups: Iterable[str],
              keyboard: Optional[dict] = None,
-             media: Optional[str] = None) -> bool:
+             media: Optional[str] = None,
+             at_all_groups: Optional[Iterable[str]] = None) -> bool:
         """
         线程安全的统一推送入口（同步，立即返回）
 
         Markdown(嵌图/按钮)优先 → 富媒体 → 文本。
+        经有界队列由worker消费，队列满时丢弃并告警（防任务无限堆积）。
 
         Args:
             content: 文本内容
             groups: 群openid列表
             keyboard: 按钮keyboard结构（可选，仅开播推送传入）
             media: 图片URL（可选，Markdown嵌图/富媒体共用）
+            at_all_groups: 需要艾特全体的群（可选，正文嵌入<qqbot-at-everyone />；
+                每群每日配额由调用方——消费者——判定）
 
         Returns:
-            bool: 是否成功调度发送任务
+            bool: 是否成功入队（跨线程调用时恒True，丢弃仅记日志）
         """
         if self._loop is None or not self.started:
             logger.error("QQ官方机器人未启动，消息发送失败")
             return False
 
-        coro = self._broadcast_message(groups, content, media=media, keyboard=keyboard)
+        coro = self._broadcast_message(groups, content, media=media, keyboard=keyboard,
+                                       at_all_groups=at_all_groups)
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
             current_loop = None
 
         if current_loop is self._loop:
-            asyncio.create_task(coro)
-        else:
-            asyncio.run_coroutine_threadsafe(coro, self._loop)
+            return self._enqueue_send(coro)
+
+        async def _threadsafe_enqueue() -> bool:
+            return self._enqueue_send(coro)
+
+        # 跨线程：调度入队到主循环（非阻塞，无法同步取回结果）
+        asyncio.run_coroutine_threadsafe(_threadsafe_enqueue(), self._loop)
         return True
 
     def push_media(self, image_url: str, content: str, groups: Iterable[str],
-                   keyboard: Optional[dict] = None) -> bool:
+                   keyboard: Optional[dict] = None,
+                   at_all_groups: Optional[Iterable[str]] = None) -> bool:
         """富媒体推送兼容入口（等同push携带media）"""
-        return self.push(content, groups, keyboard=keyboard, media=image_url)
+        return self.push(content, groups, keyboard=keyboard, media=image_url,
+                         at_all_groups=at_all_groups)
 
     def broadcast(self, groups: Iterable[str], content: str,
-                  keyboard: Optional[dict] = None) -> bool:
+                  keyboard: Optional[dict] = None,
+                  at_all_groups: Optional[Iterable[str]] = None) -> bool:
         """文本广播兼容入口（内部走markdown优先降级链）"""
-        return self.push(content, groups, keyboard=keyboard)
+        return self.push(content, groups, keyboard=keyboard, at_all_groups=at_all_groups)
 
     async def send_group_markdown(self, group_openid: str, content: str,
                                   keyboard: Optional[dict] = None) -> bool:

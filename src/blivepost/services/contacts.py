@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ..database.service import DatabaseService
     from ..core.manager import MonitorManager
     from .bindings import BindingStore
+    from .dynamics import DynamicManager
 
 
 logger = get_logger("contacts")
@@ -147,7 +148,8 @@ class ContactEventHandler:
     联系人平台事件处理器
 
     处理加/删好友、入群/退群、消息接收开关事件：
-    退群时自动清理该群的全部绑定并停止监控（按需求）。
+    退群时自动清理该群的全部绑定（房间/动态订阅）与监控，并清除
+    该群的@全体配额记录（按需求）。
     """
 
     def __init__(
@@ -156,30 +158,56 @@ class ContactEventHandler:
         binding_store: "BindingStore",
         monitor_manager: "MonitorManager",
         db_service: Optional["DatabaseService"] = None,
+        dynamic_manager: Optional["DynamicManager"] = None,
     ):
         self.contact_store = contact_store
         self.binding_store = binding_store
         self.monitor_manager = monitor_manager
         self.db_service = db_service
+        self.dynamic_manager = dynamic_manager
 
     async def on_group_add(self, group_openid: str) -> None:
         await self.contact_store.save_group(group_openid, del_flag=0, receive=1)
         logger.info(f"机器人加入群 {group_openid}")
 
     async def on_group_del(self, group_openid: str) -> None:
-        """被移出群：标记移除 + 清理该群全部绑定与监控"""
+        """被移出群：标记移除 + 清理该群全部绑定与监控（房间/动态/@全体配额）"""
         await self.contact_store.save_group(group_openid, del_flag=1, receive=0)
         logger.warning(f"机器人被移出群 {group_openid}，清理绑定与监控")
 
-        # 清理该群全部房间绑定并停止监控
+        # 清理该群全部房间绑定；仅当房间再无其他监控群时才停止监控子进程
+        # （其他群仍绑定/监控同一房间时误停会导致它们的推送一并中断）
         rooms = self._rooms_bound_to(group_openid)
         for rid in rooms:
             await self.binding_store.unbind(group_openid, rid)
             if self.monitor_manager is not None:
+                others = self.binding_store.get_monitored_groups(rid)
+                if others:
+                    logger.info(f"房间{rid}仍有{len(others)}个群监控，保留监控任务")
+                    continue
                 await self.monitor_manager.remove(rid)
+
+        # 清理该群全部动态订阅；仅当UP主再无其他订阅群时才停止轮询子进程
+        # （其他群仍订阅同一UP主时误停会导致它们的动态推送一并中断；
+        #   dynamic_manager未注入时跳过停进程，但解绑仍须完成）
+        for up_uid in self._dynamic_ups_subscribed_by(group_openid):
+            await self.binding_store.unbind_dynamic(group_openid, up_uid)
+            if self.dynamic_manager is not None:
+                others = self.binding_store.get_dynamic_groups(up_uid)
+                if others:
+                    logger.info(f"UP主{up_uid}仍有{len(others)}个群订阅，保留轮询进程")
+                    continue
+                await self.dynamic_manager.remove(up_uid)
+
+        # 清理该群的@全体配额记录（退群残留；重进群后重新计数）
+        if self.db_service is not None:
+            await self.db_service.clear_group_at_all(group_openid)
 
     def _rooms_bound_to(self, group_openid: str) -> List[int]:
         return [b.room_id for b in self.binding_store.get_group_bindings(group_openid)]
+
+    def _dynamic_ups_subscribed_by(self, group_openid: str) -> List[int]:
+        return self.binding_store.get_group_dynamic_ups(group_openid)
 
     async def on_group_receive(self, group_openid: str, receive: int) -> None:
         logger.info(f"群 {group_openid} {'开启' if receive else '关闭'}了消息接收")

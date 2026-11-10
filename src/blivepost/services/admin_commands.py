@@ -320,7 +320,7 @@ class AdminCommandHandler:
         if account.status == "active":
             return f"账号 {uid}（{account.nickname}）本来就是可用状态"
 
-        ok, _, uname = verify_nav(account.cookie_string)
+        ok, _, uname = await asyncio.to_thread(verify_nav, account.cookie_string)
         if not ok:
             return (
                 f"账号 {uid} 的Cookie已无法通过登录态验证，无法恢复。\n"

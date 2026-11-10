@@ -6,6 +6,7 @@
 import inspect
 import re
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -20,6 +21,8 @@ logger = get_logger("push")
 _CQ_IMAGE_RE = re.compile(r"\[CQ:image,[^\]]*?file=([^\],]+)[^\]]*\]")
 # 其余CQ码：直接移除（官方机器人不支持@全体成员等CQ功能）
 _CQ_RE = re.compile(r"\[CQ:[^\]]+\]")
+# "直播地址：<URL>"整行：Markdown开播消息中移除（跳转入口由按钮承担）
+_LIVE_URL_LINE_RE = re.compile(r"^\s*直播地址：\S+\s*$")
 
 
 def _supports_kwarg(func, name: str) -> bool:
@@ -63,7 +66,8 @@ def live_enter_keyboard(room_id) -> dict:
                     "action": {
                         "type": 0,  # 0=跳转按钮
                         "permission": {"type": 2},  # 2=所有人可点击
-                        "data": f"bilibili://live/{room_id}",
+                        # https链接（非bilibili://协议：QQ不支持通过协议链接拉起B站客户端）
+                        "data": f"https://live.bilibili.com/{room_id}",
                         "unsupport_tips": "当前QQ版本过低，无法跳转直播间",
                     },
                 }]
@@ -78,7 +82,14 @@ def live_markdown_content(content: str, media: Optional[str]) -> str:
 
     图片语法按官方文档：![替代文字 #宽px #高px](图片URL)，
     URL需公网可访问（平台下载转存）。
+
+    Markdown消息仅保留「进入直播间」按钮作为跳转入口（按钮仅在此
+    消息类型下渲染），移除正文中的"直播地址："行；富媒体与文本
+    降级仍用原始content（保留该行，无按钮可点）。
     """
+    lines = [ln for ln in content.splitlines()
+             if not _LIVE_URL_LINE_RE.match(ln)]
+    content = "\n".join(lines)
     if not media:
         return content
     return f"{content}\n\n![封面 #640px #360px]({media})"
@@ -122,27 +133,48 @@ class PushService:
         # ContactStore实例（可选）：发送前过滤未开启消息接收的群
         self.contact_store: Any = None
         # 当前推送所属全局开关名（子进程入队时随消息携带，主进程按运行时开关判定）
-        self._switch_tag: Optional[str] = None
+        # ContextVar存储：并发协程各自隔离（token恢复），见_switch/_groups
+        self._switch_tag_var: ContextVar[Optional[str]] = ContextVar(
+            "push_switch_tag", default=None)
         # 推送目标群覆盖（主进程消费者按群独立设置过滤后注入；None=按绑定解析）
-        self._groups_override: Optional[List[str]] = None
+        self._groups_override_var: ContextVar[Optional[List[str]]] = ContextVar(
+            "push_groups_override", default=None)
+
+    @property
+    def _switch_tag(self) -> Optional[str]:
+        """当前推送所属全局开关名（只读代理；QueuePushService._forward读取）"""
+        return self._switch_tag_var.get()
+
+    @property
+    def _groups_override(self) -> Optional[List[str]]:
+        """推送目标群覆盖（只读代理；None=按绑定解析）"""
+        return self._groups_override_var.get()
 
     @contextmanager
     def _switch(self, name: str):
-        """标记一段推送所属的全局开关（主进程侧运行时判定是否发送）"""
-        self._switch_tag = name
+        """标记一段推送所属的全局开关（主进程侧运行时判定是否发送）
+
+        ContextVar按协程上下文隔离：多个协程并发进入互不覆盖；
+        token恢复：退出（含异常）后还原先前值，嵌套安全。
+        """
+        token = self._switch_tag_var.set(name)
         try:
             yield
         finally:
-            self._switch_tag = None
+            self._switch_tag_var.reset(token)
 
     @contextmanager
     def _groups(self, allowed: Optional[List[str]]):
-        """限定一段推送的目标群（群独立设置过滤结果；None=不限定）"""
-        self._groups_override = allowed
+        """限定一段推送的目标群（群独立设置过滤结果；None=不限定）
+
+        ContextVar按协程上下文隔离：多个协程并发进入互不覆盖；
+        token恢复：退出（含异常）后还原先前值，嵌套安全。
+        """
+        token = self._groups_override_var.set(allowed)
         try:
             yield
         finally:
-            self._groups_override = None
+            self._groups_override_var.reset(token)
 
     @staticmethod
     def _render(template: str, fields: dict) -> Optional[str]:
@@ -184,6 +216,13 @@ class PushService:
         if self._groups_override is not None:
             allow = set(self._groups_override)
             groups = [g for g in groups if g in allow]
+        return groups
+
+    def resolve_push_groups(self, room_id) -> List[str]:
+        """推送目标群公开版（绑定解析+消息接收过滤；消费者判定艾特全体配额用）"""
+        groups = self._resolve_groups(room_id)
+        if groups and self.contact_store is not None:
+            groups = self.contact_store.filter_receivable_groups(groups)
         return groups
 
     def send_message(self, message: str, room_id=None, keyboard: Optional[dict] = None) -> bool:
@@ -289,13 +328,16 @@ class PushService:
 
     def push_live_start_from_parts(self, content: str, media: Optional[str],
                                    room_id: Optional[int],
-                                   keyboard: Optional[dict]) -> bool:
+                                   keyboard: Optional[dict],
+                                   at_all_groups: Optional[List[str]] = None) -> bool:
         """
         开播推送（部件版，本地与子进程队列共用）
 
         按钮仅在Markdown消息（msg_type=2，官方示例搭配）下渲染：
         优先Markdown+按钮，失败自动降级富媒体（保封面，不带按钮），
         再降级文本（含封面URL）。
+
+        at_all_groups中的群正文嵌入@全体（每群每日1次配额，由消费者判定）。
         """
         if self.bot_client is None:
             logger.error("未配置QQ官方机器人客户端，消息发送失败")
@@ -310,11 +352,15 @@ class PushService:
             if not groups:
                 logger.info(f"直播间{room_id}的目标群均未开启消息接收，跳过发送")
                 return False
+        at_all = [g for g in (at_all_groups or []) if g in set(groups)] or None
 
         # 1) 官方bot：完整降级链在bot层内部（Markdown嵌图+按钮→富媒体→文本，
         #    降级决策依赖真实发送结果，调度入口的True仅代表任务已调度）
         pm = getattr(self.bot_client, "push_message", None)
         if pm is not None and _supports_kwarg(pm, "keyboard"):
+            if at_all is not None and _supports_kwarg(pm, "at_all_groups"):
+                return pm(content, groups, keyboard=keyboard, media=media,
+                          at_all_groups=at_all)
             return pm(content, groups, keyboard=keyboard, media=media)
 
         # 2) 自定义bot鸭子类型：Markdown封面图+按钮（可选）→ 富媒体 → 文本
@@ -329,10 +375,16 @@ class PushService:
                 logger.warning(f"Markdown开播推送异常({e})，降级富媒体/文本")
 
         if media and hasattr(self.bot_client, "push_media"):
-            if self.bot_client.push_media(media, content, groups):
+            if _supports_kwarg(self.bot_client.push_media, "at_all_groups"):
+                if self.bot_client.push_media(media, content, groups,
+                                              at_all_groups=at_all):
+                    return True
+            elif self.bot_client.push_media(media, content, groups):
                 return True
 
         text = content + f"\n封面：{media}" if media else content
+        if at_all is not None and _supports_kwarg(self.bot_client.push, "at_all_groups"):
+            return self.bot_client.push(text, groups, at_all_groups=at_all)
         return self.bot_client.push(text, groups)
 
     def _live_start_text(self, room_info: LiveRoomInfo) -> str:
@@ -390,7 +442,6 @@ class PushService:
             f"房间号：{room_info.room_id}\n"
             f"当前共有：{room_info.online}\n"
             f"点赞总数：{stats.like_count}\n"
-            f"直播地址：{url}\n"
             f"直播时长：{stats.duration_str}\n"
             f"推送时间：{now}"
         )

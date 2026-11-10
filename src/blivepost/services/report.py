@@ -59,6 +59,8 @@ class DailyReportJob:
         self.weekly_enabled = weekly
         self.monthly_enabled = monthly
         self._task: Optional[asyncio.Task] = None
+        # 结算失败后的当日重试间隔（秒；测试可改小）
+        self.RETRY_DELAY = 60.0
 
     def start(self) -> None:
         """启动每日结算循环（需在事件循环内调用）"""
@@ -77,20 +79,34 @@ class DailyReportJob:
             self._task = None
 
     async def run(self) -> None:
-        """主循环：等待到下一个推送时刻，执行日结（及周一周结/月初月结）"""
+        """主循环：等待到推送时刻执行日结（及周一周结/月初月结）。
+
+        失败当日按60秒间隔重试，不静默顺延到次日（原实现异常后
+        _seconds_until_next直接指向明天，当日结算丢失）；
+        last_run_date防"重试跨零点后到点"场景的重复结算。
+        """
+        last_run_date = None
+        retry_wait: Optional[float] = None
         while True:
             try:
-                delay = self._seconds_until_next()
-                await asyncio.sleep(delay)
+                if retry_wait is not None:
+                    await asyncio.sleep(retry_wait)
+                    retry_wait = None
+                else:
+                    await asyncio.sleep(self._seconds_until_next())
+                if last_run_date == datetime.now().date():
+                    # 本运行日已完成过结算（重试跨零点后再次到点）
+                    continue
                 if self.daily_enabled:
                     await self.check_once()
                 # 周结（周一）、月结（每月1日）紧随日结执行
                 await self.check_periodic()
+                last_run_date = datetime.now().date()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"结算推送失败: {e}")
-                await asyncio.sleep(60)
+                logger.error(f"结算推送失败: {e}，{self.RETRY_DELAY:.0f}秒后重试（当日不放弃）")
+                retry_wait = self.RETRY_DELAY
 
     async def check_periodic(self) -> int:
         """按配置执行周结/月结（周一推上周、每月1日推上月；发送前查运行时开关）"""

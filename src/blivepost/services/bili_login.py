@@ -258,7 +258,8 @@ class BiliLoginService:
                     cookies = await context.cookies()
                     result = _extract_cookies(cookies)
 
-                    ok, uid, uname = verify_nav(result.cookie_string)
+                    ok, uid, uname = await asyncio.to_thread(
+                        verify_nav, result.cookie_string)
                     if not ok:
                         logger.warning("扫码成功但nav验证未通过")
                         return LoginResult(error="扫码成功但登录态验证失败")
@@ -313,7 +314,8 @@ class BiliLoginService:
                 cookies = await context.cookies()
                 result = _extract_cookies(cookies)
 
-                ok, uid, uname = verify_nav(result.cookie_string)
+                ok, uid, uname = await asyncio.to_thread(
+                    verify_nav, result.cookie_string)
                 if not ok:
                     return LoginResult(error="刷新后nav验证未通过，cookie可能已失效")
                 result.uid = uid

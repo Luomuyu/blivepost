@@ -91,6 +91,7 @@ class Logger:
         log_dir: Optional[str] = None,
         console: bool = True,
         debug: bool = False,
+        log_suffix: Optional[str] = None,
     ) -> logging.Logger:
         """
         设置日志系统
@@ -101,6 +102,9 @@ class Logger:
             log_dir: 日志文件目录
             console: 是否输出到控制台
             debug: 调试开关（debug=True时DEBUG日志才输出）
+            log_suffix: 日志文件名后缀（子进程隔离用，如"room_23058"/
+                "dyn_12345"→文件名blivepost_room_23058.<日期>.log；
+                None时保持默认文件名blivepost.<日期>.log，向后兼容）
 
         Returns:
             logging.Logger: 配置好的日志器
@@ -135,8 +139,11 @@ class Logger:
             log_path.mkdir(parents=True, exist_ok=True)
 
             # 使用自定义的DailyRotatingFileHandler
-            # 首次启动即生成带日期的文件名：blivepost.2026-03-09.log
-            log_file = log_path / "blivepost"
+            # 首次启动即生成带日期的文件名：blivepost.2026-03-09.log；
+            # 子进程传入log_suffix时用独立文件名（blivepost_room_<id>/blivepost_dyn_<uid>），
+            # 避免多进程同写一文件在Windows轮转时PermissionError丢日志
+            base_name = "blivepost" if not log_suffix else f"blivepost_{log_suffix}"
+            log_file = log_path / base_name
             file_handler = DailyRotatingFileHandler(
                 filename=log_file,
                 when="midnight",      # 每天午夜轮转

@@ -3,18 +3,20 @@
 QQ群命令处理器
 
 处理用户在群里@机器人发送的指令：
-  /绑定 ROOMID      绑定当前群与直播间（记录主播uid）
   /监控 ROOMID      开始监控并推送该直播间（每房间仅一个监控任务）
   /取消监控 ROOMID   取消监控推送该直播间
-  /解绑 ROOMID      解除当前群与直播间的绑定
+  /推送设置 [...]   查看/修改本群对绑定房间的独立推送开关
+
+（绑定/解绑指令已移除，直播间的添加/删除请在Web面板操作）
 """
 
 import re
 
 from ..utils.contact import extract_sender
 from datetime import datetime, timedelta
-from typing import Optional, TYPE_CHECKING
+from typing import Dict, Optional, Tuple, TYPE_CHECKING
 
+from ..database.service_admin import GROUP_PUSH_SWITCHES
 from ..utils.logger import get_logger
 
 
@@ -30,13 +32,34 @@ logger = get_logger("commands")
 
 # 指令格式：/命令 房间号（斜杠可省略，兼容全角斜杠与中文冒号；
 # 用search而非match，兼容content中带@机器人前缀的情况）
+# 注意：绑定/解绑指令已移除（Web面板操作），正则不得再捕获，
+# 否则无对应分支会落入else被当作"取消监控"反向执行
 _CMD_RE = re.compile(
-    r"[/／]\s*(取消动态|绑定动态|取消监控|解绑|绑定|监控|sc榜|收入)\s*[:：\s]\s*(\d{2,})"
+    r"[/／]\s*(取消动态|绑定动态|取消监控|监控|sc榜|收入)\s*[:：\s]\s*(\d{2,})"
     r"(?:\s+((?:\d{8})|(?:\d{4}-\d{2}-\d{2})|[周月]))?\s*$",
     re.IGNORECASE,
 )
 # 无参数指令
 _NOARG_RE = re.compile(r"[/／]\s*(帮助|指令|菜单|状态|绑定列表|汇总)(?:\s+(周|月))?\s*$")
+# 推送设置指令：/推送设置 [房间号 [开关名 [开|关]]]|[房间号 恢复]
+# （房间号须为本群已绑定房间；开关名支持中文别名；权限同控制指令）
+_PUSHSET_RE = re.compile(
+    r"[/／]\s*推送设置(?:\s+(\d{2,})(?:\s+(\S+)(?:\s+(开启?|关闭?))?)?)?\s*$")
+
+# 推送开关元数据：内部名 -> (显示名, 概览徽标简写, 可输入别名)；
+# 键与GROUP_PUSH_SWITCHES一致（动态监控为全局项，不随房间）
+_PUSH_SWITCH_META: Dict[str, Tuple[str, str, Tuple[str, ...]]] = {
+    "anchor": ("天选时刻", "天选", ("天选", "天选时刻")),
+    "guard_achievement": ("大航海成就", "航海", ("大航海", "大航海成就")),
+    "system_event": ("系统事件", "系统", ("系统事件",)),
+    "room_change": ("房间信息", "房变", ("房间信息", "房间变更")),
+    "daily_report": ("每日结算", "日报", ("每日结算", "日报")),
+    "weekly_report": ("每周结算", "周报", ("每周结算", "周报")),
+    "monthly_report": ("每月结算", "月报", ("每月结算", "月报")),
+}
+_PUSH_SWITCH_ALIASES = {alias: name
+                        for name, (_, _, aliases) in _PUSH_SWITCH_META.items()
+                        for alias in aliases}
 
 
 def _parse_date(text: str):
@@ -53,8 +76,14 @@ HELP_TEXT = (
     "支持的指令：\n"
     "/监控 房间号 - 监控该直播间并推送到本群\n"
     "/取消监控 房间号 - 取消向本群的推送\n"
+    "/推送设置 [房间号] - 查看本群各房间推送开关\n"
+    "/推送设置 房间号 开关名 开|关 - 修改本群独立开关（天选/大航海/系统事件/房间信息/日报/周报/月报）\n"
+    "/推送设置 房间号 恢复 - 清除独立设置，恢复跟随全局\n"
     "提示：直播间的添加/删除请在Web面板操作"
 )
+
+# 命令执行异常时的统一回复（内部异常详情只进日志，不回显群内）
+GENERIC_CMD_FAILURE = "命令执行失败，请稍后重试或联系管理员"
 
 
 class CommandHandler:
@@ -111,6 +140,23 @@ class CommandHandler:
             else:  # 绑定列表
                 return await self._my_bindings(group_openid)
 
+        # 推送设置指令（查看/修改本群对绑定房间的独立推送开关，权限同控制指令）
+        pset = _PUSHSET_RE.search(content)
+        if pset is not None:
+            room_str, arg, state = pset.group(1), pset.group(2), pset.group(3)
+            parts = " ".join(x for x in (room_str, arg, state) if x)
+            logger.info(f"收到群命令: 推送设置 {parts} (group={group_openid})")
+            denied = self._control_denied(extract_sender(message.author))
+            if denied is not None:
+                return denied
+            room_id = int(room_str) if room_str else None
+            try:
+                return await self._push_setting(group_openid, room_id, arg, state)
+            except Exception as e:
+                # 异常详情仅记日志，群内回显通用文案（不泄漏内部错误信息）
+                logger.error(f"执行命令 推送设置 {parts} 失败: {e}")
+                return GENERIC_CMD_FAILURE
+
         # 带房间号指令
         match = _CMD_RE.search(content)
 
@@ -124,11 +170,10 @@ class CommandHandler:
 
         sender = extract_sender(message.author)
         control_cmds = ("监控", "取消监控", "绑定动态", "取消动态")
-        if cmd in control_cmds and not self._group_allowed(sender):
-            return (
-                "无权限：仅机器人管理员可执行控制指令（查询指令不受限）\n"
-                f"如你是管理员，请让机器人所有者将此openid加入配置Admin.openids：{sender or '未知'}"
-            )
+        if cmd in control_cmds:
+            denied = self._control_denied(sender)
+            if denied is not None:
+                return denied
 
         try:
             if cmd == "绑定动态":
@@ -145,14 +190,24 @@ class CommandHandler:
             else:  # 取消监控
                 return await self._unmonitor(group_openid, room_id)
         except Exception as e:
+            # 异常详情仅记日志，群内回显通用文案（不泄漏内部错误信息）
             logger.error(f"执行命令 {cmd} {room_id} 失败: {e}")
-            return f"命令执行失败：{e}"
+            return GENERIC_CMD_FAILURE
 
     def _group_allowed(self, sender: str) -> bool:
         """群控制指令权限：管理员名单未配置时不限制；无法识别发送者且已配置名单时拒绝"""
         if not self.group_admin_openids:
             return True
         return bool(sender) and sender in self.group_admin_openids
+
+    def _control_denied(self, sender: str) -> Optional[str]:
+        """控制指令权限判定；放行返回None，拒绝返回统一文案"""
+        if self._group_allowed(sender):
+            return None
+        return (
+            "无权限：仅机器人管理员可执行控制指令（查询指令不受限）\n"
+            f"如你是管理员，请让机器人所有者将此openid加入配置Admin.openids：{sender or '未知'}"
+        )
 
     async def _save_binding_snapshot(self, real_id: int, room_info) -> None:
         """绑定信息入库：get_status_info_by_uids全量快照写streamer/live_room两表；
@@ -208,6 +263,97 @@ class CommandHandler:
                 extra = "\n该直播间已无推送群，监控已停止"
         return f"已取消监控直播间{real_id}，不再向本群推送{extra}"
 
+    async def _global_switch_states(self) -> Dict[str, bool]:
+        """全局推送开关状态（仅本群设置可覆盖的7项；行缺失默认关）"""
+        switches = await self.db_service.get_push_switches() \
+            if self.db_service is not None else {}
+        return {s: bool(switches.get(s, {}).get("enabled", False))
+                for s in GROUP_PUSH_SWITCHES}
+
+    async def _push_setting(self, group_openid: str, room_id: Optional[int],
+                            arg: Optional[str] = None,
+                            state: Optional[str] = None) -> str:
+        """本群推送设置：概览 / 房间明细 / 单项开|关 / 恢复跟随全局"""
+        if self.db_service is None:
+            return "推送设置功能不可用（数据库未连接）"
+
+        bindings = self.binding_store.get_group_bindings(group_openid)
+        if not bindings:
+            return "本群当前没有推送中的直播间，发送 /帮助 查看指令"
+
+        if room_id is None:  # 概览：每绑定房间一行开关徽标
+            glob = await self._global_switch_states()
+            lines = ["本群推送设置概览："]
+            for rid in sorted(b.room_id for b in bindings):
+                own = await self.db_service.get_group_push_setting(rid, group_openid)
+                custom = own is not None and any(
+                    own[s] != glob[s] for s in GROUP_PUSH_SWITCHES)
+                badges = " ".join(
+                    f"{_PUSH_SWITCH_META[s][1]}：{'开' if (own or {}).get(s, glob[s]) else '关'}"
+                    for s in GROUP_PUSH_SWITCHES)
+                lines.append(f"· 房间{rid}{'（独立）' if custom else ''} {badges}")
+            lines.append("明细：/推送设置 房间号；修改：/推送设置 房间号 开关名 开|关；"
+                         "恢复跟随全局：/推送设置 房间号 恢复")
+            return "\n".join(lines)
+
+        # 指定房间：须为本群已绑定房间（短号归一化后再判定）
+        binding = self.binding_store.get_binding(group_openid, room_id)
+        if binding is None:
+            real_id = await self._resolve_query_room(room_id)
+            if real_id is not None:
+                room_id = real_id
+                binding = self.binding_store.get_binding(group_openid, room_id)
+        if binding is None:
+            return f"房间{room_id}不是本群绑定的直播间，发送 /绑定列表 查看"
+
+        if arg is None:  # 明细：逐项 名称 开/关（跟随全局）
+            own = await self.db_service.get_group_push_setting(room_id, group_openid)
+            glob = await self._global_switch_states()
+            lines = [f"房间{room_id}本群推送设置："]
+            for s in GROUP_PUSH_SWITCHES:
+                on = (own or {}).get(s, glob[s])
+                follow = own is None or own[s] == glob[s]
+                lines.append(f"· {_PUSH_SWITCH_META[s][0]}：{'开' if on else '关'}"
+                             + ("（跟随全局）" if follow else ""))
+            lines.append(f"修改：/推送设置 {room_id} 开关名 开|关；"
+                         f"恢复跟随全局：/推送设置 {room_id} 恢复")
+            return "\n".join(lines)
+
+        if arg == "恢复":
+            removed = await self.db_service.reset_group_push_setting(
+                room_id, group_openid)
+            if not removed:
+                return f"房间{room_id}本群无独立推送设置（已在跟随全局）"
+            return f"已清除房间{room_id}本群独立推送设置，恢复跟随全局"
+
+        switch = _PUSH_SWITCH_ALIASES.get(arg)
+        if switch is None:
+            if arg in ("开", "关", "开启", "关闭"):
+                # 漏写开关名（"/推送设置 房间号 开"，开/关落到arg位置）：
+                # 给出用法引导而非"未知开关：开"
+                return ("缺少开关名，用法：/推送设置 房间号 开关名 开|关\n"
+                        f"示例：/推送设置 {room_id} 天选 开\n"
+                        "可用开关：天选/天选时刻、大航海/大航海成就、系统事件、"
+                        "房间信息/房间变更、每日结算/日报、每周结算/周报、每月结算/月报")
+            return ("未知开关：" + arg + "\n可用开关：天选/天选时刻、大航海/大航海成就、"
+                    "系统事件、房间信息/房间变更、每日结算/日报、每周结算/周报、每月结算/月报")
+        if state is None:
+            return f"请指定开或关，如：/推送设置 {room_id} {arg} 开"
+
+        enabled = state.startswith("开")
+        # 行不存在时先按全局值播种，避免其余开关被默认置关
+        if await self.db_service.get_group_push_setting(room_id, group_openid) is None:
+            glob = await self._global_switch_states()
+            await self.db_service.seed_group_push_settings(
+                room_id, [group_openid], glob)
+        ok = await self.db_service.set_group_push_setting(
+            room_id, group_openid, switch, enabled)
+        if not ok:
+            return "设置失败，请稍后重试"
+        label = _PUSH_SWITCH_META[switch][0]
+        return (f"房间{room_id}本群{label}已设为{'开' if enabled else '关'}"
+                f"（独立生效，恢复：/推送设置 {room_id} 恢复）")
+
     async def _status(self, group_openid: str) -> str:
         """查询本群监控中的直播间及其监控任务状态"""
         monitored = [
@@ -247,7 +393,9 @@ class CommandHandler:
             return "动态监控未启用，请联系机器人所有者在配置中开启（Setting.dynamic_monitor）"
 
         is_new = await self.binding_store.bind_dynamic(group_openid, up_uid)
-        created, _ = await self.dynamic_manager.ensure(up_uid)
+        # 用户主动订阅：首轮无条件基线化——防止取消订阅后重新订阅时，
+        # 停订期间的新动态被一次性补推（进程已存活时参数无效果）
+        created, _ = await self.dynamic_manager.ensure(up_uid, baseline_first=True)
         name = self.binding_store.get_dynamic_up_name(up_uid)
         name_text = f"（{name}）" if name else ""
         if is_new:
