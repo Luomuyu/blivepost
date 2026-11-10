@@ -194,6 +194,7 @@ async def main_async(
     streamer_refresher = None
     group_refresher = None
     maintainer = None
+    backup_job = None
 
     try:
         # 加载配置（文件不存在时自动生成默认配置）
@@ -384,7 +385,18 @@ async def main_async(
                 admin_user=settings.message.web_admin_user,
                 admin_password=settings.message.web_admin_password,
             )
+            # /healthz 健康检查报告构建器（游客可访问，脱敏只读）
+            from .core.health import build_health_report
+            async def _health():
+                return await build_health_report(
+                    db_service, monitor_manager, dynamic_manager, qqbot)
+            web_panel._health_builder = _health
             await web_panel.start()
+
+        # 定时备份（脱敏zip到exports/backups/滚动保留；backup_keep=0关闭）
+        from .core.health import BackupJob
+        backup_job = BackupJob(settings, db_service)
+        backup_job.start()
 
         # Cookie维护循环（临近过期自动刷新，失效私聊提醒管理员）
         maintainer = CookieMaintainer(
@@ -459,6 +471,13 @@ async def main_async(
         try:
             if admin_handler:
                 await admin_handler.stop()
+        except Exception:
+            pass
+
+        # 停止定时备份
+        try:
+            if backup_job is not None:
+                await backup_job.stop()
         except Exception:
             pass
 

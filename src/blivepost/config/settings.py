@@ -63,6 +63,10 @@ class MessageSettings:
     ignore_cmds: List[str] = field(default_factory=list)
     # debug模式：输出QQ消息发送者身份明细（openid各形态/union_openid/昵称等）
     debug: bool = False
+    # 定时备份（脱敏zip到exports/backups/，滚动保留；backup_keep=0关闭）
+    backup_hour: int = 4
+    backup_minute: int = 30
+    backup_keep: int = 7
 
 
 @dataclass
@@ -270,6 +274,9 @@ Setting: # 消息推送设置
   db_size_warn_mb: 500 # 数据库体积预警阈值MB (超过时私聊提醒管理员, 0=不提醒)
   ignore_cmds: [] # 忽略的未知命令列表 (不打印日志)
   debug: "N" # debug模式 (输出QQ消息发送者身份明细: openid/union_openid等)
+  backup_hour: 4 # 定时备份时刻(时)
+  backup_minute: 30 # 定时备份时刻(分)
+  backup_keep: 7 # 备份保留份数(0=关闭定时备份)
 
 Redis: # Redis配置 (可选)
   host: "localhost"

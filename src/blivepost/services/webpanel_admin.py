@@ -109,6 +109,97 @@ class AdminMixin:
             headers={"Content-Disposition":
                      f'attachment; filename="blivepost_export_{suffix}_{stamp}.zip"'})
 
+    async def _handle_admin_export_room(self, request):
+        """按房间×日期范围导出CSV/JSON明细（不依赖zip，MySQL/PG同样可用）
+
+        参数：room_id（必填）、start/end（YYYY-MM-DD或YYYYMMDD，可选默认今天）、
+        format（csv/json，默认csv带BOM可直接Excel打开）。
+        """
+        denied = await self._require_admin(request)
+        if denied is not None:
+            return denied
+        if self.db_service is None:
+            return web.Response(status=500, text="数据库不可用")
+
+        try:
+            room_id = int(request.query.get("room_id", "0"))
+        except ValueError:
+            return web.Response(status=400, text="room_id无效")
+        if room_id <= 0:
+            return web.Response(status=400, text="room_id必填")
+
+        def _parse_day(s, default):
+            if not s:
+                return default
+            for fmt in ("%Y-%m-%d", "%Y%m%d"):
+                try:
+                    from datetime import datetime as _dt
+                    return _dt.strptime(s, fmt)
+                except ValueError:
+                    continue
+            return default
+
+        from datetime import datetime as _dt2, timedelta as _td
+        today = _dt2.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_day = _parse_day(request.query.get("start"), today)
+        end_day = _parse_day(request.query.get("end"), today + _td(days=1))
+        fmt = (request.query.get("format") or "csv").lower()
+
+        days = []
+        d = start_day
+        while d < end_day:
+            days.append(d)
+            d += _td(days=1)
+
+        import csv as _csv
+        import io as _io
+        import json as _json
+
+        # export_day_records返回 {表名: [行元组列表]}（五类事件表）
+        # 展平为 {"table":..., "row": [...]}, 列名按各表导出顺序
+        table_cols = {
+            "danmaku": ["timestamp", "uid", "uname", "msg", "dm_type"],
+            "gift": ["timestamp", "uid", "uname", "gift_name", "num",
+                     "total_price", "coin_type"],
+            "super_chat": ["timestamp", "uid", "uname", "price", "message"],
+            "guard": ["timestamp", "uid", "uname", "guard_level",
+                      "gift_name", "price", "num"],
+            "red_pocket": ["timestamp", "sender_uid", "sender_name",
+                           "total_price"],
+        }
+        all_rows = []
+        for day in days:
+            data = await self.db_service.export_day_records(room_id, day=day)
+            for table, rows in (data or {}).items():
+                cols = table_cols.get(table, [f"col{i}" for i in range(
+                    len(rows[0]) if rows else 0)])
+                for row in rows:
+                    all_rows.append(
+                        {"event": table,
+                         **{c: str(v) for c, v in zip(cols, row)}})
+
+        fieldnames = ["event"] + sorted(
+            {c for r in all_rows for c in r if c != "event"})
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if fmt == "json":
+            body = _json.dumps(
+                {"room_id": room_id, "days": len(days), "records": all_rows},
+                ensure_ascii=False, indent=2)
+            return web.Response(
+                body=body, content_type="application/json",
+                headers={"Content-Disposition":
+                         f'attachment; filename="room{room_id}_{stamp}.json"'})
+        # CSV（带BOM，Excel直接打开不乱码）
+        buf = _io.StringIO()
+        buf.write("\ufeff")
+        writer = _csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(all_rows)
+        return web.Response(
+            body=buf.getvalue(), content_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="room{room_id}_{stamp}.csv"'})
+
     def _sqlite_path(self) -> Optional[str]:
         """当前主库文件路径（非SQLite配置返回None）"""
         getter = getattr(self.db_service, "sqlite_path", None) \

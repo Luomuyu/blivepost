@@ -20,6 +20,7 @@ webpanel_common。本模块负责组合WebPanel与start/stop路由注册。
 """
 
 import asyncio
+from datetime import datetime
 
 from typing import TYPE_CHECKING, Optional
 
@@ -127,12 +128,17 @@ class WebPanel(AuthMixin, ActionsMixin, PagesMixin, AdminMixin, ScreenMixin):
         self._login_task: Optional[asyncio.Task] = None
         # 扫码登录归属用户（会话隔离：他人不可查看/取消我的二维码）
         self._login_owner: str = ""
+        # 健康检查报告构建器（__main__注入依赖后使用；async fn→dict）
+        from typing import Callable as _Callable
+        self._health_builder: Optional[_Callable] = None
         # 登录失败计数：key -> (次数, 窗口起点monotonic, 锁定截止monotonic)
         self._login_failures: dict = {}
 
     async def start(self) -> None:
         """启动HTTP服务"""
         app = web.Application()
+        # 健康检查（游客可访问，脱敏只读）
+        app.router.add_get("/healthz", self._handle_healthz)
         # 页面（HTMX请求返回内容片段，普通请求返回完整布局；游客只读可浏览）
         for key, (path, _title) in self.PAGES.items():
             app.router.add_get(path, self._make_page_handler(key))
@@ -150,6 +156,7 @@ class WebPanel(AuthMixin, ActionsMixin, PagesMixin, AdminMixin, ScreenMixin):
         app.router.add_post("/web/admin/user/delete", self._action_admin_user_delete)
         app.router.add_post("/web/admin/switch", self._action_admin_switch)
         app.router.add_get("/web/admin/export", self._handle_admin_export)
+        app.router.add_get("/web/admin/export/room", self._handle_admin_export_room)
         # 全局开关（前台可改项：登录用户；管理员不受限）
         app.router.add_post("/web/switch/toggle", self._action_switch_toggle)
         # 群独立推送设置（直播页群详情）
@@ -185,3 +192,19 @@ class WebPanel(AuthMixin, ActionsMixin, PagesMixin, AdminMixin, ScreenMixin):
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
+
+    async def _handle_healthz(self, request):
+        """健康检查端点（游客可访问，只读脱敏）"""
+        from .webpanel_common import logger as _logger
+        if self._health_builder is not None:
+            try:
+                report = await self._health_builder()
+            except Exception as e:
+                _logger.warning(f"健康检查报告构建失败: {e}")
+                report = {"status": "error", "time":
+                          datetime.now().isoformat(timespec="seconds")}
+        else:
+            report = {"status": "unknown"}
+        status_code = 200 if report.get("status") == "ok" else 503
+        return web.json_response(report, status=status_code)
+
