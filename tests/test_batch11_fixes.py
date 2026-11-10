@@ -164,14 +164,14 @@ async def test_recent_live_status_json_serializable(tmp_path):
     try:
         await svc.save_live_end(room_id=23058, uid=1, title="标题",
                                 stats=None) if False else None
-        # 直接落一条下播记录（save_live_end签名复杂，走ORM）
+        # 直接落一条下播记录（save_live_end签名复杂，走ORM；时间为13位毫秒）
         async with svc._event_session(23058) as session:
             from blivepost.database.models import LiveStatusRecord
-            from datetime import datetime as _dt
+            from blivepost.utils.timeutil import now_ms
             session.add(LiveStatusRecord(
                 room_id=23058, status="live_end", title="下播了",
                 danmaku_count=1, gold_count=0, ship_count=0, sc_count=0,
-                duration="01:00:00", end_time=_dt.now(), timestamp=_dt.now()))
+                duration="01:00:00", end_time=now_ms(), timestamp=now_ms()))
             await session.commit()
         rows = await svc.get_recent_live_status(limit=5)
         assert rows and rows[0]["end_time"]

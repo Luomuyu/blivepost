@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 数据库存储服务 - 统计汇总查询（StatsMixin）
+
+第十六批起时间列统一存储13位毫秒Unix时间戳：日期范围查询一律使用
+day_bounds_ms/range_bounds_ms生成的 [start_ms, end_ms) 半开区间（消除
+23:59:59漏秒），按日/按小时分组在Python侧用day_key_ms/hour_key_ms完成
+（SQL侧strftime仅对SQLite的text时间有效且无时区概念，已全部移除）。
 """
 
 import asyncio
 
-from datetime import datetime, timedelta
+from datetime import date as _date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, select
@@ -13,11 +18,14 @@ from sqlalchemy import func, select
 from .models import (
     DanmakuRecord, GiftRecord, SuperChatRecord, GuardRecord,
     AnchorRecord, RedPocketRecord, GuardAchievementRecord,
-    SystemEventRecord, RoomChangeRecord, LiveStatusRecord, local_now,
+    SystemEventRecord, RoomChangeRecord, LiveStatusRecord,
     GroupBindingRecord, CookieAccountRecord, DynamicBindingRecord,
     RoomDbRecord
 )
 from ..utils.logger import get_logger
+from ..utils.timeutil import (
+    day_bounds_ms, day_key_ms, ms_to_dt, ms_to_str, now_ms, range_bounds_ms
+)
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -38,10 +46,10 @@ class StatsMixin:
         _all_room_managers: Callable[[], Awaitable[list]]
 
     @staticmethod
-    def _zero_summary(day_start: datetime) -> dict:
+    def _zero_summary(day_start_ms: int) -> dict:
         """全零汇总（空房间列表等场景，不触库）"""
         return {
-            "day": day_start.strftime("%Y-%m-%d"),
+            "day": day_key_ms(day_start_ms),
             "danmaku_count": 0, "gift_gold": 0.0, "gift_count": 0,
             "ship_total": 0.0, "ship_count": 0, "sc_total": 0,
             "sc_count": 0, "red_pocket": 0,
@@ -55,10 +63,12 @@ class StatsMixin:
         查询指定房间某日（默认今天）的收入与弹幕汇总
 
         各表聚合以标量子查询组合为单条SQL执行，避免跨表串行往返。
+        时间列为毫秒时间戳：按 [start_ms, end_ms) 半开区间过滤。
 
         Args:
             room_id: 直播间ID
             day: 日期（取该日0点到24点），默认今天
+            _window: 显式时间窗（start/end，datetime或毫秒int；内部统一毫秒化）
 
         Returns:
             dict: {
@@ -70,9 +80,7 @@ class StatsMixin:
         if isinstance(room_id, (list, tuple)):
             rooms = list(room_id)
             if not rooms:
-                day = day or local_now()
-                return self._zero_summary(
-                    day.replace(hour=0, minute=0, second=0, microsecond=0))
+                return self._zero_summary(day_bounds_ms(day)[0])
             summaries = [await self.get_daily_summary(r, day=day, _window=_window)
                          for r in rooms]
             merged = summaries[0]
@@ -86,14 +94,17 @@ class StatsMixin:
             return merged
 
         if _window is not None:
-            day_start, day_end = _window
+            win_start, win_end = _window
+            if isinstance(win_start, datetime) or isinstance(win_start, _date):
+                start_ms, end_ms = range_bounds_ms(
+                    _as_datetime(win_start), _as_datetime(win_end))
+            else:
+                start_ms, end_ms = int(win_start), int(win_end)
         else:
-            day = day or local_now()
-            day_start = day.replace(hour=0, minute=0, second=0, microsecond=0)
-            day_end = day_start + timedelta(days=1)
+            start_ms, end_ms = day_bounds_ms(day)
 
         summary = {
-            "day": day_start.strftime("%Y-%m-%d"),
+            "day": day_key_ms(start_ms),
             "danmaku_count": 0,
             "gift_gold": 0.0,
             "gift_count": 0,
@@ -110,8 +121,8 @@ class StatsMixin:
                            else model.room_id == room_id)
             return select(aggregate).select_from(model).where(
                 room_filter,
-                model.timestamp >= day_start,
-                model.timestamp < day_end,
+                model.timestamp >= start_ms,
+                model.timestamp < end_ms,
                 *filters,
             ).scalar_subquery()
 
@@ -179,14 +190,13 @@ class StatsMixin:
             *(self.get_daily_summary(r, day=day) for r in ids),
             return_exceptions=True)
         summaries: Dict[int, dict] = {}
-        zero_day: Optional[datetime] = None
+        fallback_ms = 0
         for rid, res in zip(ids, results):
             if isinstance(res, BaseException):
                 logger.error(f"批量查询房间{rid}每日汇总失败: {res}")
-                if zero_day is None:
-                    d = day or local_now()
-                    zero_day = d.replace(hour=0, minute=0, second=0, microsecond=0)
-                summaries[rid] = self._zero_summary(zero_day)
+                if not fallback_ms:
+                    fallback_ms = day_bounds_ms(day)[0]
+                summaries[rid] = self._zero_summary(fallback_ms)
             else:
                 summaries[rid] = res
         return summaries
@@ -203,8 +213,10 @@ class StatsMixin:
         Returns:
             dict: 结构同get_daily_summary，day字段为时间范围文本
         """
-        summary = await self.get_daily_summary(room_id, _window=(start, end))
-        summary["day"] = f"{start.strftime('%Y-%m-%d')}~{end.strftime('%Y-%m-%d')}"
+        start_ms, end_ms = range_bounds_ms(start, end)
+        summary = await self.get_daily_summary(room_id, _window=(start_ms, end_ms))
+        summary["day"] = (
+            f"{ms_to_str(start_ms, '%Y-%m-%d')}~{ms_to_str(end_ms, '%Y-%m-%d')}")
         return summary
 
     async def get_top_super_chat(
@@ -224,9 +236,7 @@ class StatsMixin:
         Returns:
             list[(uname, price, message)]，按金额降序
         """
-        day = day or local_now()
-        day_start = day.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
+        start_ms, end_ms = day_bounds_ms(day)
 
         try:
             async with self._event_session(room_id) as session:
@@ -235,8 +245,8 @@ class StatsMixin:
                            SuperChatRecord.message)
                     .where(
                         SuperChatRecord.room_id == room_id,
-                        SuperChatRecord.timestamp >= day_start,
-                        SuperChatRecord.timestamp < day_end,
+                        SuperChatRecord.timestamp >= start_ms,
+                        SuperChatRecord.timestamp < end_ms,
                     )
                     .order_by(SuperChatRecord.price.desc())
                     .limit(limit)
@@ -250,11 +260,8 @@ class StatsMixin:
         """
         查询最近的下播记录（Web面板用）
 
-        Args:
-            limit: 条数
-
-        Returns:
-            list[dict]: 下播记录列表
+        end_time为13位毫秒时间戳（int经json_response序列化安全；
+        展示层经webpanel的ms2str filter或ms_to_str格式化）。
         """
         try:
             merged: List[dict] = []
@@ -278,11 +285,7 @@ class StatsMixin:
                         }
                         for rec in result.scalars().all()
                     )
-            merged.sort(key=lambda d: d["end_time"] or datetime.min, reverse=True)
-            # end_time格式化为字符串：裸datetime经json_response序列化会500
-            for row in merged:
-                if row["end_time"] is not None:
-                    row["end_time"] = row["end_time"].strftime("%Y-%m-%d %H:%M")
+            merged.sort(key=lambda d: d["end_time"] or 0, reverse=True)
             return merged[:limit]
         except Exception as e:
             logger.error(f"查询下播记录失败: {e}")
@@ -301,15 +304,18 @@ class StatsMixin:
             list[dict]: [{"day": "YYYY-MM-DD", "danmaku": n, "gift_gold": f,
                           "ship_gold": f, "sc_total": n}] 按日期升序
         """
-        today = local_now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start_ms = day_bounds_ms()[0]
+        start_dt = ms_to_dt(today_start_ms) - timedelta(days=days - 1)
         return await self.get_daily_history_range(
-            (today - timedelta(days=days - 1)).date(), today.date(),
-            room_ids=room_ids)
+            start_dt.date(), ms_to_dt(today_start_ms).date(), room_ids=room_ids)
 
     async def get_daily_history_range(self, start_day, end_day,
                                       room_ids: Optional[List[int]] = None) -> List[dict]:
         """
         按日聚合的自然日区间历史数据（Web面板趋势选择器用）
+
+        按日分组在Python侧完成（day_key_ms按Setting.timezone分日；
+        SQL侧对毫秒整数做strftime无法保证跨库与时区正确）。
 
         Args:
             start_day/end_day: 起止日期（date/datetime，含首尾）
@@ -318,56 +324,68 @@ class StatsMixin:
         Returns:
             list[dict]: 同get_daily_history，按日期升序；区间内无数据补零
         """
-        from datetime import datetime as _dt, date as _date, timedelta as _td
-        if isinstance(start_day, _date) and not isinstance(start_day, _dt):
-            start_day = _dt.combine(start_day, _dt.min.time())
-        if isinstance(end_day, _date) and not isinstance(end_day, _dt):
-            end_day = _dt.combine(end_day, _dt.min.time())
-        start = start_day
-        span_days = (end_day - start_day).days + 1
+        start_day = _as_datetime(start_day)
+        end_day = _as_datetime(end_day)
+        span_days = (end_day.date() - start_day.date()).days + 1
         if span_days <= 0:
             return []
-        end_bound = start + _td(days=span_days)
+        start_ms = day_bounds_ms(start_day)[0]
+        end_ms = day_bounds_ms(end_day)[1]  # 末日次日0点（半开区间右端）
 
         if room_ids:
             managers = [await self._room_manager(r) for r in room_ids]
         else:
             managers = await self._all_room_managers()
 
-        async def _by_day(manager, model, aggregate, coin_filter=None):
-            conditions = [model.timestamp >= start, model.timestamp < end_bound]
-            if coin_filter is not None:
-                conditions.append(coin_filter)
-            async with manager.get_session() as session:
-                res = await session.execute(
-                    select(
-                        func.date(model.timestamp).label("day"),
-                        aggregate,
-                    ).select_from(model).where(*conditions).group_by("day")
-                )
-                return {str(r.day): int(r[1] or 0) for r in res.all()}
-
-        history: Dict[str, dict] = {
-            (start + _td(days=i)).strftime("%Y-%m-%d"):
-                {"day": (start + _td(days=i)).strftime("%Y-%m-%d"),
-                 "danmaku": 0, "gift_gold": 0.0, "ship_gold": 0.0, "sc_total": 0}
-            for i in range(span_days)
-        }
+        history: Dict[str, dict] = {}
+        start_dt_local = ms_to_dt(start_ms)
+        for i in range(span_days):
+            key = (start_dt_local + timedelta(days=i)).strftime("%Y-%m-%d")
+            history[key] = {"day": key, "danmaku": 0, "gift_gold": 0.0,
+                            "ship_gold": 0.0, "sc_total": 0}
         try:
             for manager in managers:
-                danmaku = await _by_day(manager, DanmakuRecord, func.count())
-                gift = await _by_day(manager, GiftRecord,
-                                     func.sum(GiftRecord.total_price),
-                                     GiftRecord.coin_type == "gold")
-                ship = await _by_day(manager, GuardRecord,
-                                     func.sum(GuardRecord.price * GuardRecord.num))
-                sc = await _by_day(manager, SuperChatRecord, func.sum(SuperChatRecord.price))
-                for day, row in history.items():
-                    row["danmaku"] += danmaku.get(day, 0)
-                    # 收入类保留两位到分位（防浮点尾差）
-                    row["gift_gold"] = round(row["gift_gold"] + gift.get(day, 0) / 1000, 2)
-                    row["ship_gold"] = round(row["ship_gold"] + ship.get(day, 0) / 1000, 2)
-                    row["sc_total"] += sc.get(day, 0)
+                async with manager.get_session() as session:
+                    # 弹幕计数
+                    res = await session.execute(
+                        select(DanmakuRecord.timestamp).where(
+                            DanmakuRecord.timestamp >= start_ms,
+                            DanmakuRecord.timestamp < end_ms))
+                    for (ts,) in res.all():
+                        key = day_key_ms(int(ts))
+                        if key in history:
+                            history[key]["danmaku"] += 1
+                    # 礼物（金瓜子，瓜子→元）
+                    res = await session.execute(
+                        select(GiftRecord.timestamp, GiftRecord.total_price).where(
+                            GiftRecord.coin_type == "gold",
+                            GiftRecord.timestamp >= start_ms,
+                            GiftRecord.timestamp < end_ms))
+                    for ts, val in res.all():
+                        key = day_key_ms(int(ts))
+                        if key in history:
+                            history[key]["gift_gold"] = round(
+                                history[key]["gift_gold"] + int(val or 0) / 1000, 2)
+                    # 上舰（瓜子→元）
+                    res = await session.execute(
+                        select(GuardRecord.timestamp,
+                               GuardRecord.price * GuardRecord.num).where(
+                            GuardRecord.timestamp >= start_ms,
+                            GuardRecord.timestamp < end_ms))
+                    for ts, val in res.all():
+                        key = day_key_ms(int(ts))
+                        if key in history:
+                            history[key]["ship_gold"] = round(
+                                history[key]["ship_gold"] + int(val or 0) / 1000, 2)
+                    # SC（元）
+                    res = await session.execute(
+                        select(SuperChatRecord.timestamp, SuperChatRecord.price).where(
+                            SuperChatRecord.timestamp >= start_ms,
+                            SuperChatRecord.timestamp < end_ms))
+                    for ts, val in res.all():
+                        key = day_key_ms(int(ts))
+                        if key in history:
+                            history[key]["sc_total"] += int(val or 0)
         except Exception as e:
             logger.error(f"查询历史趋势失败: {e}")
             return []
@@ -425,17 +443,18 @@ class StatsMixin:
                                 end_day=None, limit: int = 200_000) -> List[str]:
         """词云用弹幕文本聚合（房间子库扇出；按时间范围取msg，限行保护）
 
+        时间过滤为 [start_ms, end_ms) 半开区间（末日全覆盖，无漏秒）。
+
         Args:
             room_ids: 指定房间列表（None=全部已知房间）
-            start_day: 起始自然日（默认今天）
-            end_day: 结束自然日（默认同start_day）
+            start_day: 起始自然日（date/datetime，默认今天）
+            end_day: 结束自然日（date/datetime，默认同start_day）
             limit: 最多取的弹幕行数（防止超大范围拖垮内存）
         """
-        start_day = start_day or local_now()
-        end_day = end_day or start_day
-        start = datetime(start_day.year, start_day.month, start_day.day)
-        end = datetime(end_day.year, end_day.month, end_day.day,
-                       23, 59, 59)
+        start_day = _as_datetime(start_day or ms_to_dt(now_ms()))
+        end_day = _as_datetime(end_day or start_day)
+        start_ms = day_bounds_ms(start_day)[0]
+        end_ms = day_bounds_ms(end_day)[1]
         if room_ids is None:
             room_ids = await self.list_room_ids()
         texts: List[str] = []
@@ -446,10 +465,17 @@ class StatsMixin:
                 async with self._event_session(int(rid)) as session:
                     res = await session.execute(
                         select(DanmakuRecord.msg).where(
-                            DanmakuRecord.timestamp >= start,
-                            DanmakuRecord.timestamp <= end)
+                            DanmakuRecord.timestamp >= start_ms,
+                            DanmakuRecord.timestamp < end_ms)
                         .limit(max(limit - len(texts), 0)))
                     texts.extend(r[0] or "" for r in res.all())
         except Exception as e:
             logger.error(f"词云弹幕聚合失败: {e}")
         return texts[:limit]
+
+
+def _as_datetime(day) -> datetime:
+    """date/datetime统一为naive datetime（毫秒化时按默认时区解释）"""
+    if isinstance(day, _date) and not isinstance(day, datetime):
+        return datetime(day.year, day.month, day.day)
+    return day

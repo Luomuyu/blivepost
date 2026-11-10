@@ -5,7 +5,6 @@
 
 from dataclasses import dataclass
 from typing import Optional
-from datetime import datetime
 
 
 @dataclass
@@ -27,15 +26,15 @@ class LiveRoomInfo:
 
 @dataclass
 class LiveStats:
-    """直播统计数据"""
+    """直播统计数据（start_time/end_time为13位毫秒Unix时间戳）"""
     danmaku_count: int = 0
     gold_count: float = 0.0  # 元数
     ship_count: float = 0.0  # 元数
     sc_count: int = 0  # 元
     like_count: int = 0
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    
+    start_time: Optional[int] = None
+    end_time: Optional[int] = None
+
     def reset(self) -> None:
         """重置所有统计数据"""
         self.danmaku_count = 0
@@ -45,14 +44,15 @@ class LiveStats:
         self.like_count = 0
         self.start_time = None
         self.end_time = None
-    
+
     @property
     def duration_seconds(self) -> int:
         """直播时长（秒）"""
         if self.start_time is None:
             return 0
-        end = self.end_time or datetime.now()
-        return int((end - self.start_time).total_seconds())
+        from ..utils.timeutil import now_ms
+        end = self.end_time or now_ms()
+        return int((end - self.start_time) / 1000)
     
     @property
     def duration_str(self) -> str:

@@ -4,14 +4,15 @@
 """
 
 import enum
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    String, Text, Integer, BigInteger, Float, DateTime,
+    String, Text, Integer, BigInteger, Float,
     Enum, Index, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from ..utils.timeutil import now_ms
 
 
 def id_pk_type():
@@ -31,16 +32,6 @@ def id_pk_type():
     新库演进——不为此注册会在大表上失败/长时间锁表的 ALTER 改型迁移。
     """
     return BigInteger().with_variant(Integer, "sqlite")
-
-
-def local_now() -> datetime:
-    """
-    获取当前系统本地时间
-    
-    Returns:
-        当前本地时间的 datetime 对象
-    """
-    return datetime.now()
 
 
 class Base(DeclarativeBase):
@@ -85,7 +76,7 @@ class DanmakuRecord(EventBase):
     emoticon_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="表情URL")
     medal_name: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, comment="勋章名")
     medal_level: Mapped[int] = mapped_column(Integer, default=0, comment="勋章等级")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_danmaku_room_time", "room_id", "timestamp"),
@@ -106,7 +97,7 @@ class GiftRecord(EventBase):
     price: Mapped[int] = mapped_column(Integer, comment="单价(瓜子)")
     total_price: Mapped[int] = mapped_column(Integer, comment="总价(瓜子)")
     coin_type: Mapped[str] = mapped_column(String(10), comment="瓜子类型(gold/silver)")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_gift_room_time", "room_id", "timestamp"),
@@ -124,7 +115,7 @@ class SuperChatRecord(EventBase):
     price: Mapped[int] = mapped_column(Integer, comment="价格(元)")
     message: Mapped[str] = mapped_column(Text, comment="留言内容")
     background_color: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, comment="背景色")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_sc_room_time", "room_id", "timestamp"),
@@ -143,7 +134,7 @@ class GuardRecord(EventBase):
     gift_name: Mapped[str] = mapped_column(String(50), comment="礼物名称")
     price: Mapped[int] = mapped_column(Integer, comment="价格(瓜子)")
     num: Mapped[int] = mapped_column(Integer, default=1, comment="数量")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_guard_room_time", "room_id", "timestamp"),
@@ -161,7 +152,7 @@ class AnchorRecord(EventBase):
     require_text: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="要求文本")
     require_type: Mapped[int] = mapped_column(Integer, default=0, comment="要求类型")
     require_value: Mapped[str] = mapped_column(String(100), default="", comment="要求值")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_anchor_room_time", "room_id", "timestamp"),
@@ -177,7 +168,7 @@ class RedPocketRecord(EventBase):
     sender_uid: Mapped[int] = mapped_column(BigInteger, comment="发送者ID")
     sender_name: Mapped[str] = mapped_column(String(100), comment="发送者名")
     total_price: Mapped[int] = mapped_column(Integer, comment="总价值(电池)")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_redpocket_room_time", "room_id", "timestamp"),
@@ -192,7 +183,7 @@ class GuardAchievementRecord(EventBase):
     room_id: Mapped[int] = mapped_column(BigInteger, comment="直播间ID")
     achieve_level: Mapped[int] = mapped_column(Integer, comment="成就等级")
     content: Mapped[str] = mapped_column(String(500), comment="成就内容")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_achievement_room_time", "room_id", "timestamp"),
@@ -209,7 +200,7 @@ class SystemEventRecord(EventBase):
     uid: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="相关用户ID")
     uname: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="相关用户名")
     msg: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="消息内容")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_sys_event_room_time", "room_id", "timestamp"),
@@ -227,7 +218,7 @@ class RoomChangeRecord(EventBase):
     parent_area_name: Mapped[str] = mapped_column(String(50), comment="父分区名")
     area_id: Mapped[int] = mapped_column(Integer, default=0, comment="分区ID")
     area_name: Mapped[str] = mapped_column(String(50), comment="分区名")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="时间")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_room_change_room_time", "room_id", "timestamp"),
@@ -244,7 +235,7 @@ class GroupBindingRecord(Base):
     room_id: Mapped[int] = mapped_column(BigInteger, index=True, comment="直播间ID")
     uid: Mapped[int] = mapped_column(BigInteger, default=0, comment="主播UID")
     monitored: Mapped[int] = mapped_column(Integer, default=0, comment="是否处于监控状态(0否/1是)")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="绑定时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="绑定时间(13位毫秒时间戳)")
 
     __table_args__ = (
         UniqueConstraint("group_openid", "room_id", name="uq_binding_group_room"),
@@ -263,16 +254,16 @@ class CookieAccountRecord(Base):
     bili_jct: Mapped[str] = mapped_column(String(100), default="", comment="bili_jct (csrf)")
     ac_time_value: Mapped[str] = mapped_column(
         String(100), default="", comment="ac_time_value (refresh token)")
-    sessdata_expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, nullable=True, comment="SESSDATA过期时间")
+    sessdata_expires_at: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True, comment="SESSDATA过期时间(13位毫秒时间戳)")
     status: Mapped[str] = mapped_column(String(20), default="active", comment="状态(active/expired)")
     use_count: Mapped[int] = mapped_column(Integer, default=0, comment="被取用次数")
     last_error: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="最近一次失效原因")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="入库时间")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
-    last_used_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, nullable=True, comment="最近一次被取用时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="入库时间(13位毫秒时间戳)")
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, default=now_ms, onupdate=now_ms, comment="更新时间(13位毫秒时间戳)")
+    last_used_at: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True, comment="最近一次被取用时间(13位毫秒时间戳)")
 
 
 class FriendRecord(Base):
@@ -286,9 +277,9 @@ class FriendRecord(Base):
     nickname: Mapped[str] = mapped_column(String(100), default="", comment="用户昵称")
     del_flag: Mapped[int] = mapped_column(Integer, default=0, comment="是否被删除(0否/1被删)")
     msg_receive: Mapped[int] = mapped_column(Integer, default=1, comment="单聊消息接收(1开/0关)")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="添加时间")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="添加时间(13位毫秒时间戳)")
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, default=now_ms, onupdate=now_ms, comment="更新时间(13位毫秒时间戳)")
 
 
 class GroupRecord(Base):
@@ -304,9 +295,9 @@ class GroupRecord(Base):
     member_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="群成员人数")
     del_flag: Mapped[int] = mapped_column(Integer, default=0, comment="是否被移除(0否/1被移出)")
     msg_receive: Mapped[int] = mapped_column(Integer, default=1, comment="群消息接收(1开/0关)")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="加入时间")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="加入时间(13位毫秒时间戳)")
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, default=now_ms, onupdate=now_ms, comment="更新时间(13位毫秒时间戳)")
 
 
 class RoomDbRecord(Base):
@@ -315,7 +306,7 @@ class RoomDbRecord(Base):
 
     room_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, comment="直播间长号")
     db_name: Mapped[str] = mapped_column(String(100), unique=True, comment="子库文件名(rooms/目录下)")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="创建时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="创建时间(13位毫秒时间戳)")
 
 
 class DynamicSeenRecord(EventBase):
@@ -325,7 +316,7 @@ class DynamicSeenRecord(EventBase):
     dynamic_id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="动态ID")
     up_uid: Mapped[int] = mapped_column(BigInteger, index=True, comment="UP主UID")
     summary: Mapped[str] = mapped_column(String(200), default="", comment="动态内容摘要")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="记录时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="记录时间(13位毫秒时间戳)")
 
 
 class DynamicBindingRecord(Base):
@@ -337,7 +328,7 @@ class DynamicBindingRecord(Base):
     group_openid: Mapped[str] = mapped_column(String(64), comment="群openid")
     up_uid: Mapped[int] = mapped_column(BigInteger, index=True, comment="UP主UID")
     up_name: Mapped[str] = mapped_column(String(100), default="", comment="UP主昵称")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="绑定时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="绑定时间(13位毫秒时间戳)")
 
     __table_args__ = (
         UniqueConstraint("group_openid", "up_uid", name="uq_dynamic_group_up"),
@@ -353,9 +344,9 @@ class StreamerRecord(Base):
     uname: Mapped[str] = mapped_column(String(100), default="", comment="主播昵称")
     face: Mapped[str] = mapped_column(String(255), default="", comment="主播头像url")
     room_id: Mapped[int] = mapped_column(BigInteger, default=0, comment="主直播间长号")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="添加时间")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="添加时间(13位毫秒时间戳)")
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, default=now_ms, onupdate=now_ms, comment="更新时间(13位毫秒时间戳)")
 
 
 class LiveRoomRecord(Base):
@@ -373,9 +364,9 @@ class LiveRoomRecord(Base):
     cover: Mapped[str] = mapped_column(String(255), default="", comment="直播间封面url")
     keyframe: Mapped[str] = mapped_column(String(255), default="", comment="关键帧url")
     online: Mapped[int] = mapped_column(BigInteger, default=0, comment="在线人数")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="添加时间")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="添加时间(13位毫秒时间戳)")
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, default=now_ms, onupdate=now_ms, comment="更新时间(13位毫秒时间戳)")
 
 
 class LiveStatusRecord(EventBase):
@@ -393,9 +384,9 @@ class LiveStatusRecord(EventBase):
     ship_count: Mapped[float] = mapped_column(Float, default=0, comment="上舰收入(元)")
     sc_count: Mapped[int] = mapped_column(Integer, default=0, comment="SC收入(元)")
     duration: Mapped[int] = mapped_column(Integer, default=0, comment="直播时长(秒)")
-    start_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="开播时间")
-    end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="下播时间")
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="记录时间")
+    start_time: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="开播时间(13位毫秒时间戳)")
+    end_time: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="下播时间(13位毫秒时间戳)")
+    timestamp: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="记录时间(13位毫秒时间戳)")
     
     __table_args__ = (
         Index("idx_live_status_room_time", "room_id", "timestamp"),
@@ -408,7 +399,7 @@ class WebUserRecord(Base):
 
     username: Mapped[str] = mapped_column(String(64), primary_key=True, comment="用户名")
     password_hash: Mapped[str] = mapped_column(Text, comment="pbkdf2口令哈希")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="创建时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="创建时间(13位毫秒时间戳)")
 
 
 class PushSwitchRecord(Base):
@@ -418,8 +409,8 @@ class PushSwitchRecord(Base):
     name: Mapped[str] = mapped_column(String(32), primary_key=True, comment="开关名")
     enabled: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="0关/1开")
     allow_modify: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="前台可改0/1")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, default=now_ms, onupdate=now_ms, comment="更新时间(13位毫秒时间戳)")
 
 
 class GroupAtAllRecord(Base):
@@ -441,8 +432,8 @@ class GroupAtAllRecord(Base):
         String(500), nullable=False, default="",
         comment="rooms模式下艾特的房间ID列表(逗号分隔)")
     used_date: Mapped[str] = mapped_column(String(10), nullable=False, comment="最近使用日期YYYY-MM-DD")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, default=now_ms, onupdate=now_ms, comment="更新时间(13位毫秒时间戳)")
 
 
 class GroupPushSettingRecord(EventBase):
@@ -458,6 +449,6 @@ class GroupPushSettingRecord(EventBase):
     daily_report: Mapped[int] = mapped_column(Integer, default=0, comment="每日结算推送")
     weekly_report: Mapped[int] = mapped_column(Integer, default=0, comment="每周结算推送")
     monthly_report: Mapped[int] = mapped_column(Integer, default=0, comment="每月结算推送")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=local_now, comment="创建时间")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=local_now, onupdate=local_now, comment="更新时间")
+    created_at: Mapped[int] = mapped_column(BigInteger, default=now_ms, comment="创建时间(13位毫秒时间戳)")
+    updated_at: Mapped[int] = mapped_column(
+        BigInteger, default=now_ms, onupdate=now_ms, comment="更新时间(13位毫秒时间戳)")

@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 from .models import (
     DanmakuRecord, GiftRecord, SuperChatRecord, GuardRecord,
     AnchorRecord, RedPocketRecord, GuardAchievementRecord,
-    SystemEventRecord, RoomChangeRecord, LiveStatusRecord, EventType, local_now
+    SystemEventRecord, RoomChangeRecord, LiveStatusRecord, EventType
 )
 from ..utils.logger import get_logger
+from ..utils.timeutil import now_ms
 
 if TYPE_CHECKING:
     from .manager import DatabaseManager
@@ -369,7 +370,7 @@ class EventWriterMixin:
                     status="live_start",
                     title=title,
                     cover=cover,
-                    start_time=local_now(),
+                    start_time=now_ms(),
                 )
                 session.add(record)
                 await session.commit()
@@ -405,7 +406,7 @@ class EventWriterMixin:
                     sc_count=stats.sc_count,
                     duration=stats.duration_seconds,
                     start_time=stats.start_time,
-                    end_time=stats.end_time or local_now(),
+                    end_time=stats.end_time or now_ms(),
                 )
                 session.add(record)
                 await session.commit()

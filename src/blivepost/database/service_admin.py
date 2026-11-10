@@ -5,7 +5,7 @@
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -15,12 +15,13 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from .models import (
     DanmakuRecord, GiftRecord, SuperChatRecord, GuardRecord,
     AnchorRecord, RedPocketRecord, GuardAchievementRecord,
-    SystemEventRecord, RoomChangeRecord, LiveStatusRecord, local_now,
+    SystemEventRecord, RoomChangeRecord, LiveStatusRecord,
     GroupBindingRecord, CookieAccountRecord, DynamicBindingRecord,
     FriendRecord, GroupRecord, StreamerRecord, LiveRoomRecord,
     WebUserRecord, PushSwitchRecord, GroupPushSettingRecord, GroupAtAllRecord
 )
 from ..utils.logger import get_logger
+from ..utils.timeutil import day_bounds_ms, day_key_ms, now_ms
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -176,7 +177,7 @@ class AdminMixin:
         sessdata: str = "",
         bili_jct: str = "",
         ac_time_value: str = "",
-        sessdata_expires_at: Optional[datetime] = None,
+        sessdata_expires_at: Optional[int] = None,
         status: str = "active"
     ) -> None:
         """
@@ -189,7 +190,7 @@ class AdminMixin:
             sessdata: SESSDATA
             bili_jct: csrf
             ac_time_value: refresh token
-            sessdata_expires_at: SESSDATA过期时间
+            sessdata_expires_at: SESSDATA过期时间（13位毫秒时间戳）
             status: 状态
         """
         try:
@@ -265,7 +266,7 @@ class AdminMixin:
                 )
                 record = result.scalar_one_or_none()
                 if record is not None:
-                    record.last_used_at = local_now()
+                    record.last_used_at = now_ms()
                     record.use_count = (record.use_count or 0) + 1
                     await session.commit()
         except Exception as e:
@@ -310,18 +311,17 @@ class AdminMixin:
 
         Returns:
             dict: {表名: [行元组列表]}，含 danmaku/gift/super_chat/guard/red_pocket
+            （timestamp列为13位毫秒时间戳）
         """
-        day = day or local_now()
-        day_start = day.replace(hour=0, minute=0, second=0, microsecond=0)
-        day_end = day_start + timedelta(days=1)
+        start_ms, end_ms = day_bounds_ms(day)
 
         async def _fetch(model, columns):
             async with self._event_session(room_id) as session:
                 res = await session.execute(
                     select(*[getattr(model, c) for c in columns]).where(
                         model.room_id == room_id,
-                        model.timestamp >= day_start,
-                        model.timestamp < day_end,
+                        model.timestamp >= start_ms,
+                        model.timestamp < end_ms,
                     ).order_by(model.timestamp)
                 )
                 return [tuple(r) for r in res.all()]
@@ -992,7 +992,7 @@ class AdminMixin:
         groups = [g for g in dict.fromkeys(groups) if g]
         if not groups:
             return []
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = day_key_ms(now_ms())
         try:
             async with self.db_manager.get_session() as session:
                 res = await session.execute(select(GroupAtAllRecord).where(

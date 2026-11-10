@@ -2,14 +2,21 @@
 """数据库存储服务 - 观众分析（AnalyticsMixin）
 
 活跃时段热力（7天×24小时弹幕矩阵）、高频发言榜、弹幕量日分布。
+
+第十六批起时间列为13位毫秒时间戳：SQL只按毫秒范围过滤取回，
+按日/按小时分组在Python侧用day_key_ms/hour_key_ms完成（跨库一致
+且按Setting.timezone分日，SQL侧strftime仅对SQLite的text时间有效）。
 """
 
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, List
+from datetime import timedelta
+from typing import TYPE_CHECKING, Dict, List
 
 from sqlalchemy import func, select
 
 from ..utils.logger import get_logger
+from ..utils.timeutil import (
+    day_bounds_ms, day_key_ms, hour_key_ms, ms_to_dt, now_ms
+)
 from .models import DanmakuRecord
 
 if TYPE_CHECKING:
@@ -36,14 +43,13 @@ class AnalyticsMixin:
             room_id: 房间ID（0=全部房间）
             days: 天数（默认7）
         """
-        now = datetime.now()
-        start = (now - timedelta(days=days - 1)).replace(
-            hour=0, minute=0, second=0, microsecond=0)
-        result: dict = {}
+        start_ms = day_bounds_ms(
+            ms_to_dt(now_ms()) - timedelta(days=days - 1))[0]
 
-        def _empty():
-            return {d.strftime("%Y-%m-%d"): [0] * 24
-                    for d in (start + timedelta(days=i) for i in range(days))}
+        def _empty() -> Dict[str, list]:
+            base = ms_to_dt(start_ms)
+            return {(base + timedelta(days=i)).strftime("%Y-%m-%d"): [0] * 24
+                    for i in range(days)}
 
         result = _empty()
         try:
@@ -56,19 +62,14 @@ class AnalyticsMixin:
             for manager in managers:
                 async with manager.get_session() as session:
                     rows = await session.execute(
-                        select(
-                            func.strftime("%Y-%m-%d", DanmakuRecord.timestamp),
-                            func.strftime("%H", DanmakuRecord.timestamp),
-                            func.count(),
-                        ).where(
-                            DanmakuRecord.timestamp >= start,
-                        ).group_by(
-                            func.strftime("%Y-%m-%d", DanmakuRecord.timestamp),
-                            func.strftime("%H", DanmakuRecord.timestamp),
+                        select(DanmakuRecord.timestamp).where(
+                            DanmakuRecord.timestamp >= start_ms,
                         ))
-                    for day, hour, count in rows:
-                        if day in result and 0 <= int(hour) < 24:
-                            result[day][int(hour)] += count
+                    for (ts,) in rows.all():
+                        day = day_key_ms(int(ts))
+                        if day in result:
+                            hour = hour_key_ms(int(ts))
+                            result[day][hour] += 1
         except Exception as e:
             logger.error(f"查询活跃热力图失败: {e}")
         return result
@@ -76,9 +77,8 @@ class AnalyticsMixin:
     async def get_top_speakers(self, room_id: int = 0,
                                days: int = 7, limit: int = 20) -> List[dict]:
         """高频发言榜：[{uid, uname, count}]，按弹幕数降序"""
-        now = datetime.now()
-        start = (now - timedelta(days=days)).replace(
-            hour=0, minute=0, second=0, microsecond=0)
+        start_ms = day_bounds_ms(
+            ms_to_dt(now_ms()) - timedelta(days=days))[0]
         agg: dict = {}
         try:
             if room_id:
@@ -95,11 +95,11 @@ class AnalyticsMixin:
                             DanmakuRecord.uname,
                             func.count(),
                         ).where(
-                            DanmakuRecord.timestamp >= start,
+                            DanmakuRecord.timestamp >= start_ms,
                         ).group_by(
                             DanmakuRecord.uid, DanmakuRecord.uname,
                         ).order_by(func.count().desc()).limit(limit * 3))
-                    for uid, uname, count in rows:
+                    for uid, uname, count in rows.all():
                         key = int(uid)
                         if key not in agg:
                             agg[key] = {"uid": int(uid), "uname": uname or "",
@@ -112,10 +112,9 @@ class AnalyticsMixin:
     async def get_danmaku_daily_distribution(self, room_id: int = 0,
                                              days: int = 30) -> List[dict]:
         """弹幕量日分布：[{day, count}]，按日升序"""
-        now = datetime.now()
-        start = (now - timedelta(days=days)).replace(
-            hour=0, minute=0, second=0, microsecond=0)
-        agg: dict = {}
+        start_ms = day_bounds_ms(
+            ms_to_dt(now_ms()) - timedelta(days=days))[0]
+        agg: Dict[str, int] = {}
         try:
             if room_id:
                 managers = [await self._ensure_registry().get(
@@ -126,15 +125,12 @@ class AnalyticsMixin:
             for manager in managers:
                 async with manager.get_session() as session:
                     rows = await session.execute(
-                        select(
-                            func.strftime("%Y-%m-%d", DanmakuRecord.timestamp),
-                            func.count(),
-                        ).where(
-                            DanmakuRecord.timestamp >= start,
-                        ).group_by(
-                            func.strftime("%Y-%m-%d", DanmakuRecord.timestamp)))
-                    for day, count in rows:
-                        agg[day] = agg.get(day, 0) + count
+                        select(DanmakuRecord.timestamp).where(
+                            DanmakuRecord.timestamp >= start_ms,
+                        ))
+                    for (ts,) in rows.all():
+                        day = day_key_ms(int(ts))
+                        agg[day] = agg.get(day, 0) + 1
         except Exception as e:
             logger.error(f"查询弹幕日分布失败: {e}")
         return [{"day": d, "count": agg[d]} for d in sorted(agg)]

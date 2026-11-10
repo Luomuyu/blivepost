@@ -9,6 +9,7 @@ from blivepost.config.settings import Settings
 from blivepost.database import DatabaseManager, DatabaseService
 from blivepost.services.wordcloud import build_wordcloud
 from blivepost.services.webpanel import WebPanel, _parse_day
+from blivepost.utils.timeutil import dt_to_ms
 
 
 # ==================== 分词统计 ====================
@@ -54,12 +55,14 @@ async def env(tmp_path):
 
 
 async def _seed(svc, room_id, msg, day: datetime):
-    """直接插danmaku行（save_danmaku固定取当前时间，范围测试需指定时间戳）"""
+    """直接插danmaku行（save_danmaku固定取当前时间，范围测试需指定时间戳；
+    时间列存13位毫秒，datetime入参经dt_to_ms换算）"""
     from blivepost.database.models import DanmakuRecord
     async with svc._event_session(room_id) as session:
         session.add(DanmakuRecord(room_id=room_id, uid=1, uname="u", msg=msg,
-                                  timestamp=day.replace(hour=12, minute=0,
-                                                        second=0, microsecond=0)))
+                                  timestamp=dt_to_ms(day.replace(
+                                      hour=12, minute=0, second=0,
+                                      microsecond=0))))
         await session.commit()
 
 

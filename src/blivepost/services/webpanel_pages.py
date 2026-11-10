@@ -25,6 +25,7 @@ from .webpanel_common import (
     _parse_month,
     logger,
 )
+from ..utils.timeutil import ms_to_str, now_ms
 
 
 if TYPE_CHECKING:
@@ -74,7 +75,7 @@ class PagesMixin:
 
     async def _collect(self) -> dict:
         """收集面板数据"""
-        now = datetime.now()
+        now = now_ms()
 
         # 机器人凭证状态（access_token，botpy请求级自动刷新）
         token_state = self.bot_client.token_state() if self.bot_client else {
@@ -97,13 +98,13 @@ class PagesMixin:
             rooms = self.monitor_manager.get_account_rooms(a.uid) if self.monitor_manager else []
             days_left = None
             if a.sessdata_expires_at is not None:
-                days_left = max((a.sessdata_expires_at - now).days, 0)
+                days_left = max((a.sessdata_expires_at - now) // 86_400_000, 0)
             accounts.append({
                 "uid": a.uid, "nickname": a.nickname, "status": a.status,
                 "days_left": days_left,
                 "use_count": getattr(a, "use_count", 0),
-                "expires": a.sessdata_expires_at.strftime("%m-%d") if a.sessdata_expires_at else None,
-                "last_used": a.last_used_at.strftime("%m-%d %H:%M") if a.last_used_at else None,
+                "expires": ms_to_str(a.sessdata_expires_at, "%m-%d") if a.sessdata_expires_at else None,
+                "last_used": ms_to_str(a.last_used_at, "%m-%d %H:%M") if a.last_used_at else None,
                 "rooms": rooms,
             })
 
@@ -115,7 +116,7 @@ class PagesMixin:
         if room_ids and self.db_service is not None:
             try:
                 summaries = await self.db_service.get_daily_summaries(
-                    room_ids, day=now)
+                    room_ids)
             except Exception as e:
                 logger.warning(f"批量查询每日汇总失败: {e}")
 
@@ -153,7 +154,7 @@ class PagesMixin:
         recent = await self.db_service.get_recent_live_status(limit=10) \
             if self.db_service else []
         return {
-            "now": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "now": ms_to_str(now, "%Y-%m-%d %H:%M:%S"),
             "bot": token_state,
             "me": me,
             "app_id": app_id,

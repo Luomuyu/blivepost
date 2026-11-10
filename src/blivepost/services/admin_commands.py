@@ -9,11 +9,11 @@
 
 import asyncio
 import re
-from datetime import datetime
 from typing import List, Optional, TYPE_CHECKING
 
 from ..utils.contact import extract_sender
 from ..utils.logger import get_logger
+from ..utils.timeutil import ms_to_str, now_ms
 from .bili_login import BiliLoginService, LoginResult, verify_nav
 from .cookie_pool import CookiePool
 
@@ -283,10 +283,10 @@ class AdminCommandHandler:
 
         active = [a for a in accounts if a.status == "active"]
         lines = [f"账号池共 {len(accounts)} 个账号（可用 {len(active)}）："]
-        now = datetime.now()
+        now = now_ms()
         for a in accounts:
             if a.sessdata_expires_at is not None:
-                days = (a.sessdata_expires_at - now).days
+                days = (a.sessdata_expires_at - now) // 86_400_000
                 expire_text = f"约{days}天后过期"
             else:
                 expire_text = "过期时间未知"
@@ -298,7 +298,7 @@ class AdminCommandHandler:
                 if rooms:
                     line += "\n  关联房间：" + "、".join(str(r) for r in rooms)
             if a.last_used_at is not None:
-                line += f"\n  最近使用：{a.last_used_at.strftime('%m-%d %H:%M')}"
+                line += f"\n  最近使用：{ms_to_str(a.last_used_at, '%m-%d %H:%M')}"
             lines.append(line)
         return "\n".join(lines)
 

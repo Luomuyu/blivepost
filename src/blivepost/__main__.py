@@ -199,6 +199,9 @@ async def main_async(
     try:
         # 加载配置（文件不存在时自动生成默认配置）
         settings = Settings.load(config_path)
+        # 展示层时区（存储层为与时区无关的毫秒时间戳，见utils/timeutil.py）
+        from .utils.timeutil import set_default_timezone
+        set_default_timezone(settings.message.timezone)
         # debug开关决定DEBUG日志是否输出（默认INFO；同时约束jieba等第三方库日志）
         Logger().apply_debug(settings.message.debug)
 

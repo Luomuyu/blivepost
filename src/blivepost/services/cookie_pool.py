@@ -10,11 +10,11 @@ B站账号Cookie池
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from ..database.models import CookieAccountRecord, local_now
+from ..database.models import CookieAccountRecord
 from ..utils.logger import get_logger
+from ..utils.timeutil import now_ms
 
 
 if TYPE_CHECKING:
@@ -28,22 +28,25 @@ REFRESH_AHEAD_DAYS = 7
 # 无过期时间信息时的兜底刷新周期（天）
 REFRESH_INTERVAL_DAYS = 25
 
+# 毫秒换算：临近过期/兜底周期判定用
+_MS_PER_DAY = 86_400_000
+
 
 @dataclass
 class CookieAccount:
-    """账号cookie信息"""
+    """账号cookie信息（时间字段为13位毫秒Unix时间戳）"""
     uid: int
     nickname: str = ""
     cookie_string: str = ""
     sessdata: str = ""
     bili_jct: str = ""
     ac_time_value: str = ""
-    sessdata_expires_at: Optional[datetime] = None
+    sessdata_expires_at: Optional[int] = None
     status: str = "active"
     use_count: int = 0
     last_error: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    last_used_at: Optional[datetime] = None
+    updated_at: Optional[int] = None
+    last_used_at: Optional[int] = None
 
     @classmethod
     def from_record(cls, rec: CookieAccountRecord) -> "CookieAccount":
@@ -120,9 +123,9 @@ class CookiePool:
 
         account = min(
             active,
-            key=lambda a: a.last_used_at or datetime.min,
+            key=lambda a: a.last_used_at or 0,
         )
-        account.last_used_at = local_now()
+        account.last_used_at = now_ms()
         account.use_count += 1
         await self._db.touch_cookie_account(account.uid)
         logger.info(f"Cookie池取用账号 {account.uid}（{account.nickname}，"
@@ -137,7 +140,7 @@ class CookiePool:
         sessdata: str = "",
         bili_jct: str = "",
         ac_time_value: str = "",
-        sessdata_expires_at: Optional[datetime] = None
+        sessdata_expires_at: Optional[int] = None
     ) -> CookieAccount:
         """
         写入/更新账号cookie（登录成功或维护刷新后调用，重置为active）
@@ -149,7 +152,7 @@ class CookiePool:
             sessdata: SESSDATA（未提供时从cookie_string解析）
             bili_jct: csrf（未提供时从cookie_string解析）
             ac_time_value: refresh token（未提供时从cookie_string解析）
-            sessdata_expires_at: SESSDATA过期时间
+            sessdata_expires_at: SESSDATA过期时间（13位毫秒时间戳）
 
         Returns:
             CookieAccount: 更新后的账号信息
@@ -184,7 +187,7 @@ class CookiePool:
         account.sessdata_expires_at = sessdata_expires_at
         account.status = "active"
         account.last_error = None
-        account.updated_at = local_now()
+        account.updated_at = now_ms()
         logger.info(f"Cookie池已写入账号 {uid}（{nickname}）")
         return account
 
@@ -201,7 +204,7 @@ class CookiePool:
         account = self._accounts.get(uid)
         if account is None or account.status != "active":
             return None
-        account.last_used_at = local_now()
+        account.last_used_at = now_ms()
         account.use_count += 1
         await self._db.touch_cookie_account(account.uid)
         return account
@@ -255,7 +258,8 @@ class CookiePool:
         判断账号cookie是否临近过期需要刷新
 
         规则：SESSDATA剩余有效期不足REFRESH_AHEAD_DAYS天，
-        或无过期时间信息且距上次更新超过REFRESH_INTERVAL_DAYS天。
+        或无过期时间信息且距上次更新超过REFRESH_INTERVAL_DAYS天
+        （时间字段为13位毫秒时间戳，按毫秒差换算天数）。
 
         Args:
             account: 账号信息
@@ -266,12 +270,12 @@ class CookiePool:
         if account.status != "active":
             return False
 
-        now = local_now()
+        now = now_ms()
         if account.sessdata_expires_at is not None:
-            return account.sessdata_expires_at - now < timedelta(days=REFRESH_AHEAD_DAYS)
+            return account.sessdata_expires_at - now < REFRESH_AHEAD_DAYS * _MS_PER_DAY
 
         if account.updated_at is not None:
-            return now - account.updated_at > timedelta(days=REFRESH_INTERVAL_DAYS)
+            return now - account.updated_at > REFRESH_INTERVAL_DAYS * _MS_PER_DAY
         return True
 
     def refresh_due_accounts(self) -> List[CookieAccount]:

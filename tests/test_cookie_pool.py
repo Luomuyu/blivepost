@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """Cookie账号池与扫码登录辅助逻辑测试"""
 
-from datetime import datetime, timedelta
-
 import pytest
 
 from blivepost.config.settings import Settings
@@ -11,6 +9,9 @@ from blivepost.services.cookie_pool import (
     CookiePool, CookieAccount, REFRESH_AHEAD_DAYS, REFRESH_INTERVAL_DAYS,
 )
 from blivepost.services.bili_login import _extract_cookies, render_qrcode_png
+from blivepost.utils.timeutil import now_ms
+
+_MS_PER_DAY = 86_400_000
 
 
 @pytest.fixture
@@ -93,8 +94,9 @@ def test_needs_refresh_by_expiry():
 
 async def test_needs_refresh_rules(pool):
     p, _ = pool
-    await p.upsert(1, "A", "c", sessdata_expires_at=local_now_plus(days=30))
-    await p.upsert(2, "B", "c", sessdata_expires_at=local_now_plus(days=REFRESH_AHEAD_DAYS - 1))
+    await p.upsert(1, "A", "c", sessdata_expires_at=now_ms() + 30 * _MS_PER_DAY)
+    await p.upsert(2, "B", "c",
+                   sessdata_expires_at=now_ms() + (REFRESH_AHEAD_DAYS - 1) * _MS_PER_DAY)
     await p.upsert(3, "C", "c")  # 无过期时间：刚更新，不需要刷新
 
     due = [a.uid for a in p.refresh_due_accounts()]
@@ -102,12 +104,8 @@ async def test_needs_refresh_rules(pool):
 
     # 无过期时间且长期未更新 -> 需要刷新
     acc = p.get_account(3)
-    acc.updated_at = datetime.now() - timedelta(days=REFRESH_INTERVAL_DAYS + 1)
+    acc.updated_at = now_ms() - (REFRESH_INTERVAL_DAYS + 1) * _MS_PER_DAY
     assert p.needs_refresh(acc)
-
-
-def local_now_plus(days):
-    return datetime.now() + timedelta(days=days)
 
 
 def test_extract_cookies():
@@ -120,7 +118,8 @@ def test_extract_cookies():
     r = _extract_cookies(cookies)
     assert r.sessdata == "s1" and r.bili_jct == "j1" and r.ac_time_value == "a1"
     assert "SESSDATA=s1" in r.cookie_string and "buvid3=b1" in r.cookie_string
-    assert r.sessdata_expires_at is not None and r.sessdata_expires_at.year == 2100
+    # playwright秒级expires → 13位毫秒时间戳（2100-01-01 == 4102444800000）
+    assert r.sessdata_expires_at == 4102444800000
 
 
 def test_render_qrcode_png():

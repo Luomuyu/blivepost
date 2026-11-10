@@ -22,7 +22,6 @@ import asyncio
 import io
 import os
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, List, Optional, Tuple
 
@@ -76,7 +75,7 @@ class LoginResult:
     sessdata: str = ""
     bili_jct: str = ""
     ac_time_value: str = ""
-    sessdata_expires_at: Optional[datetime] = None
+    sessdata_expires_at: Optional[int] = None  # 13位毫秒时间戳
     error: str = ""
 
 
@@ -140,7 +139,8 @@ def _extract_cookies(cookies: List[dict]) -> LoginResult:
             result.sessdata = c["value"]
             expires = c.get("expires")
             if expires and expires > 0:
-                result.sessdata_expires_at = datetime.fromtimestamp(expires)
+                # playwright的expires为秒级浮点：转13位毫秒时间戳
+                result.sessdata_expires_at = int(expires * 1000)
         elif c["name"] == "bili_jct":
             result.bili_jct = c["value"]
         elif c["name"] == "ac_time_value":

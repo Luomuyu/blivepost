@@ -9,6 +9,9 @@ from blivepost.database import DatabaseManager, DatabaseService
 from blivepost.database.models import (
     DanmakuRecord, EventBase, GroupBindingRecord, RoomDbRecord,
 )
+from blivepost.utils.timeutil import dt_to_ms, now_ms
+
+_MS_PER_HOUR = 3_600_000
 
 
 async def _make_svc(tmp_path, name="t"):
@@ -55,8 +58,6 @@ async def test_event_routing_to_room_subdb(tmp_path):
 @pytest.mark.asyncio
 async def test_legacy_event_migration(tmp_path):
     """旧库事件表数据按房间搬入子库，主库清空，汇总读数不丢"""
-    from datetime import datetime
-
     from sqlalchemy import func
 
     svc, db = await _make_svc(tmp_path, "legacy")
@@ -65,9 +66,9 @@ async def test_legacy_event_migration(tmp_path):
         await conn.run_sync(EventBase.metadata.create_all)
     async with db.get_session() as session:
         session.add(DanmakuRecord(room_id=100, uid=1, uname="u", msg="old1",
-                                  timestamp=datetime.now()))
+                                  timestamp=now_ms()))
         session.add(DanmakuRecord(room_id=200, uid=1, uname="u", msg="old2",
-                                  timestamp=datetime.now()))
+                                  timestamp=now_ms()))
         await session.commit()
 
     moved = await svc.migrate_legacy_events()
@@ -104,11 +105,12 @@ async def test_migrate_fresh_db_silent_skip(tmp_path):
 
 
 def test_parse_live_time():
-    """REST开播时间解析：合法值/零值/空值"""
+    """REST开播时间解析：合法值/零值/空值（返回13位毫秒时间戳）"""
     from datetime import datetime
 
     from blivepost.core.handler import _parse_live_time
-    assert _parse_live_time("2026-09-06 20:00:00") == datetime(2026, 9, 6, 20, 0, 0)
+    assert _parse_live_time("2026-09-06 20:00:00") == dt_to_ms(
+        datetime(2026, 9, 6, 20, 0, 0))
     assert _parse_live_time("0000-00-00 00:00:00") is None
     assert _parse_live_time("") is None
     assert _parse_live_time("bad") is None
@@ -116,15 +118,13 @@ def test_parse_live_time():
 
 def test_live_stats_duration_guard_and_reset():
     """reset清start_time后时长为0（守卫不抛异常）；设值后正常计时"""
-    from datetime import datetime, timedelta
-
     from blivepost.models.live import LiveStats
     stats = LiveStats()
     assert stats.duration_seconds == 0  # start_time为None时守卫返回0
     stats.reset()
-    stats.start_time = datetime.now() - timedelta(hours=2)
+    stats.start_time = now_ms() - 2 * _MS_PER_HOUR
     assert 7199 <= stats.duration_seconds <= 7201
-    stats.end_time = stats.start_time + timedelta(hours=2)
+    stats.end_time = stats.start_time + 2 * _MS_PER_HOUR
     assert stats.duration_seconds == 7200
 
 
@@ -396,8 +396,6 @@ async def test_live_page_group_push_settings_ctx(tmp_path):
 @pytest.mark.asyncio
 async def test_legacy_migration_crash_midway_rerun_idempotent(tmp_path):
     """复制一半崩溃重跑安全：子库已存在的id跳过（不IntegrityError卡死），主库按批删除"""
-    from datetime import datetime
-
     from sqlalchemy import func
 
     svc, db = await _make_svc(tmp_path, "crash")
@@ -408,7 +406,7 @@ async def test_legacy_migration_crash_midway_rerun_idempotent(tmp_path):
         for room in (100, 200):
             for i in range(2):
                 session.add(DanmakuRecord(room_id=room, uid=1, uname="u",
-                                          msg=f"m{i}", timestamp=datetime.now()))
+                                          msg=f"m{i}", timestamp=now_ms()))
         await session.commit()
 
     # 首跑模拟崩溃：第一个房间复制提交后、第二个房间复制前失败（删除阶段未到）

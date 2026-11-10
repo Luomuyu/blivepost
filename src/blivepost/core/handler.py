@@ -8,23 +8,23 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 from ..config.settings import Settings, MessageSettings
-from ..database.models import local_now
 from ..models.live import LiveStats, TempData
 from ..services.push import PushService
 from ..utils.logger import get_logger
+from ..utils.timeutil import dt_to_ms, now_ms
 from ..vendor.importer import import_blivedm
 
 
-def _parse_live_time(text: str) -> Optional[datetime]:
+def _parse_live_time(text: str) -> Optional[int]:
     """
-    解析REST接口的开播时间（"YYYY-MM-DD HH:mm:ss"）
+    解析REST接口的开播时间（"YYYY-MM-DD HH:mm:ss"）为13位毫秒时间戳
 
     未开播等场景返回"0000-00-00 00:00:00"或空值，解析失败返回None。
     """
     if not text or text.startswith("0000"):
         return None
     try:
-        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+        return dt_to_ms(datetime.strptime(text, "%Y-%m-%d %H:%M:%S"))
     except (ValueError, TypeError):
         return None
 
@@ -270,7 +270,7 @@ class BaseEventHandler:
         self.is_live = True
         # 先清零统计再记开播时间（reset会将start_time置None，顺序颠倒会0时长）
         self.stats.reset()
-        self.stats.start_time = local_now()
+        self.stats.start_time = now_ms()
         self.temp_data = TempData()
 
         # 开播推送与落库（异步调度，同步API请求在线程中执行，不阻塞事件循环）
@@ -321,7 +321,7 @@ class BaseEventHandler:
         self._async_save(self._push_live_end())
 
         self.is_live = False
-        self.stats.end_time = local_now()
+        self.stats.end_time = now_ms()
 
     async def _push_live_end(self) -> None:
         """异步下播推送"""

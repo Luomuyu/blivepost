@@ -15,7 +15,6 @@ import os
 import random
 import sqlite3
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
@@ -23,6 +22,7 @@ import requests
 
 from ..config.settings import Settings
 from ..utils.logger import get_logger
+from ..utils.timeutil import now_ms
 
 
 if TYPE_CHECKING:
@@ -453,7 +453,7 @@ def _init_seen_db(path: Path) -> None:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS dynamic_seen ("
             "dynamic_id TEXT PRIMARY KEY, up_uid INTEGER, "
-            "summary TEXT DEFAULT '', created_at TEXT)"
+            "summary TEXT DEFAULT '', created_at BIGINT)"
         )
         conn.commit()
     finally:
@@ -487,7 +487,7 @@ def save_seen_dynamic_ids(up_uid: int, ids, dynamics_dir=None) -> None:
             conn.executemany(
                 "INSERT OR IGNORE INTO dynamic_seen(dynamic_id, up_uid, created_at) "
                 "VALUES(?, ?, ?)",
-                [(i, up_uid, datetime.now().isoformat(timespec="seconds")) for i in ids],
+                [(i, up_uid, now_ms()) for i in ids],
             )
             # 修剪：按dynamic_id数值序保留最新SEEN_KEEP_LIMIT条，更旧的删除。
             # 不做COUNT前置判断——未超限时DELETE无行可删，代价可忽略

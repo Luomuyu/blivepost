@@ -16,6 +16,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from ..utils.logger import get_logger
+from ..utils.timeutil import ms_to_str
 
 
 logger = get_logger("webpanel")
@@ -25,6 +26,9 @@ _env = Environment(
     loader=FileSystemLoader(str(_TEMPLATES_DIR)),
     autoescape=True,
 )
+# 毫秒时间戳展示filter：模板中 {{ ts | ms2str('%Y-%m-%d %H:%M') }}
+# （第十六批起时间列为13位毫秒int，经Setting.timezone转换显示）
+_env.filters["ms2str"] = ms_to_str
 
 _SESSION_COOKIE = "blivepost_sid"
 _SESSION_TTL = timedelta(days=7)

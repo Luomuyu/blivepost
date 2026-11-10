@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ..services.push import PushService, _supports_kwarg
 from ..utils.logger import get_logger
+from ..utils.timeutil import ms_to_str
 
 
 if TYPE_CHECKING:
@@ -276,14 +277,14 @@ class PushQueueConsumer:
         author = item.get("author") or (
             self.binding_store.get_dynamic_up_name(up_uid)
             if self.binding_store else "") or f"UP主{up_uid}"
-        from datetime import datetime as _dt
         # pub_ts防御性float：接口/历史队列项可能为字符串（真机2026-11-10
         # fromtimestamp(str)抛TypeError致动态推送失败）
         try:
             pub_ts = float(item.get("pub_ts") or 0)
         except (TypeError, ValueError):
             pub_ts = 0.0
-        pub_time = _dt.fromtimestamp(pub_ts).strftime("%Y-%m-%d %H:%M") if pub_ts else "刚刚"
+        # 接口pub_ts为秒级：转13位毫秒后经ms_to_str按Setting.timezone展示
+        pub_time = ms_to_str(int(pub_ts * 1000)) if pub_ts else "刚刚"
 
         # 回填UP主昵称（与已存一致时跳过写库）
         if (self.binding_store is not None and item.get("author")

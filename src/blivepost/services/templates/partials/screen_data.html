@@ -85,7 +85,7 @@
     <div class="tbl-head border border-[var(--border)] rounded-xl p-3">
       <div class="flex items-center justify-between mb-1.5">
         <span class="font-mono text-sm">{{ r.room_id }}</span>
-        <span class="text-xs t-soft">{{ r.end_time.strftime('%m-%d %H:%M') if r.end_time else '-' }}</span>
+        <span class="text-xs t-soft">{{ r.end_time | ms2str('%m-%d %H:%M') if r.end_time else '-' }}</span>
       </div>
       <div class="grid grid-cols-4 gap-1 text-xs kpi-num">
         <span class="t-soft">时长</span><span>{{ '%dh%02dm' | format(r.duration // 3600, (r.duration % 3600) // 60) if r.duration else '-' }}</span>
