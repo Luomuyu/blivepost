@@ -374,18 +374,25 @@ class PushService:
             except Exception as e:
                 logger.warning(f"Markdown开播推送异常({e})，降级富媒体/文本")
 
+        # 3) 官方bot主路径（QQBotClient无push_message/push_markdown）：push_media/push
+        #    → bot层Markdown嵌图+按钮优先降级链——keyboard必须透传，否则
+        #    消息以Markdown发出但按钮不渲染（真机2026-11-10反馈实证）
+        def _bot_kwargs(func) -> dict:
+            kwargs: dict = {}
+            if keyboard is not None and _supports_kwarg(func, "keyboard"):
+                kwargs["keyboard"] = keyboard
+            if at_all is not None and _supports_kwarg(func, "at_all_groups"):
+                kwargs["at_all_groups"] = at_all
+            return kwargs
+
         if media and hasattr(self.bot_client, "push_media"):
-            if _supports_kwarg(self.bot_client.push_media, "at_all_groups"):
-                if self.bot_client.push_media(media, content, groups,
-                                              at_all_groups=at_all):
-                    return True
-            elif self.bot_client.push_media(media, content, groups):
+            if self.bot_client.push_media(media, content, groups,
+                                          **_bot_kwargs(self.bot_client.push_media)):
                 return True
 
         text = content + f"\n封面：{media}" if media else content
-        if at_all is not None and _supports_kwarg(self.bot_client.push, "at_all_groups"):
-            return self.bot_client.push(text, groups, at_all_groups=at_all)
-        return self.bot_client.push(text, groups)
+        return self.bot_client.push(text, groups,
+                                    **_bot_kwargs(self.bot_client.push))
 
     def _live_start_text(self, room_info: LiveRoomInfo) -> str:
         """开播消息文本（优先使用自定义模板）"""

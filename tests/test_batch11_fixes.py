@@ -412,3 +412,61 @@ async def test_load_groups_active_only_filters_removed(tmp_path):
     finally:
         await svc.aclose()
         await db.close()
+
+
+# ---------- 按钮keyboard透传 + 告警回退（第十一批反馈三） ----------
+
+async def test_official_bot_media_path_passes_keyboard():
+    """官方bot主路径：push_media/push 必须透传keyboard（原丢失致按钮不渲染）"""
+    ps = PushService(Settings())
+
+    class RoomStore:
+        def get_monitored_groups(self, room_id):
+            return ["G1"]
+
+    ps.binding_store = RoomStore()
+
+    class Bot:
+        def __init__(self):
+            self.media_calls = []
+            self.push_calls = []
+
+        def push_media(self, image, content, groups, keyboard=None,
+                       at_all_groups=None):
+            self.media_calls.append((keyboard, at_all_groups))
+            return True
+
+        def push(self, content, groups, keyboard=None, media=None,
+                 at_all_groups=None):
+            self.push_calls.append((keyboard, at_all_groups))
+            return True
+
+    ps.bot_client = Bot()
+    kb = {"content": {"rows": [{"buttons": [{"id": "enter"}]}]}}
+    ps.push_live_start_from_parts("开播", "http://c", 23058, kb,
+                                  at_all_groups=["G1"])
+    assert ps.bot_client.media_calls[0][0] is kb        # keyboard透传（按钮渲染前提）
+    assert ps.bot_client.media_calls[0][1] == ["G1"]
+    # 无图路径同样透传
+    ps.push_live_start_from_parts("开播", None, 23058, kb)
+    assert ps.bot_client.push_calls[0][0] is kb
+
+
+async def test_notify_admins_falls_back_to_main():
+    """openids未配置时告警回退主管理员（原仅落日志）"""
+    from blivepost.core.consumer import PushQueueConsumer
+
+    class NotifyBot:
+        def __init__(self):
+            self.sent = []
+
+        async def notify_admins(self, targets, content):
+            self.sent.append(list(targets))
+            return 1
+
+    ps = _Ps()
+    ps.bot_client = NotifyBot()
+    consumer = PushQueueConsumer(None, ps, None,
+                                 admin_openids=[], main_admin_openids=["MAIN1"])
+    await consumer._notify_admins("普通告警", sensitive=False)
+    assert ps.bot_client.sent == [["MAIN1"]]

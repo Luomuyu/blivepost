@@ -156,6 +156,10 @@ class PushQueueConsumer:
                 keyboard=item.get("keyboard"),
                 at_all_groups=at_all_groups,
             )
+            # 调度可观测：真机排障依赖（发送结果在bot层降级链日志）
+            n_groups = len(self.push_service.resolve_push_groups(item.get("room_id")))
+            logger.info(f"开播推送已调度：房间{item.get('room_id')} → {n_groups}群"
+                        f"（艾特全体{len(at_all_groups or [])}群）")
 
         elif kind == "push":
             switch = item.get("switch")
@@ -395,6 +399,9 @@ class PushQueueConsumer:
         """
         targets = self.admin_openids
         if sensitive and self.main_admin_openids:
+            targets = self.main_admin_openids
+        elif not targets and self.main_admin_openids:
+            # openids未配置但配了主管理员：普通通知回退主管理员（避免告警仅落日志）
             targets = self.main_admin_openids
         if not targets:
             logger.info(f"(无管理员配置，仅记录) {content}")

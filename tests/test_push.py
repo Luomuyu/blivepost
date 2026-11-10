@@ -263,13 +263,15 @@ async def test_push_live_start_markdown_bot(tmp_path):
 
 
 async def test_push_live_start_keyboard_bot_falls_back_media(tmp_path):
-    """bot无push_live_start/push_markdown：降级富媒体（按钮依赖Markdown，
-    由bot层降级链处理，push层不把keyboard传给富媒体）"""
+    """bot无push_live_start/push_markdown：走push_media路径且keyboard透传——
+    官方bot经push→markdown降级链渲染按钮（真机2026-11-10反馈：不透传则
+    按钮永不渲染）；纯富媒体bot忽略keyboard无副作用"""
     bot = KeyboardBot(media=True)
     ps, db = await _live_start_env(tmp_path, bot)
     assert ps.push_live_start(make_info(room_id=9646546)) is True
     assert len(bot.media_kb_calls) == 1
-    assert bot.media_kb_calls[0] is None  # 富媒体路径不带按钮
+    assert bot.media_kb_calls[0] is not None  # keyboard透传给bot层
+    assert "rows" in bot.media_kb_calls[0]["content"]
     await db.close()
 
 
