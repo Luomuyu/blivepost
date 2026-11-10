@@ -33,15 +33,15 @@ IDS_FILE = Path(__file__).resolve().parent / "panel_ids.json"
 # ---------------------------------------------------------------- 面板定义
 # 与指令实现保持同步：群指令见 blivepost/services/commands.py
 # （_CMD_RE/_NOARG_RE/_PUSHSET_RE），单聊指令见 admin_commands.py；
-# 平台上限：每面板最多 20 条（官方 v2/panels 文档）。
-# 注意：/绑定 /解绑 指令已移除（直播间绑定改Web面板操作），不得再加入面板。
+# 平台上限：每面板最多 10 条（实测校准，勿按文档20条放行）。
+# 注意：/绑定 /解绑 指令已移除（直播间绑定改Web面板操作），不得再加入面板；
+# /绑定列表 指令保留但不上面板（与 /状态 职责重叠，为腾条目移出）。
 
 GROUP_ITEMS = [
     {"type": "command", "name": "/帮助", "desc": "查看全部指令"},
     {"type": "command", "name": "/监控 ", "desc": "开始监控推送，补房间号"},
     {"type": "command", "name": "/取消监控 ", "desc": "取消监控推送，补房间号"},
-    {"type": "command", "name": "/状态", "desc": "查看本群监控状态"},
-    {"type": "command", "name": "/绑定列表", "desc": "查看本群绑定列表"},
+    {"type": "command", "name": "/状态", "desc": "查看本群监控状态与绑定"},
     {"type": "command", "name": "/推送设置 ", "desc": "查看/修改本群推送开关，补房间号"},
     {"type": "command", "name": "/绑定动态 ", "desc": "订阅UP主动态，补UP主UID"},
     {"type": "command", "name": "/取消动态 ", "desc": "取消订阅UP主动态，补UID"},
