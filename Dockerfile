@@ -4,7 +4,8 @@ FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright \
+    TZ=Asia/Shanghai
 
 WORKDIR /app
 
@@ -13,11 +14,12 @@ WORKDIR /app
 ARG PIP_INDEX_URL=""
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 
-# 系统依赖（playwright chromium运行所需）
+# 系统依赖（playwright chromium运行所需；tzdata让ENV TZ生效——
+# 容器默认UTC，日志按日轮转/文件名会与北京时间差8小时）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
     libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
-    libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \
+    libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # 先装依赖层（利用构建缓存）
@@ -29,14 +31,29 @@ RUN pip install --no-cache-dir -e . \
 # 项目文件
 COPY . .
 
-# 非特权运行用户（v1.2.0审查加固：容器不再以root跑业务进程）。
-# chromium以非root无头运行需--cap-drop不影响（sandbox降级由chromium
-# 自行处理headless场景）；数据/日志目录预建并归属appu，宿主机挂载时
-# 请确保卷目录对该UID(1000)可写（chown 1000或放宽组权限）
+# 非特权运行（v1.2.0审查加固）：业务进程以appuser(UID 1000)运行。
+# 宿主机bind mount目录（./data ./logs）属主常为root（旧root容器产物/
+# Linux默认），appuser不可写——镜像默认root仅为启动时修正属主，
+# entrypoint在chown后经setpriv降权执行业务命令
 RUN useradd --system --uid 1000 --create-home appuser \
     && mkdir -p /app/data /app/logs /app/exports \
     && chown -R appuser:appuser /app
-USER appuser
+
+# heredoc方式内联entrypoint（避免仓库中.sh文件受git换行符转换影响）
+COPY <<'EOF' /app/docker-entrypoint.sh
+#!/bin/sh
+set -e
+if [ "$(id -u)" = "0" ]; then
+    # 挂载目录属主修正（幂等；数据目录很大时可按需注释掉chown -R）
+    chown -R appuser:appuser /app/data /app/logs /app/exports || true
+    # 降权到appuser后执行（--init-groups初始化补充组，HOME供chromium用）
+    exec setpriv --reuid=1000 --regid=1000 --init-groups \
+        env HOME=/home/appuser "$@"
+fi
+# 已是非root（docker run --user appuser ...场景）直接执行
+exec "$@"
+EOF
+RUN chmod 755 /app/docker-entrypoint.sh
 
 # 数据与配置挂载点
 VOLUME ["/app/data", "/app/logs"]
@@ -47,4 +64,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=5); sys.exit(0 if r.status==200 else 1)" || exit 1
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["blivepost", "-c", "/app/config.yaml"]
