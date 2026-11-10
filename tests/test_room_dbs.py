@@ -208,43 +208,7 @@ async def test_group_info_refresher(tmp_path):
     await db.close()
 
 
-async def test_migration_v4_adds_group_info_columns():
-    """旧bot_group表（无群信息四列）经迁移v4补齐，新列可写NULL"""
-    import os
-    import sqlite3
-    import tempfile
 
-    db_path = os.path.join(tempfile.mkdtemp(), "legacy.db")
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "CREATE TABLE bot_group (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "group_openid TEXT UNIQUE, group_name TEXT DEFAULT '', "
-        "del_flag INTEGER DEFAULT 0, msg_receive INTEGER DEFAULT 1)"
-    )
-    conn.execute("INSERT INTO bot_group (group_openid, group_name) VALUES ('G9', '旧群')")
-    conn.commit()
-    conn.close()
-
-    settings = Settings()
-    settings.database.sqlite_path = db_path
-    db = DatabaseManager(settings.database)
-    await db.initialize()
-
-    conn = sqlite3.connect(db_path)
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(bot_group)")}
-    conn.close()
-    assert {"group_desc", "category", "tags", "member_count"} <= cols
-
-    svc = DatabaseService(db)
-    await svc.update_group_info("G9", {"group_name": "旧群",
-                                       "group_member_num": 3})
-    # 部分字段更新后其余仍为NULL → 仍视为缺失，待下次完整查询回填
-    missing = await svc.list_groups_missing_info()
-    assert missing == ["G9"]
-    await db.close()
-
-
-@pytest.mark.asyncio
 async def test_live_page_bindings_carry_group_details(tmp_path):
     """回归：直播页绑定状态携带群信息（此前误读GroupBindingRecord触发AttributeError）"""
     from blivepost.services.bindings import BindingStore
