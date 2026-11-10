@@ -1,0 +1,123 @@
+<div id="page">
+  <div class="flex items-center justify-between mb-4">
+    <h1 class="text-lg font-bold text-slate-200">观众分析</h1>
+    <select id="ana-room" class="bg-slate-800 text-slate-200 text-xs rounded-lg px-3 py-1.5 border border-slate-700"
+            onchange="loadAnalytics()">
+      <option value="0">全部房间</option>
+      {% for r in room_options %}
+      <option value="{{ r[0] }}" {% if r[0] == room_id %}selected{% endif %}>{{ r[1] or r[0] }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- 活跃时段热力图 -->
+  <div class="card p-4 mb-4">
+    <h2 class="font-semibold text-sm text-slate-300 mb-3">活跃时段 <span class="text-slate-500 font-normal text-xs">近7天 · 弹幕/小时</span></h2>
+    <div id="ana-heatmap" class="overflow-x-auto">
+      <div class="text-xs text-slate-500 py-8 text-center">加载中…</div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+    <!-- 高频发言榜 -->
+    <div class="card p-4">
+      <h2 class="font-semibold text-sm text-slate-300 mb-3">高频发言榜 <span class="text-slate-500 font-normal text-xs">近7天</span></h2>
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-slate-500 text-left border-b border-slate-800">
+            <th class="py-2 pr-2">#</th><th class="py-2 pr-2">用户</th><th class="py-2 pr-2">弹幕</th>
+          </tr>
+        </thead>
+        <tbody id="ana-speakers">
+          <tr><td colspan="3" class="py-6 text-center text-slate-500">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- 弹幕量日分布 -->
+    <div class="card p-4">
+      <h2 class="font-semibold text-sm text-slate-300 mb-3">弹幕量分布 <span class="text-slate-500 font-normal text-xs">近30天</span></h2>
+      <div id="ana-dist" class="overflow-x-auto">
+        <div class="text-xs text-slate-500 py-8 text-center">加载中…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function loadAnalytics(){
+  const rid = document.getElementById('ana-room').value || '0';
+  const base = `/api/v1/analytics?room_id=${rid}`;
+  try{
+    const [hm, sp, di] = await Promise.all([
+      fetch(`${base}&type=heatmap`).then(r=>r.json()),
+      fetch(`${base}&type=speakers`).then(r=>r.json()),
+      fetch(`${base}&type=distribution`).then(r=>r.json()),
+    ]);
+    renderHeatmap(hm);
+    renderSpeakers(sp);
+    renderDistribution(di);
+  }catch(e){
+    console.error('analytics load error:', e);
+  }
+}
+
+function renderHeatmap(data){
+  const el = document.getElementById('ana-heatmap');
+  if(!data || !Object.keys(data).length){
+    el.innerHTML = '<p class="py-8 text-center text-slate-500 text-xs">暂无数据</p>';
+    return;
+  }
+  const days = Object.keys(data).sort();
+  const max = Math.max(...days.flatMap(d => data[d]), 1);
+  let html = '<table class="text-[10px] border-collapse"><tr><td></td>';
+  for(let h=0; h<24; h++) html += `<td class="px-0.5 text-slate-600">${h}</td>`;
+  html += '</tr>';
+  for(const day of days){
+    html += `<tr><td class="pr-2 text-slate-600 whitespace-nowrap">${day.slice(5)}</td>`;
+    for(let h=0; h<24; h++){
+      const v = data[day][h] || 0;
+      const alpha = v === 0 ? 0 : 0.15 + 0.85 * (v / max);
+      const bg = v === 0 ? 'var(--surface-2)' : `rgba(96,165,250,${alpha.toFixed(2)})`;
+      html += `<td class="w-5 h-5" style="background:${bg}" title="${day} ${h}:00 · ${v}条"></td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</table>';
+  el.innerHTML = html;
+}
+
+function renderSpeakers(items){
+  const el = document.getElementById('ana-speakers');
+  if(!items || !items.length){
+    el.innerHTML = '<tr><td colspan="3" class="py-6 text-center text-slate-500">暂无数据</td></tr>';
+    return;
+  }
+  el.innerHTML = items.slice(0, 20).map((u, i) => `
+    <tr class="border-t border-slate-800">
+      <td class="py-2 pr-2 text-slate-500">${i + 1}</td>
+      <td class="py-2 pr-2 text-slate-300">${u.uname || u.uid}</td>
+      <td class="py-2 pr-2 kpi-num text-blue-400">${u.count}</td>
+    </tr>`).join('');
+}
+
+function renderDistribution(items){
+  const el = document.getElementById('ana-dist');
+  if(!items || !items.length){
+    el.innerHTML = '<p class="py-8 text-center text-slate-500 text-xs">暂无数据</p>';
+    return;
+  }
+  const max = Math.max(...items.map(i => i.count), 1);
+  const w = Math.max(items.length * 14, 300);
+  el.innerHTML = `<svg width="${w}" height="120" viewBox="0 0 ${w} 120">
+    ${items.map((it, i) => {
+      const h = Math.max((it.count / max) * 90, 2);
+      return `<rect x="${i * 14 + 3}" y="${100 - h}" width="10" height="${h}"
+        rx="2" fill="var(--blue)" opacity="0.75"><title>${it.day} · ${it.count}条</title></rect>`;
+    }).join('')}
+    <line x1="0" y1="100" x2="${w}" y2="100" stroke="var(--border)" stroke-width="1"/>
+  </svg>`;
+}
+
+loadAnalytics();
+</script>

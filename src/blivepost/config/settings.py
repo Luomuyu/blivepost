@@ -67,6 +67,9 @@ class MessageSettings:
     backup_hour: int = 4
     backup_minute: int = 30
     backup_keep: int = 7
+    # REST API v1公网开关（默认N仅私网；Y强制X-API-Token+限速60/min/IP）
+    web_api_public: bool = False
+    web_api_token: str = ""
 
 
 @dataclass
@@ -277,6 +280,8 @@ Setting: # 消息推送设置
   backup_hour: 4 # 定时备份时刻(时)
   backup_minute: 30 # 定时备份时刻(分)
   backup_keep: 7 # 备份保留份数(0=关闭定时备份)
+  web_api_public: "N" # REST API v1公网开关 (N=仅私网, Y=对外开放强制X-API-Token)
+  web_api_token: "" # REST API独立token (公网模式必填, 区别于web_token)
 
 Redis: # Redis配置 (可选)
   host: "localhost"

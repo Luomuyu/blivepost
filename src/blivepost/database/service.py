@@ -12,6 +12,7 @@ from .manager import DatabaseManager
 from .models import RoomDbRecord
 from .room_store import RoomDbRegistry
 from .service_admin import GROUP_PUSH_SWITCHES, AdminMixin
+from .service_analytics import AnalyticsMixin
 from .service_events import EventWriterMixin
 from .service_stats import StatsMixin
 from ..utils.logger import get_logger
@@ -23,7 +24,7 @@ __all__ = ["DatabaseService", "GROUP_PUSH_SWITCHES"]
 logger = get_logger("db_service")
 
 
-class DatabaseService(EventWriterMixin, StatsMixin, AdminMixin):
+class DatabaseService(EventWriterMixin, StatsMixin, AdminMixin, AnalyticsMixin):
     """数据库存储服务"""
 
     def __init__(self, db_manager: DatabaseManager):

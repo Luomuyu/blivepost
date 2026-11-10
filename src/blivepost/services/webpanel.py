@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Optional
 
 from aiohttp import web
 
+from .api_v1 import ApiV1Mixin, register_api_v1_routes
 from .webpanel_actions import ActionsMixin
 from .webpanel_admin import AdminMixin
 from .webpanel_auth import AuthMixin, derive_session_key
@@ -74,7 +75,8 @@ __all__ = [
 ]
 
 
-class WebPanel(AuthMixin, ActionsMixin, PagesMixin, AdminMixin, ScreenMixin):
+class WebPanel(AuthMixin, ActionsMixin, PagesMixin, AdminMixin, ScreenMixin,
+               ApiV1Mixin):
     """Web状态面板服务"""
 
     # 页面注册表：key -> (路径, 标题)
@@ -86,6 +88,7 @@ class WebPanel(AuthMixin, ActionsMixin, PagesMixin, AdminMixin, ScreenMixin):
         "records": ("/records", "下播记录"),
         "trend": ("/trend", "收入趋势"),
         "wordcloud": ("/wordcloud", "词云"),
+        "analytics": ("/analytics", "观众分析"),
         "groups": ("/groups", "群列表"),
     }
 
@@ -166,6 +169,8 @@ class WebPanel(AuthMixin, ActionsMixin, PagesMixin, AdminMixin, ScreenMixin):
         app.router.add_get("/panel/wordcloud", self._handle_wordcloud)
         app.router.add_get("/api/status", self._handle_api)
         app.router.add_get("/api/history", self._handle_history)
+        # REST API v1（只读，独立鉴权+限速）
+        register_api_v1_routes(app, self)
         # 写操作（游客拒绝；登录用户可用）
         app.router.add_post("/web/room/add", self._action_room_add)
         app.router.add_post("/web/room/push", self._action_room_push)
