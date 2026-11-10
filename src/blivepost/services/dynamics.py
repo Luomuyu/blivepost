@@ -62,7 +62,7 @@ def _build_dynamic_url(up_uid: int, wbi=None) -> str:
     Returns:
         str: 完整URL
     """
-    params = f"host_mid={up_uid}&platform=web"
+    params = f"host_mid={up_uid}&platform=web&features=itemOpusStyle,onlyfansVote,decorationCard,onlyfansAssetsV2,onlyfansQaCard"
     try:
         if wbi is None:
             from .wbi import WbiSigner
@@ -207,44 +207,60 @@ class _RemoteFetchProxy:
         self._port = int(port)
         self._token = token
 
-    def fetch_json(self, url: str) -> Optional[dict]:
-        """经主进程浏览器取数；任何失败返回None（调用方走requests兜底）"""
+    def _post(self, path: str, payload: dict, timeout: int = 40) -> Optional[dict]:
+        """POST服务端点；非200/异常返回None"""
         try:
             resp = requests.post(
-                f"http://127.0.0.1:{self._port}/dyn-fetch",
-                json={"url": url},
+                f"http://127.0.0.1:{self._port}{path}",
+                json=payload,
                 headers={"X-Fetch-Token": self._token},
-                timeout=40,
+                timeout=timeout,
             )
             if resp.status_code != 200:
-                logger.warning(f"浏览器取数服务响应异常: HTTP {resp.status_code}")
+                logger.warning(f"取数服务{path}响应异常: HTTP {resp.status_code}")
                 return None
-            data = (resp.json() or {}).get("data")
-            return data if isinstance(data, dict) else None
+            return resp.json() or {}
         except Exception as e:
-            logger.warning(f"浏览器取数服务不可达: {e}")
+            logger.warning(f"取数服务{path}不可达: {e}")
             return None
 
+    def fetch_json(self, url: str) -> Optional[dict]:
+        """经主进程浏览器取feed；任何失败返回None（调用方走requests兜底）"""
+        body = self._post("/dyn-fetch", {"url": url})
+        if body is None:
+            return None
+        data = body.get("data")
+        return data if isinstance(data, dict) else None
 
-def _poll_once(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[List[dict]]:
+    def prepare(self, dynamic_id: str) -> Optional[dict]:
+        """候选动态内容准备（opus页渲染+配图决策）；失败返回None（回退feed摘要）"""
+        body = self._post("/dyn-prepare", {"dynamic_id": str(dynamic_id)},
+                          timeout=60)
+        if body is None:
+            return None
+        content = body.get("content") or {}
+        image = body.get("image_url") or None
+        summary_parts = [p for p in (content.get("title"), content.get("text"))
+                         if p]
+        summary = " ".join(summary_parts)
+        if summary and len(summary) > 80:
+            summary = summary[:80] + "…"
+        return {
+            "author": content.get("author") or "",
+            "summary": summary,
+            "image": image or (content.get("images") or [None])[0],
+            "image_source": body.get("image_source") or "",
+        }
+
+
+def _requests_fetch(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[dict]:
     """
-    查询UP主动态列表（置顶跳过，返回全部可见条目）
+    requests兜底取数（返回feed接口原始JSON；不解析内容）
 
-    Args:
-        up_uid: UP主UID
-        cookie_string: 完整cookie（含buvid3等风控必需项；仅SESSDATA会412，
-            2026-11-10真机实证；空串=游客）
-        wbi: WBI签名器（轮询循环应传入_WbiSignerCache复用实例）
-
-    Returns:
-        Optional[List[dict]]: 按接口顺序（新到旧）的动态信息列表，每项含
-        {"dynamic_id", "author", "pub_ts", "summary", "image"}；请求异常或
-        接口风控/错误响应（code!=0，如-352/-412）返回None——与正常空列表
-        区分，供连续异常计数告警（_DynamicPollSession）。
-
+    feed API在本链路只用于取"置顶+最新非置顶"的dynamic_id（内容经
+    opus页渲染获取，见_DynamicPollSession与DynFetchService）。
     风控自愈（2026-11-10真机实证）：带WBI签名的请求412（平台轮换mixin
-    表致旧签名反被判风控）而无签名+完整cookie正常——签名请求失败时自动
-    回退无签名重试一次；若未来平台强制签名，无签名失败亦计异常轮。
+    表致旧签名反被判风控）而无签名+完整cookie正常——签名失败回退无签名。
     """
     headers = dict(HEADERS)
     headers["referer"] = f"https://space.bilibili.com/{up_uid}/dynamic"
@@ -252,7 +268,6 @@ def _poll_once(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[List[
         headers["cookie"] = cookie_string
 
     def _fetch(url: str) -> Optional[dict]:
-        """单次请求：返回解析后的data dict；风控/异常返回None"""
         try:
             resp = requests.get(url, headers=headers, timeout=10)
             data = resp.json()
@@ -267,13 +282,10 @@ def _poll_once(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[List[
     signed_url = _build_dynamic_url(up_uid, wbi)
     data = _fetch(signed_url)
     if data is None and "w_rid=" in signed_url:
-        # 签名请求被风控（412/空响应/异常码）→ 去签名重试
         unsigned_url = signed_url.split("&wts=")[0]
         logger.info(f"UP主{up_uid} 签名请求被风控，回退无签名请求")
         data = _fetch(unsigned_url)
-    if data is None:
-        return None
-    return _parse_feed_data(data, up_uid)
+    return data
 
 
 def _to_int(value, default: int = 0) -> int:
@@ -287,19 +299,44 @@ def _to_int(value, default: int = 0) -> int:
             return default
 
 
+def _extract_candidate_id(data: dict) -> Optional[str]:
+    """从feed响应提取候选动态ID（置顶与最新非置顶中更新者）。
+
+    feed API在本链路仅用于取ID（内容经opus页渲染获取，用户决策
+    2026-11-10）：
+    - items[0]带module_tag{text:"置顶"} → 存在置顶动态，其后第一个
+      非置顶项即最新非置顶；
+    - items[0]无module_tag → 无置顶，items[0]即最新非置顶；
+    - dynamic_id为数值型雪糕ID，数值大小即时间序——置顶与最新非置顶
+      取数值更大（更新）者为候选（不跳过置顶：置顶比最新动态更新时
+      视为"新置顶的动态"推送）。
+    """
+    items = (data.get("data") or {}).get("items") or []
+    pinned = ""
+    latest = ""
+    for item in items:
+        dynamic_id = str(item.get("id_str") or "").strip()
+        if not dynamic_id.isdigit():
+            continue
+        tag = ((item.get("modules") or {}).get("module_tag") or {})
+        if tag.get("text") == "置顶":
+            if not pinned:
+                pinned = dynamic_id
+            continue
+        latest = dynamic_id
+        break  # 第一个非置顶即最新非置顶，后续无需再看
+    if not pinned and not latest:
+        return None
+    return max((pinned, latest), key=_to_int) if (pinned or latest) else None
+
+
 def _parse_feed_data(data: dict, up_uid: int) -> Optional[List[dict]]:
-    """解析feed接口响应（浏览器/requests两路共用）；解析异常返回None"""
+    """解析feed接口响应为内容列表（requests兜底链构造推送项用；不再跳过置顶）"""
     try:
         items = (data.get("data") or {}).get("items") or []
         infos: List[dict] = []
         for item in items:
             modules = item.get("modules") or {}
-            # 跳过置顶动态。已知行为：发布即置顶的动态在置顶期间被跳过、
-            # 不记入已见；取消置顶后它重新出现在feed中，届时作为"新动态"
-            # 补推（延迟推送）。置顶动态多为长期广告/公告，实时推送反而
-            # 刷屏，此权衡可接受，不改逻辑
-            if (modules.get("module_tag") or {}).get("text") == "置顶":
-                continue
             dynamic_id = item.get("id_str") or ""
             if not dynamic_id:
                 continue
@@ -470,14 +507,14 @@ class _DynamicPollSession:
     """
     单UP主轮询会话状态（动态子进程内使用）
 
-    - 漏推修复：一轮取列表中全部未见过的动态（已见ID持久化判重），
-      按发布时间从旧到新逐条经队列上报——UP短时间连发多条时中间
-      动态不再漏推；
-    - 基线轮：首轮仅记录不推送（空库首启/升级防刷屏；baseline_first
-      供重新订阅场景强制基线化，防止停订期间的新动态被一次性补推）；
-    - 风控告警：连续异常（请求失败/风控响应）超过阈值（ALERT_FAIL_ROUNDS轮）
-      时经队列告警一次；恢复正常响应（含空列表）后重置计数（可再次告警），
-      告警后持续异常期间不重复告警。
+    - 候选检测（2026-11-10用户决策）：feed API只取"置顶+最新非置顶"中
+      dynamic_id更大者为候选（不跳过置顶）；候选未见过即为新动态，
+      内容经opus页渲染获取（prepare回调→DynFetchService），无回调时
+      回退feed内该条目的摘要；
+    - 基线轮：首轮仅记录候选不推送（空库首启/升级防刷屏；baseline_first
+      供重新订阅场景强制基线化）；
+    - 风控告警：连续异常超过阈值经队列告警一次；恢复正常响应（含空
+      feed）后重置计数（可再次告警），告警后持续异常期间不重复告警。
     """
 
     def __init__(self, up_uid: int, seen: set, push_queue, dynamics_dir=None,
@@ -490,53 +527,71 @@ class _DynamicPollSession:
             push_queue: 跨进程队列（新动态/告警上报主进程）
             dynamics_dir: 已见动态子库目录
             alert_rounds: 连续异常告警阈值（轮）
-            baseline_first: True时首轮无条件基线化（seen非空也把当前可见动态
-                全部记为已见、不推送）——用于取消订阅后重新订阅，防止停订
-                期间的新动态被一次性补推；False（默认）按seen表是否为空判定
-                （进程重启/开关恢复等运行中恢复沿用已见记录，不因恢复漏推）
+            baseline_first: True时首轮无条件基线化（seen非空也把候选记为
+                已见、不推送）——用于取消订阅后重新订阅，防止停订期间的
+                新动态被推送；False（默认）按seen表是否为空判定
         """
         self.up_uid = up_uid
         self.seen = seen
         self.push_queue = push_queue
         self.dynamics_dir = dynamics_dir
         self.alert_rounds = alert_rounds
-        # 基线轮：首轮仅记录不推送（防升级/首启/重订阅刷屏）。默认seen表
-        # 非空即视为已基线化；baseline_first=True则强制基线化一轮
         self.baseline = True if baseline_first else not seen
         self.fail_streak = 0
         self.alerted = False
 
-    def handle(self, infos: Optional[List[dict]]) -> None:
+    def handle(self, data: Optional[dict], prepare=None) -> None:
         """
-        处理一轮轮询结果
+        处理一轮轮询结果（feed原始JSON）
 
         Args:
-            infos: _poll_once返回的动态列表（None=请求异常/风控响应）
+            data: feed接口原始响应dict（None=取数失败/风控响应）
+            prepare: 候选动态内容准备回调（dynamic_id→含author/summary/
+                image的dict，经opus页渲染+配图决策）；无回调时回退feed摘要
         """
-        if infos is None:
-            # 仅异常（请求失败/接口风控响应）计连续失败；正常空列表
-            # （UP删光动态/当前全部置顶）是有效响应，与有数据一同走
-            # 下方重置逻辑，不参与告警计数
+        if data is None:
             self._count_failure()
             return
-        # 恢复正常响应（含空列表）：重置连续计数与告警去重标记
+        # 恢复正常响应（含空feed）：重置连续计数与告警去重标记
         self.fail_streak = 0
         self.alerted = False
-        fresh = [i for i in infos
-                 if i.get("dynamic_id") and i["dynamic_id"] not in self.seen]
-        if not fresh:
+        candidate = _extract_candidate_id(data)
+        if candidate is None:
             return
-        self.seen.update(i["dynamic_id"] for i in fresh)
-        save_seen_dynamic_ids(
-            self.up_uid, [i["dynamic_id"] for i in fresh], self.dynamics_dir
-        )
+        if candidate in self.seen:
+            return
         if self.baseline:
-            self.baseline = False  # 首批仅作基线，不推送
+            self.baseline = False  # 首轮仅作基线，不推送
+            self.seen.add(candidate)
+            save_seen_dynamic_ids(self.up_uid, [candidate], self.dynamics_dir)
             return
-        # feed按新到旧返回：按发布时间从旧到新逐条上报，连发多条不漏推
-        for info in sorted(fresh, key=lambda x: x.get("pub_ts") or 0):
-            logger.info(f"UP主 {self.up_uid} 发布新动态 {info['dynamic_id']}")
-            self._put({"type": "dynamic", "up_uid": self.up_uid, **info})
+        # 构造推送内容：优先opus页渲染（prepare），失败回退feed内该条摘要
+        info = {"dynamic_id": candidate, "author": "", "summary": "",
+                "image": None, "pub_ts": int(time.time())}
+        if prepare is not None:
+            try:
+                prepared = prepare(candidate)
+                if isinstance(prepared, dict):
+                    for k in ("author", "summary", "image"):
+                        if prepared.get(k):
+                            info[k] = prepared[k]
+                    info["image_source"] = prepared.get("image_source") or ""
+            except Exception as e:
+                logger.warning(f"opus页内容准备失败(动态{candidate}): {e}")
+        if not info["summary"] and not info["image"]:
+            # 回退：feed响应中该条目的摘要（含图）——requests兜底链场景
+            for item in (_parse_feed_data(data, self.up_uid) or []):
+                if item.get("dynamic_id") == candidate:
+                    info["author"] = info["author"] or item.get("author", "")
+                    info["summary"] = item.get("summary", "")
+                    info["image"] = info["image"] or item.get("image")
+                    info["pub_ts"] = item.get("pub_ts") or info["pub_ts"]
+                    break
+        self.seen.add(candidate)
+        save_seen_dynamic_ids(self.up_uid, [candidate], self.dynamics_dir)
+        logger.info(f"UP主 {self.up_uid} 发布新动态 {candidate}"
+                    f"（图: {info.get('image_source') or ('原' if info['image'] else '无')}）")
+        self._put({"type": "dynamic", "up_uid": self.up_uid, **info})
 
     def _count_failure(self) -> None:
         """连续异常（请求失败/风控响应）计数，超过阈值经队列告警一次（去重：不重复告警）"""
@@ -614,19 +669,20 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
             continue
 
         # 取数三级链：主进程浏览器 → requests签名 → requests无签名
-        infos = None
+        # （feed仅取候选dynamic_id；新动态内容经prepare回调由opus页渲染获取）
         data = None
         if fetch_proxy is not None:
             data = fetch_proxy.fetch_json(
                 f"{DYNAMIC_API_BASE}?host_mid={up_uid}&platform=web")
-            if data is not None:
-                infos = _parse_feed_data(data, up_uid)
-                if not served_logged:
-                    served_logged = True
-                    logger.info(f"UP主 {up_uid} 浏览器取数服务链路正常")
+            if data is not None and not served_logged:
+                served_logged = True
+                logger.info(f"UP主 {up_uid} 浏览器取数服务链路正常")
         if data is None:
-            infos = _poll_once(up_uid, cookie_string, signer)
-        session.handle(infos)
+            data = _requests_fetch(up_uid, cookie_string, signer)
+        session.handle(
+            data,
+            prepare=fetch_proxy.prepare if fetch_proxy is not None else None,
+        )
         # 轮询间隔：正常60-90秒；连续失败≥3轮进入退避（5-10分钟）——
         # 风控期高频重试只会延长封锁（2026-11-10真机教训），成功后恢复
         if session.fail_streak >= 3:

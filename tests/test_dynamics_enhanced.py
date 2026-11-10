@@ -41,7 +41,8 @@ def test_poll_once_extracts_summary_and_image(monkeypatch):
         },
     }]
     monkeypatch.setattr(dyn.requests, "get", lambda *a, **kw: _fake_feed_response(items))
-    infos = dyn._poll_once(111)
+    data = dyn._requests_fetch(111)
+    infos = dyn._parse_feed_data(data, 111)
     assert isinstance(infos, list) and len(infos) == 1
     info = infos[0]
     assert info["dynamic_id"] == "900"
@@ -65,7 +66,7 @@ def test_poll_once_video_cover_fallback(monkeypatch):
         },
     }]
     monkeypatch.setattr(dyn.requests, "get", lambda *a, **kw: _fake_feed_response(items))
-    infos = dyn._poll_once(222)
+    infos = dyn._parse_feed_data(dyn._requests_fetch(222), 222)
     assert isinstance(infos, list) and len(infos) == 1
     assert infos[0]["image"] == "http://cover.jpg"
     assert infos[0]["summary"] == "投稿了新视频"

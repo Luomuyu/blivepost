@@ -11,7 +11,7 @@ from blivepost.services.bindings import BindingStore
 from blivepost.services.commands import CommandHandler
 from blivepost.services.admin_commands import AdminCommandHandler
 from blivepost.services.report import DailyReportJob
-from blivepost.services.dynamics import _poll_once
+from blivepost.services.dynamics import _requests_fetch
 
 
 class FakeAuthor:
@@ -177,7 +177,7 @@ def test_poll_once_handles_invalid_uid(monkeypatch):
         raise ConnectionError("boom")
 
     monkeypatch.setattr(dyn.requests, "get", _raise)
-    assert _poll_once(0) is None
+    assert _requests_fetch(0) is None
 
 
 # ==================== /汇总 命令 ====================

@@ -3,17 +3,19 @@
 
 - 1a WbiSigner复用：轮询循环内复用签名器（TTL惰性重建+失败重建），
      不再每轮新建（每轮多发nav请求）；TTL判定用注入时钟，不依赖真实墙钟
-- 1b 漏推中间动态：一轮取全部未见过的动态，按发布时间从旧到新逐条上报
+- 1b 候选检测（2026-11-10改）：feed只取"置顶+最新非置顶"中id更大者为候选，
+     内容经opus页渲染（prepare回调）获取，无回调回退feed摘要
 - 1c 风控/异常告警：连续异常（请求失败/风控）超阈值经队列告警一次（恢复
      重置、不重复）；正常空列表是有效响应，不计失败
 - 1d 重新订阅基线化：baseline_first=True时首轮无条件记seen不补推
      （防止停订期间的新动态被一次性补推）；seen修剪防膨胀；置顶动态
-     延迟推为已知行为
+     更新时立即推送（不再跳过/延迟）
 - 2  子进程日志分离：setup产生的日志文件名含进程标识（room_<id>/dyn_<uid>）
 """
 
 import asyncio
 import logging
+import queue
 
 from blivepost.config.settings import Settings
 from blivepost.utils.logger import DailyRotatingFileHandler, Logger
@@ -145,8 +147,8 @@ def test_wbi_signer_cache_rebuilds_on_sign_failure(monkeypatch):
     assert CountingSigner.built == 2  # 失败后重建
 
 
-def test_poll_once_reuses_shared_signer_across_rounds(monkeypatch):
-    """_poll_once多轮共用同一签名器缓存：WbiSigner仅构建一次"""
+def test_requests_fetch_reuses_shared_signer_across_rounds(monkeypatch):
+    """_requests_fetch多轮共用同一签名器缓存：WbiSigner仅构建一次"""
     from blivepost.services import dynamics as dyn
     from blivepost.services import wbi as wbi_mod
 
@@ -159,84 +161,100 @@ def test_poll_once_reuses_shared_signer_across_rounds(monkeypatch):
     )
 
     cache = dyn._WbiSignerCache()
-    assert dyn._poll_once(111, "", cache) is not None
-    assert dyn._poll_once(111, "", cache) is not None
+    assert dyn._requests_fetch(111, "", cache) is not None
+    assert dyn._requests_fetch(111, "", cache) is not None
     assert CountingSigner.built == 1  # 两轮轮询未重复构建签名器
 
 
 # ==================== 1b 漏推中间动态 ====================
 
 
-def test_poll_once_returns_all_items_and_skips_pinned(monkeypatch):
-    """轮询返回全部条目（置顶跳过），不再只看最新一条"""
-    from blivepost.services import dynamics as dyn
+def test_extract_candidate_id_pinned_vs_latest(monkeypatch):
+    """候选检测：置顶与最新非置顶取dynamic_id更大者（不跳过置顶）"""
+    import blivepost.services.dynamics as dyn
 
-    pinned = _item("100", pub_ts=1600000000)
-    pinned["modules"]["module_tag"] = {"text": "置顶"}
-    items = [pinned, _item("901", pub_ts=1700000002),
-             _item("900", pub_ts=1700000001)]
-    monkeypatch.setattr(dyn.requests, "get",
-                        lambda *a, **kw: _feed_response(items))
+    def feed(items):
+        return {"code": 0, "data": {"items": items}}
 
-    infos = dyn._poll_once(111)
-    assert [i["dynamic_id"] for i in infos] == ["901", "900"]
+    def item(dyn_id, pinned=False):
+        m = {"module_author": {"name": "UP"}}
+        if pinned:
+            m["module_tag"] = {"text": "置顶"}
+        return {"id_str": str(dyn_id), "modules": m}
+
+    # 有置顶且置顶更新（刚发布即置顶）→ 推置顶那条
+    assert dyn._extract_candidate_id(
+        feed([item(300, pinned=True), item(200)])) == "300"
+    # 有置顶但最新非置顶更新 → 推最新
+    assert dyn._extract_candidate_id(
+        feed([item(100, pinned=True), item(400)])) == "400"
+    # 无置顶 → items[0]即最新
+    assert dyn._extract_candidate_id(feed([item(500), item(100)])) == "500"
+    # 空feed → None
+    assert dyn._extract_candidate_id(feed([])) is None
+    # module_tag为null（非dict）→ 不视作置顶
+    assert dyn._extract_candidate_id(
+        feed([{"id_str": "600", "modules": {"module_tag": None,
+                                            "module_author": {}}}])) == "600"
 
 
-def test_poll_session_pushes_all_unseen_oldest_first(tmp_path):
-    """短时间连发多条：全部未见动态按发布时间从旧到新逐条推送"""
+def test_poll_session_pushes_new_candidate_with_prepare(tmp_path):
+    """新候选动态：经prepare（opus渲染）构造内容并上报，feed只供ID"""
     from blivepost.services.dynamics import (
         _DynamicPollSession, load_seen_dynamic_ids,
     )
 
-    q = FakeQueue()
-    seen = {"800"}  # 预置旧动态（baseline随之关闭）
+    q = queue.Queue()
+    seen = load_seen_dynamic_ids(111, str(tmp_path))
     session = _DynamicPollSession(111, seen, q, dynamics_dir=str(tmp_path))
-
-    # feed新到旧：新动态B、已见旧动态、新动态A
-    session.handle([
-        {"dynamic_id": "902", "author": "UP甲", "pub_ts": 1700000002,
-         "summary": "第二条", "image": ""},
-        {"dynamic_id": "800", "author": "UP甲", "pub_ts": 1700000000,
-         "summary": "旧", "image": ""},
-        {"dynamic_id": "901", "author": "UP甲", "pub_ts": 1700000001,
-         "summary": "第一条", "image": ""},
-    ])
-
-    dynamics = [i for i in q.items if i["type"] == "dynamic"]
-    assert [i["dynamic_id"] for i in dynamics] == ["901", "902"]  # 从旧到新
-    assert all(i["up_uid"] == 111 for i in dynamics)
-    # 判重持久化：重启后重新加载包含全部新ID
-    assert load_seen_dynamic_ids(111, str(tmp_path)) >= {"901", "902"}
+    # 首轮基线：记录候选不推送
+    session.handle({"data": {"items": [{"id_str": "100", "modules": {
+        "module_tag": None, "module_author": {}}}]}}, prepare=lambda i: None)
+    assert q.empty() and "100" in session.seen
+    # 新候选：prepare返回opus渲染内容（含图）
+    session.handle({"data": {"items": [{"id_str": "200", "modules": {
+        "module_author": {}}}]}},
+        prepare=lambda i: {"author": "UP", "summary": "新动态标题",
+                           "image": "http://img/1.png", "image_source": "card"})
+    item = q.get_nowait()
+    assert item["type"] == "dynamic" and item["dynamic_id"] == "200"
+    assert item["summary"] == "新动态标题" and item["image"] == "http://img/1.png"
+    assert item["image_source"] == "card"
 
 
-def test_poll_session_baseline_batch_not_pushed(tmp_path):
-    """空库首轮：首批动态仅作基线记录不推送，其后新动态正常推送"""
-    from blivepost.services.dynamics import _DynamicPollSession
+def test_poll_session_baseline_records_candidate_only(tmp_path):
+    """基线轮仅记录候选ID不推送；此后同候选不再触发"""
+    from blivepost.services.dynamics import (
+        _DynamicPollSession, load_seen_dynamic_ids,
+    )
 
-    q = FakeQueue()
-    session = _DynamicPollSession(111, set(), q, dynamics_dir=str(tmp_path))
-    session.handle([{"dynamic_id": "900", "author": "UP", "pub_ts": 1,
-                     "summary": "", "image": ""}])
-    assert q.items == []  # 基线不推送
-    session.handle([{"dynamic_id": "901", "author": "UP", "pub_ts": 2,
-                     "summary": "", "image": ""}])
-    assert [i["dynamic_id"] for i in q.items] == ["901"]
+    q = queue.Queue()
+    seen = load_seen_dynamic_ids(111, str(tmp_path))
+    session = _DynamicPollSession(111, seen, q, dynamics_dir=str(tmp_path))
+    feed = {"data": {"items": [{"id_str": "100", "modules": {
+        "module_author": {}}}]}}
+    session.handle(feed)                       # 基线轮
+    def _no_prepare(i):
+        raise AssertionError("已见候选不应触发prepare")
+    session.handle(feed, prepare=_no_prepare)  # 已见，不触发prepare
+    assert q.empty()
+    assert load_seen_dynamic_ids(111, str(tmp_path)) == {"100"}
 
 
 # ==================== 1c 风控/异常告警 ====================
 
 
-def test_poll_once_risk_control_code_returns_none(monkeypatch):
+def test_requests_fetch_risk_control_code_returns_none(monkeypatch):
     """风控/错误响应码返回None，正常空数据返回空列表（两者区分）"""
     from blivepost.services import dynamics as dyn
 
     monkeypatch.setattr(dyn.requests, "get",
                         lambda *a, **kw: _feed_response([], code=-352))
-    assert dyn._poll_once(111) is None  # 风控响应
+    assert dyn._requests_fetch(111) is None  # 风控响应
 
     monkeypatch.setattr(dyn.requests, "get",
                         lambda *a, **kw: _feed_response([], code=0))
-    assert dyn._poll_once(111) == []  # 真实空数据
+    assert dyn._requests_fetch(111) == {"code": 0, "data": {"items": []}}  # 有效空
 
 
 def test_consecutive_failures_alert_once_and_reset_on_recovery(tmp_path):
@@ -253,9 +271,9 @@ def test_consecutive_failures_alert_once_and_reset_on_recovery(tmp_path):
     assert len(alerts) == 1  # 告警后不重复
     assert alerts[0]["up_uid"] == 111 and alerts[0]["consecutive"] == 3
 
-    # 恢复正常：重置计数
-    session.handle([{"dynamic_id": "901", "author": "UP", "pub_ts": 1,
-                     "summary": "", "image": ""}])
+    # 恢复正常：重置计数（feed原始dict）
+    session.handle({"code": 0, "data": {"items": [
+        {"id_str": "901", "modules": {"module_author": {}}}]}})
     assert session.fail_streak == 0
 
     # 恢复后再次连续异常：可再次告警（一次）
@@ -277,11 +295,11 @@ def test_empty_response_is_normal_not_failure(tmp_path):
     session.handle(None)
     assert session.fail_streak == 2
 
-    session.handle([])  # 空列表=有效响应：重置
+    session.handle({"code": 0, "data": {"items": []}})  # 空feed=有效响应：重置
     assert session.fail_streak == 0
 
-    for _ in range(5):  # 持续空列表（UP删光动态等）不会触发告警
-        session.handle([])
+    for _ in range(5):  # 持续空feed（UP删光动态等）不会触发告警
+        session.handle({"code": 0, "data": {"items": []}})
     assert session.fail_streak == 0
     assert all(i["type"] != "dynamic_alert" for i in q.items)
 
@@ -295,8 +313,8 @@ def test_failure_streak_resets_below_threshold(tmp_path):
                                   alert_rounds=3)
     session.handle(None)
     session.handle(None)
-    session.handle([{"dynamic_id": "901", "author": "UP", "pub_ts": 1,
-                     "summary": "", "image": ""}])
+    session.handle({"code": 0, "data": {"items": [
+        {"id_str": "901", "modules": {"module_author": {}}}]}})
     session.handle(None)
     assert session.fail_streak == 1
     assert all(i["type"] != "dynamic_alert" for i in q.items)
@@ -307,9 +325,7 @@ def test_failure_streak_resets_below_threshold(tmp_path):
 
 def test_resubscribe_baseline_first_suppresses_catchup_push(tmp_path):
     """重新订阅（seen非空+baseline_first=True）：首轮无条件基线化，
-    停订期间的新动态一次性记为seen、不补推；其后新动态正常推送
-    （对照：默认baseline_first=False时同样输入会立即补推——见
-    test_poll_session_pushes_all_unseen_oldest_first）"""
+    停订期间的新动态记为seen不补推；其后新候选正常推送"""
     from blivepost.services.dynamics import (
         _DynamicPollSession, load_seen_dynamic_ids,
     )
@@ -319,20 +335,13 @@ def test_resubscribe_baseline_first_suppresses_catchup_push(tmp_path):
     session = _DynamicPollSession(111, seen, q, dynamics_dir=str(tmp_path),
                                   baseline_first=True)
 
-    # 重订阅首轮：停订期间发布的动态全部可见
-    session.handle([
-        {"dynamic_id": "901", "author": "UP甲", "pub_ts": 1700000001,
-         "summary": "停订期间", "image": ""},
-        {"dynamic_id": "900", "author": "UP甲", "pub_ts": 1700000000,
-         "summary": "停订期间", "image": ""},
-    ])
+    # 重订阅首轮：停订期间发布的动态可见（候选=最新901）→ 基线化不补推
+    session.handle({"data": {"items": [
+        {"id_str": "901", "modules": {"module_author": {}}},
+        {"id_str": "900", "modules": {"module_author": {}}},
+    ]}})
     assert q.items == []  # 基线化：不补推
-    assert load_seen_dynamic_ids(111, str(tmp_path)) >= {"900", "901"}
-
-    # 其后新发布的动态正常推送
-    session.handle([{"dynamic_id": "902", "author": "UP甲", "pub_ts": 1700000002,
-                     "summary": "新动态", "image": ""}])
-    assert [i["dynamic_id"] for i in q.items] == ["902"]
+    assert "901" in load_seen_dynamic_ids(111, str(tmp_path))
 
 
 def test_dynamic_process_main_passes_baseline_first(monkeypatch, tmp_path):
@@ -473,29 +482,30 @@ def test_save_seen_write_failure_logged(monkeypatch, tmp_path):
     assert "111" in errors[0] and "已见动态" in errors[0]
 
 
-def test_pinned_dynamic_pushed_only_after_unpin(monkeypatch, tmp_path):
-    """已知行为回归锚点：发布即置顶的动态在置顶期间被跳过、不记seen；
-    取消置顶后重新出现在feed中时作为"新动态"补推（延迟推送）"""
-    from blivepost.services import dynamics as dyn
-    from blivepost.services.dynamics import _DynamicPollSession
+def test_pinned_dynamic_pushed_immediately_when_newer(tmp_path):
+    """置顶比最新非置顶更新时立即推送（不再等取消置顶）"""
+    from blivepost.services.dynamics import (
+        _DynamicPollSession, load_seen_dynamic_ids,
+    )
 
-    def feed(tagged):
-        item = _item("900", pub_ts=1700000000)
-        if tagged:
-            item["modules"]["module_tag"] = {"text": "置顶"}
-        return _feed_response([item])
-
-    q = FakeQueue()
-    session = _DynamicPollSession(111, {"800"}, q, dynamics_dir=str(tmp_path))
-
-    monkeypatch.setattr(dyn.requests, "get", lambda *a, **kw: feed(True))
-    session.handle(dyn._poll_once(111))  # 置顶期间：被跳过
-    assert q.items == []
-    assert "900" not in session.seen  # 未记seen（延迟推的机制所在）
-
-    monkeypatch.setattr(dyn.requests, "get", lambda *a, **kw: feed(False))
-    session.handle(dyn._poll_once(111))  # 取消置顶：作为新动态补推
-    assert [i["dynamic_id"] for i in q.items] == ["900"]
+    q = queue.Queue()
+    seen = load_seen_dynamic_ids(111, str(tmp_path))
+    session = _DynamicPollSession(111, seen, q, dynamics_dir=str(tmp_path))
+    # 基线：旧置顶100 + 最新200
+    session.handle({"data": {"items": [
+        {"id_str": "100", "modules": {"module_tag": {"text": "置顶"},
+                                      "module_author": {}}},
+        {"id_str": "200", "modules": {"module_author": {}}},
+    ]}})
+    assert q.empty()
+    # 新动态300发布即置顶（比最新200新）→ 立即推送300
+    session.handle({"data": {"items": [
+        {"id_str": "300", "modules": {"module_tag": {"text": "置顶"},
+                                      "module_author": {}}},
+        {"id_str": "200", "modules": {"module_author": {}}},
+    ]}})
+    item = q.get_nowait()
+    assert item["dynamic_id"] == "300"
 
 
 # ==================== 2 子进程日志分离 ====================
@@ -609,7 +619,7 @@ async def test_consumer_dynamic_alert_notifies_admins():
     assert "111" in ps.bot_client.sent[0][1] and "10" in ps.bot_client.sent[0][1]
 
 
-def test_poll_once_signed_blocked_falls_back_unsigned(monkeypatch):
+def test_requests_fetch_signed_blocked_falls_back_unsigned(monkeypatch):
     """签名请求被风控(412/非JSON)→自动回退无签名请求并成功解析（2026-11-10真机实证场景）"""
     import blivepost.services.dynamics as dyn
 
@@ -643,14 +653,15 @@ def test_poll_once_signed_blocked_falls_back_unsigned(monkeypatch):
         return _Resp(ok_payload)
 
     monkeypatch.setattr(dyn.requests, "get", fake_get)
-    infos = dyn._poll_once(111, cookie_string="buvid3=X; SESSDATA=Y",
-                           wbi=_FakeSigner())
-    assert [i["dynamic_id"] for i in infos] == ["901"]      # 置顶跳过
+    data = dyn._requests_fetch(111, cookie_string="buvid3=X; SESSDATA=Y",
+                               wbi=_FakeSigner())
+    ids = [i["id_str"] for i in data["data"]["items"]]      # 原始feed dict
+    assert "901" in ids
     assert len(calls) == 2 and "w_rid=" in calls[0] and "w_rid=" not in calls[1]
     assert calls[1] == calls[0].split("&wts=")[0]           # 去签名URL
 
 
-def test_poll_once_both_fail_returns_none(monkeypatch):
+def test_requests_fetch_both_fail_returns_none(monkeypatch):
     """签名与无签名均失败→None（计异常轮，触发连续告警）"""
     import blivepost.services.dynamics as dyn
 
@@ -666,10 +677,10 @@ def test_poll_once_both_fail_returns_none(monkeypatch):
 
     monkeypatch.setattr(dyn.requests, "get",
                         lambda url, headers=None, timeout=None: _Resp())
-    assert dyn._poll_once(111, cookie_string="c", wbi=_FakeSigner()) is None
+    assert dyn._requests_fetch(111, cookie_string="c", wbi=_FakeSigner()) is None
 
 
-def test_poll_once_sends_full_cookie(monkeypatch):
+def test_requests_fetch_sends_full_cookie(monkeypatch):
     """请求头携带完整cookie（buvid3等风控必需项），而非仅SESSDATA"""
     import blivepost.services.dynamics as dyn
 
@@ -688,7 +699,7 @@ def test_poll_once_sends_full_cookie(monkeypatch):
         return _Resp()
 
     monkeypatch.setattr(dyn.requests, "get", fake_get)
-    dyn._poll_once(111, cookie_string="buvid3=X; SESSDATA=Y", wbi=_FakeSigner())
+    dyn._requests_fetch(111, cookie_string="buvid3=X; SESSDATA=Y", wbi=_FakeSigner())
     assert captured["cookie"] == "buvid3=X; SESSDATA=Y"
 
 
@@ -952,3 +963,97 @@ async def test_consumer_dynamic_str_pub_ts_pushes():
         "author": "UP", "pub_ts": "1762765229",
         "summary": "内容", "image": "http://img.png"})
     assert len(calls) == 1 and "UP" in calls[0]     # 推送成功未抛TypeError
+
+
+# ---------- opus渲染与配图决策（/dyn-prepare） ----------
+
+async def test_dyn_prepare_image_priority(monkeypatch):
+    """配图优先级：无公网基地址→动态原图URL；有→卡片(PIL)优先"""
+    from aiohttp.test_utils import TestClient, TestServer
+    from blivepost.services.dyn_fetch import DynFetchService
+
+    content = {"author": "UP", "title": "标题", "text": "正文内容",
+               "images": ["https://i0.hdslb.com/bfs/a.png"]}
+
+    svc = DynFetchService()          # 无公网基地址
+
+    async def fake_render(dynamic_id):
+        return dict(content)
+
+    svc._render_opus = fake_render
+    client = TestClient(TestServer(svc._build_app()))
+    await client.start_server()
+    try:
+        r = await client.post("/dyn-prepare", json={"dynamic_id": "900"},
+                              headers={"X-Fetch-Token": svc.token})
+        assert r.status == 200
+        body = await r.json()
+        assert body["image_url"] == content["images"][0]   # 原图URL链
+        assert body["image_source"] == "original"
+        # 非法dynamic_id → 400
+        r = await client.post("/dyn-prepare", json={"dynamic_id": "../evil"},
+                              headers={"X-Fetch-Token": svc.token})
+        assert r.status == 400
+        # 渲染失败且无原图 → 无图文案兜底
+        async def fail_render(dynamic_id):
+            return None
+        svc._render_opus = fail_render
+        r = await client.post("/dyn-prepare", json={"dynamic_id": "901"},
+                              headers={"X-Fetch-Token": svc.token})
+        body = await r.json()
+        assert body["image_url"] is None and body["image_source"] == "none"
+    finally:
+        await client.close()
+
+    # 公网基地址配置时：PIL卡片优先（有字体环境）
+    svc2 = DynFetchService(public_base="https://bot.example.com")
+    svc2._render_opus = fake_render
+    card_bytes = b"\x89PNGfake"
+
+    def fake_card(author, title, text):
+        return card_bytes
+
+    monkeypatch.setattr(DynFetchService, "_render_card",
+                        staticmethod(fake_card))
+    client2 = TestClient(TestServer(svc2._build_app()))
+    await client2.start_server()
+    try:
+        r = await client2.post("/dyn-prepare", json={"dynamic_id": "900"},
+                               headers={"X-Fetch-Token": svc2.token})
+        body = await r.json()
+        assert body["image_source"] == "card"
+        assert body["image_url"].startswith("https://bot.example.com/dyn-img/")
+        # 托管URL可下载
+        img_url = body["image_url"].replace("https://bot.example.com", "")
+        r2 = await client2.get(img_url)
+        assert r2.status == 200 and await r2.read() == card_bytes
+    finally:
+        await client2.close()
+
+
+async def test_remote_proxy_prepare():
+    """子进程代理prepare：content→推送字段映射；服务失败回退None"""
+    import blivepost.services.dynamics as dyn
+
+    proxy = dyn._RemoteFetchProxy(18080, "TK")
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"content": {"author": "UP", "title": "标题",
+                                "text": "正文", "images": ["http://i/1.jpg"]},
+                    "image_url": "https://b.example/dyn-img/x.png",
+                    "image_source": "card"}
+
+    monkeypatch_target = dyn.requests
+    orig_post = monkeypatch_target.post
+    monkeypatch_target.post = lambda *a, **kw: FakeResp()
+    try:
+        prepared = proxy.prepare("900")
+        assert prepared["author"] == "UP"
+        assert "标题" in prepared["summary"] and "正文" in prepared["summary"]
+        assert prepared["image"] == "https://b.example/dyn-img/x.png"
+        assert prepared["image_source"] == "card"
+    finally:
+        monkeypatch_target.post = orig_post

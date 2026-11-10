@@ -113,15 +113,54 @@ class _BrowserHolder:
             setattr(self, attr, None)
 
 
-class DynFetchService:
-    """动态取数HTTP服务（127.0.0.1随机端口+进程级token）"""
+# opus页面正文/标题/图片的DOM提取脚本（在页面上下文执行）
+_OPUS_EXTRACT_JS = """
+() => {
+  const pick = (sels) => {
+    for (const s of sels) { const el = document.querySelector(s);
+      if (el && el.textContent.trim()) return el.textContent.trim(); }
+    return '';
+  };
+  const author = pick(['.opus-module-author__name', '.up-name', '.author-name']);
+  const title = pick(['.opus-module-title', 'h1.title', 'h1']);
+  let text = '';
+  const paras = document.querySelectorAll(
+    '.bili-opus-view .opus-module-content p, .bili-opus-view .opus-text-richtext p, ' +
+    '.bili-opus-view .opus-module-content, .bili-opus-view .opus-text-richtext');
+  if (paras.length) {
+    text = [...paras].map(p => p.textContent.trim()).filter(Boolean).join('\\n');
+  }
+  const images = [...document.querySelectorAll('.bili-opus-view img')]
+    .map(i => i.src || '')
+    .filter(u => /hdslb\\.com|biliimg/.test(u))
+    .filter(u => !/face|avatar|emoji/.test(u));
+  return {author, title, text: text.slice(0, 600),
+          images: [...new Set(images)].slice(0, 9)};
+}
+"""
 
-    def __init__(self, cookie_string: str = ""):
+# 托管图片TTL（秒）：推送后平台转存即弃，过期清理防内存滞留
+_IMAGE_TTL = 600.0
+
+
+class DynFetchService:
+    """动态取数HTTP服务（127.0.0.1随机端口+进程级token）
+
+    public_base（公网基地址）配置后启用本地渲染图片托管链
+    （PIL卡片→opus截图→动态原图→无图）；为空时仅动态原图URL链。
+    """
+
+    def __init__(self, cookie_string: str = "", public_base: str = ""):
         self._holder = _BrowserHolder()
         self._holder.set_cookies(cookie_string)
         self._token = secrets.token_urlsafe(24)
         self._runner: Optional[web.AppRunner] = None
         self.port: int = 0
+        self.public_base = (public_base or "").rstrip("/")
+        # 托管图片：{name: (过期monotonic, content_type, bytes)}
+        self._images: dict = {}
+        # prepare全流程锁（渲染→截图期间页面不得被并发取数导航走）
+        self._prepare_lock = asyncio.Lock()
 
     @property
     def token(self) -> str:
@@ -134,6 +173,8 @@ class DynFetchService:
     def _build_app(self) -> web.Application:
         app = web.Application()
         app.router.add_post("/dyn-fetch", self._handle_fetch)
+        app.router.add_post("/dyn-prepare", self._handle_prepare)
+        app.router.add_get("/dyn-img/{name}", self._handle_image)
         return app
 
     async def start(self) -> int:
@@ -145,14 +186,183 @@ class DynFetchService:
         # TCPSite不直接暴露端口——从runner取实际绑定地址
         sockets = self._runner.addresses
         self.port = int(sockets[0][1]) if sockets else 0
-        logger.info(f"动态取数服务已启动: http://127.0.0.1:{self.port}/dyn-fetch")
+        logger.info(f"动态取数服务已启动: http://127.0.0.1:{self.port}/dyn-fetch"
+                    f"（本地图片托管: {'启用 ' + self.public_base if self.public_base else '未启用-公网基地址未配置'}）")
         return self.port
 
     async def stop(self) -> None:
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
+        self._images.clear()
         await self._holder.close()
+
+    # ---- opus页渲染与配图决策 ----
+
+    async def _render_opus(self, dynamic_id: str) -> Optional[dict]:
+        """opus页渲染提取内容（标题/正文/作者/原图URL列表）；失败None。
+
+        调用方须持有self._prepare_lock（页面导航期间不得被并发取数打断）。
+        """
+        url = f"https://www.bilibili.com/opus/{dynamic_id}"
+        async with self._holder._lock:
+            if not await self._holder._ensure():
+                return None
+            try:
+                await self._holder._page.goto(url, timeout=30000)
+                await self._holder._page.wait_for_selector(
+                    ".bili-opus-view", timeout=15000)
+                return await self._holder._page.evaluate(_OPUS_EXTRACT_JS)
+            except Exception as e:
+                logger.warning(f"opus页渲染失败(动态{dynamic_id}): {e}")
+                return None
+
+    async def _screenshot_view(self) -> Optional[bytes]:
+        """截图.bili-opus-view元素（渲染失败返回None）；调用前须已导航到opus页"""
+        try:
+            locator = self._holder._page.locator(".bili-opus-view").first
+            return await locator.screenshot()
+        except Exception as e:
+            logger.warning(f"opus截图失败: {e}")
+            return None
+
+    @staticmethod
+    def _render_card(author: str, title: str, text: str) -> Optional[bytes]:
+        """PIL本地渲染自定义动态卡片（作者/标题/正文）；无字体/PIL时None"""
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            return None
+        import os
+        font_paths = [
+            r"C:\Windows\Fonts\msyh.ttc",              # Windows 微软雅黑
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/System/Library/Fonts/PingFang.ttc",       # macOS
+        ]
+        font = None
+        for p in font_paths:
+            if os.path.exists(p):
+                try:
+                    font = ImageFont.truetype(p, 26)
+                    break
+                except Exception:
+                    continue
+        if font is None:
+            return None
+        small = None
+        for p in font_paths:
+            if os.path.exists(p):
+                try:
+                    small = ImageFont.truetype(p, 20)
+                    break
+                except Exception:
+                    continue
+        small = small or font
+
+        W = 720
+        PAD = 32
+
+        def wrap(s: str, f, limit: int) -> list:
+            lines, cur = [], ""
+            for ch in s.replace("\r", ""):
+                if ch == "\n":
+                    lines.append(cur)
+                    cur = ""
+                    continue
+                cur += ch
+                if f.getlength(cur) > limit:
+                    lines.append(cur[:-1])
+                    cur = ch
+            if cur:
+                lines.append(cur)
+            return lines[:12]
+
+        head = author or "B站动态"
+        title_lines = wrap(title, font, W - PAD * 2) if title else []
+        body_lines = wrap(text, small, W - PAD * 2) if text else []
+        H = PAD * 2 + 34 + (16 if title_lines else 0) + \
+            len(title_lines) * 40 + (12 if body_lines else 0) + \
+            len(body_lines) * 32 + 28
+        img = Image.new("RGB", (W, H), "#ffffff")
+        d = ImageDraw.Draw(img)
+        d.text((PAD, PAD), head, fill="#0f172a", font=font)
+        y = PAD + 40
+        for ln in title_lines:
+            d.text((PAD, y), ln, fill="#0f172a", font=font)
+            y += 40
+        if body_lines:
+            y += 12
+        for ln in body_lines:
+            d.text((PAD, y), ln, fill="#475569", font=small)
+            y += 32
+        d.line((PAD, H - 36, W - PAD, H - 36), fill="#e2e8f0", width=2)
+        d.text((PAD, H - 28), "BLivePost · B站动态", fill="#94a3b8", font=small)
+        import io as _io
+        buf = _io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _host_image(self, data: bytes, content_type: str) -> Optional[str]:
+        """托管本地图片字节并返回公网URL（未配置公网基地址返回None）"""
+        if not self.public_base:
+            return None
+        import time as _time
+        name = secrets.token_urlsafe(12)
+        now = _time.monotonic()
+        # 顺带清理过期项
+        for k in [k for k, v in self._images.items() if v[0] < now]:
+            self._images.pop(k, None)
+        self._images[name] = (now + _IMAGE_TTL, content_type, data)
+        return f"{self.public_base}/dyn-img/{name}"
+
+    async def _handle_prepare(self, request: web.Request) -> web.Response:
+        """候选动态内容准备：opus渲染+配图决策（卡片→截图→原图→无图）"""
+        if request.headers.get("X-Fetch-Token") != self._token:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        try:
+            body = await request.json()
+            dynamic_id = str(body.get("dynamic_id") or "")
+        except Exception:
+            return web.json_response({"error": "bad request"}, status=400)
+        if not dynamic_id.isdigit():
+            return web.json_response({"error": "bad id"}, status=400)
+
+        async with self._prepare_lock:
+            content = await self._render_opus(dynamic_id) or {}
+            image_url = None
+            image_source = "none"
+            if self.public_base:
+                # 优先本地渲染自定义卡片（PIL，轻量）；不可用改截图
+                card = self._render_card(content.get("author") or "",
+                                         content.get("title") or "",
+                                         content.get("text") or "")
+                hosted = None
+                if card:
+                    hosted = self._host_image(card, "image/png")
+                if hosted:
+                    image_url, image_source = hosted, "card"
+                else:
+                    shot = await self._screenshot_view()
+                    hosted = self._host_image(shot, "image/png") if shot else None
+                    if hosted:
+                        image_url, image_source = hosted, "screenshot"
+            if image_url is None and content.get("images"):
+                # 动态原图URL（公网，平台可直接转存——与开播封面同链路）
+                image_url, image_source = content["images"][0], "original"
+        return web.json_response({
+            "content": content, "image_url": image_url,
+            "image_source": image_source})
+
+    async def _handle_image(self, request: web.Request) -> web.Response:
+        """托管图片下载（公网基地址需反代/暴露本端口后平台方可访问）"""
+        import time as _time
+        name = request.match_info.get("name", "")
+        item = self._images.get(name)
+        if item is None or item[0] < _time.monotonic():
+            self._images.pop(name, None)
+            return web.Response(status=404, text="expired")
+        return web.Response(body=item[2], content_type=item[1])
 
     async def _handle_fetch(self, request: web.Request) -> web.Response:
         if request.headers.get("X-Fetch-Token") != self._token:

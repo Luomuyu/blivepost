@@ -42,8 +42,8 @@ def test_build_dynamic_url_fallback(monkeypatch):
             return "", "0"
 
     url = dyn._build_dynamic_url(12345, BadWbi())
-    assert url.endswith("host_mid=12345&platform=web")
-    assert "w_rid" not in url
+    assert "host_mid=12345" in url and "w_rid" not in url
+    assert url.startswith(dyn.DYNAMIC_API_BASE)
 
 
 def test_poll_once_uses_signed_url(monkeypatch):
@@ -64,7 +64,7 @@ def test_poll_once_uses_signed_url(monkeypatch):
 
     monkeypatch.setattr(dyn.requests, "get", fake_get)
     monkeypatch.setattr(dyn, "_build_dynamic_url", lambda uid, wbi=None: f"signed?host_mid={uid}")
-    dyn._poll_once(111)
+    dyn._requests_fetch(111)
     assert "signed" in seen["url"]
 
 

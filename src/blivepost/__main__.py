@@ -276,7 +276,8 @@ async def main_async(
         dyn_fetch_service = None
         if settings.message.dynamic_monitor:
             from .services.dyn_fetch import DynFetchService
-            dyn_fetch_service = DynFetchService()
+            dyn_fetch_service = DynFetchService(
+                public_base=settings.message.web_public_base)
             await dyn_fetch_service.start()
 
         # 动态轮询管理器（与监控共用跨进程队列；直播状态文件放数据库目录，实例私有）
