@@ -189,13 +189,17 @@ class PushQueueConsumer:
 
         elif kind == "dynamic":
             if not await self._switch_on("dynamic_monitor"):
-                logger.debug("全局推送开关 dynamic_monitor 已关闭，丢弃动态推送")
+                # INFO级可见性：开关关闭期间新动态被丢弃应可追溯（真机反馈
+                # "未推送"曾因debug级日志无迹可寻）
+                logger.info("全局推送开关 dynamic_monitor 已关闭，丢弃动态推送"
+                            f"（dynamic_id={item.get('dynamic_id')}）")
                 return
             await self._handle_dynamic(item)
 
         elif kind == "up_live":
             if not await self._switch_on("dynamic_monitor"):
-                logger.debug("全局推送开关 dynamic_monitor 已关闭，丢弃UP开播提醒")
+                logger.info("全局推送开关 dynamic_monitor 已关闭，丢弃UP开播提醒"
+                            f"（up_uid={item.get('up_uid')}）")
                 return
             await self._handle_up_live(item)
 

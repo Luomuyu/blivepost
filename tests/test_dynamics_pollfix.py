@@ -812,3 +812,93 @@ async def test_remote_fetch_proxy(monkeypatch):
     monkeypatch.setattr(dyn.requests, "post",
                         lambda *a, **kw: FakeResp(502, {}))
     assert proxy.fetch_json("u") is None
+
+
+# ---------- 双开关语义统一（2026-11-10真机反馈） ----------
+
+async def test_bind_dynamic_respects_runtime_switch(monkeypatch):
+    """运行时开关关：/绑定动态 只记录订阅不启轮询，并明确提示"""
+    from blivepost.services.commands import CommandHandler
+
+    class Store:
+        def __init__(self):
+            self.bound = []
+
+        async def bind_dynamic(self, group, up_uid):
+            self.bound.append(up_uid)
+            return True
+
+        def get_dynamic_up_name(self, up_uid):
+            return ""
+
+    class Mgr:
+        enabled = True
+
+        def __init__(self):
+            self.ensured = []
+
+        async def ensure(self, up_uid, baseline_first=False):
+            self.ensured.append(up_uid)
+            return True, None
+
+    class Db:
+        async def get_push_switch_enabled(self, name, default=False):
+            return False          # 运行时开关=关
+
+        async def get_room_uid(self, room_id):
+            return 0
+
+    store, mgr = Store(), Mgr()
+    ch = CommandHandler(store, None, db_service=Db(), dynamic_manager=mgr)
+    reply = await ch._bind_dynamic("G1", 12345)
+    assert store.bound == [12345]            # 订阅已记录（开关打开后自动恢复）
+    assert mgr.ensured == []                 # 但未启动轮询
+    assert "推送开关当前为关" in reply
+
+    class DbOn(Db):
+        async def get_push_switch_enabled(self, name, default=False):
+            return True
+
+    ch2 = CommandHandler(store, None, db_service=DbOn(), dynamic_manager=mgr)
+    reply2 = await ch2._bind_dynamic("G1", 12345)
+    assert mgr.ensured == [12345]            # 开关开：正常启动轮询
+    assert "推送开关当前为关" not in reply2
+
+
+async def test_status_includes_dynamic_section():
+    """/状态 输出含动态订阅段与轮询状态；开关关时附警示"""
+    from blivepost.services.commands import CommandHandler
+
+    class B:
+        room_id = 3060820
+        uid = 36296621
+        monitored = True
+
+    class Store:
+        def get_group_bindings(self, group):
+            return [B()]
+
+        def get_group_dynamic_ups(self, group):
+            return [36296621]
+
+        def get_dynamic_up_name(self, uid):
+            return "洛沐语"
+
+    class Mgr:
+        enabled = True
+
+        def has(self, uid):
+            return True
+
+        def room_ids(self):
+            return [3060820]
+
+    class Db:
+        async def get_push_switch_enabled(self, name, default=False):
+            return False
+
+    ch = CommandHandler(Store(), Mgr(), db_service=Db(), dynamic_manager=Mgr())
+    text = await ch._status("G1")
+    assert "订阅的UP主动态" in text
+    assert "UP主36296621（洛沐语） - 轮询运行中" in text
+    assert "推送开关当前为关" in text

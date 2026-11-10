@@ -355,31 +355,70 @@ class CommandHandler:
                 f"（独立生效，恢复：/推送设置 {room_id} 恢复）")
 
     async def _status(self, group_openid: str) -> str:
-        """查询本群监控中的直播间及其监控任务状态"""
+        """查询本群监控中的直播间与动态订阅状态"""
         monitored = [
             b for b in self.binding_store.get_group_bindings(group_openid)
             if b.monitored
         ]
-        if not monitored:
-            return "本群当前没有监控中的直播间，发送 /帮助 查看指令"
+        dyn_ups = self.binding_store.get_group_dynamic_ups(group_openid) \
+            if self.binding_store else []
+        if not monitored and not dyn_ups:
+            return "本群当前没有监控中的直播间与动态订阅，发送 /帮助 查看指令"
 
-        lines = ["本群监控中的直播间："]
-        for b in monitored:
-            state = "监控运行中" if self.monitor_manager.has(b.room_id) else "监控未运行（等待恢复）"
-            lines.append(f"· 房间{b.room_id}（主播UID:{b.uid}）- {state}")
-        lines.append(f"\n全局监控房间数：{len(self.monitor_manager.room_ids())}")
+        lines = []
+        if monitored:
+            lines.append("本群监控中的直播间：")
+            for b in monitored:
+                state = "监控运行中" if self.monitor_manager.has(b.room_id) else "监控未运行（等待恢复）"
+                lines.append(f"· 房间{b.room_id}（主播UID:{b.uid}）- {state}")
+            lines.append(f"全局监控房间数：{len(self.monitor_manager.room_ids())}")
+        if dyn_ups:
+            lines.append("本群订阅的UP主动态：")
+            for uid in dyn_ups:
+                name = self.binding_store.get_dynamic_up_name(uid) or ""
+                name_text = f"（{name}）" if name else ""
+                if self.dynamic_manager is not None and self.dynamic_manager.has(uid):
+                    state = "轮询运行中"
+                else:
+                    state = "轮询未运行"
+                lines.append(f"· UP主{uid}{name_text} - {state}")
+            if not await self._dyn_switch_on():
+                lines.append("⚠️ 全局动态监控推送开关当前为关（后台-推送设置），"
+                             "新动态不会推送到群")
         return "\n".join(lines)
 
-    async def _my_bindings(self, group_openid: str) -> str:
-        """查询本群推送的直播间列表"""
-        bindings = self.binding_store.get_group_bindings(group_openid)
-        if not bindings:
-            return "本群当前没有推送中的直播间，发送 /帮助 查看指令"
+    async def _dyn_switch_on(self) -> bool:
+        """运行时动态监控开关状态（DB优先；无DB回落config默认即manager.enabled）"""
+        if self.db_service is not None:
+            try:
+                if self.dynamic_manager is not None:
+                    return await self.db_service.get_push_switch_enabled(
+                        "dynamic_monitor", default=self.dynamic_manager.enabled)
+                return await self.db_service.get_push_switch_enabled("dynamic_monitor")
+            except Exception:
+                pass
+        return bool(self.dynamic_manager.enabled) if self.dynamic_manager else False
 
-        lines = ["本群推送的直播间："]
-        for b in bindings:
-            mon = "监控中" if b.monitored else "未监控"
-            lines.append(f"· 房间{b.room_id}（主播UID:{b.uid}）- {mon}")
+    async def _my_bindings(self, group_openid: str) -> str:
+        """查询本群推送的直播间与动态订阅列表"""
+        bindings = self.binding_store.get_group_bindings(group_openid)
+        dyn_ups = self.binding_store.get_group_dynamic_ups(group_openid) \
+            if self.binding_store else []
+        if not bindings and not dyn_ups:
+            return "本群当前没有推送中的直播间与动态订阅，发送 /帮助 查看指令"
+
+        lines = []
+        if bindings:
+            lines.append("本群推送的直播间：")
+            for b in bindings:
+                mon = "监控中" if b.monitored else "未监控"
+                lines.append(f"· 房间{b.room_id}（主播UID:{b.uid}）- {mon}")
+        if dyn_ups:
+            lines.append("本群订阅的UP主动态：")
+            for uid in dyn_ups:
+                name = self.binding_store.get_dynamic_up_name(uid) or ""
+                name_text = f"（{name}）" if name else ""
+                lines.append(f"· UP主{uid}{name_text}")
         return "\n".join(lines)
 
     @staticmethod
@@ -405,11 +444,18 @@ class CommandHandler:
                 up_uid = room_uid
 
         is_new = await self.binding_store.bind_dynamic(group_openid, up_uid)
+        name = self.binding_store.get_dynamic_up_name(up_uid)
+        name_text = f"（{name}）" if name else ""
+        # 运行时开关门控（2026-11-10真机反馈）：config开关只决定指令可用性，
+        # 后台"推送设置-动态监控"关时不得启动轮询——否则面板显示"轮询中"
+        # 与开关状态矛盾，且推送被静默丢弃
+        if not await self._dyn_switch_on():
+            return (f"已订阅UP主{up_uid}{name_text}的动态{note}\n"
+                    f"⚠️ 全局动态监控推送开关当前为关（后台-推送设置），"
+                    f"开启后自动开始轮询推送")
         # 用户主动订阅：首轮无条件基线化——防止取消订阅后重新订阅时，
         # 停订期间的新动态被一次性补推（进程已存活时参数无效果）
         created, _ = await self.dynamic_manager.ensure(up_uid, baseline_first=True)
-        name = self.binding_store.get_dynamic_up_name(up_uid)
-        name_text = f"（{name}）" if name else ""
         if is_new:
             return f"已订阅UP主{up_uid}{name_text}的动态，更新将推送到本群{note}"
         return f"UP主{up_uid}{name_text}的动态已在订阅中，本群推送已开启{note}"

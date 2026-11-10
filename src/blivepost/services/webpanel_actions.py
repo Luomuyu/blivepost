@@ -290,11 +290,19 @@ class ActionsMixin:
             return self._action_response()
         try:
             await self.binding_store.bind_dynamic(group, up_uid)
-            if self.dynamic_manager is not None:
+            # 运行时开关门控（与群指令一致）：后台"推送设置-动态监控"关时
+            # 不启动轮询（否则"轮询中"与开关状态矛盾、推送被静默丢弃）；
+            # 开关打开时_apply_dynamic_switch会按订阅表恢复轮询
+            switch_on = True
+            if self.db_service is not None and self.dynamic_manager is not None:
+                switch_on = await self.db_service.get_push_switch_enabled(
+                    "dynamic_monitor", default=self.dynamic_manager.enabled)
+            if self.dynamic_manager is not None and switch_on:
                 # 用户主动订阅：首轮无条件基线化，防止重新订阅时停订期间的
                 # 新动态被一次性补推（进程已存活时参数无效果）
                 await self.dynamic_manager.ensure(up_uid, baseline_first=True)
-            logger.info(f"面板绑定动态：群{group} UP主{up_uid}")
+            logger.info(f"面板绑定动态：群{group} UP主{up_uid}"
+                        f"（开关{'开' if switch_on else '关-不启轮询'}）")
         except Exception as e:
             logger.error(f"面板绑定动态失败(群{group} UP{up_uid}): {e}")
         return self._action_response()
