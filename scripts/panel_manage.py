@@ -31,18 +31,22 @@ API_BASE = "https://api.sgroup.qq.com"
 IDS_FILE = Path(__file__).resolve().parent / "panel_ids.json"
 
 # ---------- 面板定义（修改此处的items后运行 modify 即可更新面板） ----------
+# 与 panel_create.py 的定义保持一致（同步修改两处）；指令全集以
+# blivepost/services/commands.py 与 admin_commands.py 为准；平台上限20条/面板。
+# 注意：/绑定 /解绑 指令已移除（直播间绑定改Web面板操作），不得再加入面板。
 
 GROUP_ITEMS = [
     {"type": "command", "name": "/帮助", "desc": "查看全部指令"},
-    {"type": "command", "name": "/绑定 ", "desc": "绑定本群与直播间，补房间号"},
     {"type": "command", "name": "/监控 ", "desc": "开始监控推送，补房间号"},
     {"type": "command", "name": "/取消监控 ", "desc": "取消监控推送，补房间号"},
-    {"type": "command", "name": "/解绑 ", "desc": "解除绑定，补房间号"},
     {"type": "command", "name": "/状态", "desc": "查看本群监控状态"},
     {"type": "command", "name": "/绑定列表", "desc": "查看本群绑定列表"},
+    {"type": "command", "name": "/推送设置 ", "desc": "查看/修改本群推送开关，补房间号"},
+    {"type": "command", "name": "/绑定动态 ", "desc": "订阅UP主动态，补UP主UID"},
+    {"type": "command", "name": "/取消动态 ", "desc": "取消订阅UP主动态，补UID"},
     {"type": "command", "name": "/收入 ", "desc": "查询收入汇总，补房间号"},
     {"type": "command", "name": "/SC榜 ", "desc": "查询SC排行，补房间号"},
-    {"type": "command", "name": "/汇总", "desc": "全部房间合计"},
+    {"type": "command", "name": "/汇总", "desc": "全部房间合计，可带周/月"},
 ]
 
 C2C_ITEMS = [
@@ -51,6 +55,7 @@ C2C_ITEMS = [
     {"type": "command", "name": "/移除账号 ", "desc": "从账号池删除账号，补UID"},
     {"type": "command", "name": "/恢复账号 ", "desc": "恢复失效账号，补UID"},
     {"type": "command", "name": "/导出 ", "desc": "导出明细数据，补房间号"},
+    {"type": "command", "name": "/体积", "desc": "查询数据库体积"},
     {"type": "command", "name": "/我", "desc": "查看你的openid"},
 ]
 
