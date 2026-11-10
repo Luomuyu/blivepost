@@ -902,3 +902,53 @@ async def test_status_includes_dynamic_section():
     assert "订阅的UP主动态" in text
     assert "UP主36296621（洛沐语） - 轮询运行中" in text
     assert "推送开关当前为关" in text
+
+
+def test_parse_feed_data_string_pub_ts():
+    """pub_ts为字符串（接口类型变更，真机2026-11-10 TypeError致推送失败）→ 强转int"""
+    import blivepost.services.dynamics as dyn
+    payload = {"code": 0, "data": {"items": [
+        {"id_str": "901", "modules": {
+            "module_author": {"name": "UP", "pub_ts": "1762765229"}}},
+    ]}}
+    infos = dyn._parse_feed_data(payload, 111)
+    assert infos[0]["pub_ts"] == 1762765229          # str → int
+    assert dyn._to_int(None) == 0 and dyn._to_int("x") == 0
+    assert dyn._to_int("123.9") == 123
+
+
+async def test_consumer_dynamic_str_pub_ts_pushes():
+    """consumer端pub_ts字符串防御：推送链不因类型抛错"""
+    from blivepost.config.settings import Settings
+    from blivepost.core.consumer import PushQueueConsumer
+    from blivepost.services.push import PushService
+
+    calls = []
+
+    class Bot:
+        def push_media(self, image, content, groups, keyboard=None,
+                       at_all_groups=None):
+            calls.append(content)
+            return True
+
+        def broadcast(self, groups, content, keyboard=None, at_all_groups=None):
+            calls.append(content)
+            return True
+
+    ps = PushService(Settings())
+    ps.bot_client = Bot()
+
+    class Store:
+        def get_dynamic_groups(self, up_uid):
+            return ["G1"]
+
+        def get_dynamic_up_name(self, up_uid):
+            return "UP"
+
+    consumer = PushQueueConsumer(None, ps, None, binding_store=Store(),
+                                 switch_defaults={"dynamic_monitor": True})
+    await consumer._handle_dynamic({
+        "type": "dynamic", "up_uid": 111, "dynamic_id": "900",
+        "author": "UP", "pub_ts": "1762765229",
+        "summary": "内容", "image": "http://img.png"})
+    assert len(calls) == 1 and "UP" in calls[0]     # 推送成功未抛TypeError

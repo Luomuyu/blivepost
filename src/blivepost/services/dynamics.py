@@ -276,6 +276,17 @@ def _poll_once(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[List[
     return _parse_feed_data(data, up_uid)
 
 
+def _to_int(value, default: int = 0) -> int:
+    """健壮int转换：接口侧数值字段可能为字符串（pub_ts等）"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+
 def _parse_feed_data(data: dict, up_uid: int) -> Optional[List[dict]]:
     """解析feed接口响应（浏览器/requests两路共用）；解析异常返回None"""
     try:
@@ -297,7 +308,9 @@ def _parse_feed_data(data: dict, up_uid: int) -> Optional[List[dict]]:
             infos.append({
                 "dynamic_id": dynamic_id,
                 "author": (author.get("name") or ""),
-                "pub_ts": author.get("pub_ts") or 0,
+                # pub_ts接口侧可能为字符串（2026-11-10真机：fromtimestamp(str)
+                # 抛TypeError致推送全链失败），统一转int
+                "pub_ts": _to_int(author.get("pub_ts")),
                 "summary": summary,
                 "image": image,
             })
