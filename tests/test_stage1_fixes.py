@@ -192,6 +192,9 @@ async def test_qqbot_queue_full_drops():
         assert bot.push("first", ["G1"]) is True
         assert bot.push("overflow", ["G1"]) is False  # 满则丢弃
     finally:
+        # 队列里残留的first协程无worker消费：close掉防never-awaited警告
+        while not bot._send_queue.empty():
+            bot._send_queue.get_nowait().close()
         bot._task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await bot._task

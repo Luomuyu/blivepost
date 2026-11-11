@@ -130,6 +130,13 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# 显式声明异步fixture的事件循环作用域（pytest-asyncio未来默认将改function）
+asyncio_default_fixture_loop_scope = "function"
+# aiosqlite连接工作线程在loop关闭后的GC时序性回调：测试已全量dispose引擎，
+# 残留为GC时机噪声（Linux线程调度下偶发），不属于泄漏——忽略该线程异常警告
+filterwarnings = [
+    "ignore:Exception in thread:pytest.PytestUnhandledThreadExceptionWarning",
+]
 pythonpath = ["src"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

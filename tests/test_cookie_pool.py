@@ -29,8 +29,7 @@ async def pool(tmp_path):
 
 async def test_pool_upsert_and_acquire(pool):
     p, _ = pool
-    assert p.acquire() is None or True  # 空池返回None
-    assert await p.acquire() is None
+    assert await p.acquire() is None  # 空池返回None
 
     await p.upsert(111, "账号A", "SESSDATA=aaa; bili_jct=t1", sessdata="aaa")
     await p.upsert(222, "账号B", "SESSDATA=bbb", sessdata="bbb")

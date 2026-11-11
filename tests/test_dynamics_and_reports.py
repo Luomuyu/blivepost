@@ -296,6 +296,7 @@ async def test_export_json(tmp_path, monkeypatch):
     assert path.exists()
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["danmaku"][0][3] == "hi"
+    await svc.aclose()
     await db.close()
 
 
