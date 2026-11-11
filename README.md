@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.2.0-orange.svg)](https://github.com/luomuyu/blivepost)
+[![Version](https://img.shields.io/badge/version-1.2.0-orange.svg)](https://github.com/Luomuyu/blivepost)
 
 B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化Python应用
 
@@ -29,7 +29,7 @@ B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化P
 
 ```bash
 # 克隆仓库
-git clone https://github.com/luomuyu/blivepost.git
+git clone https://github.com/Luomuyu/blivepost.git
 cd blivepost
 
 # 安装（自动安装全部依赖，含PyPI的qq-botpy-v2；blivedm由vendor机制运行时下载）
@@ -48,14 +48,12 @@ pip install -e .
 ### Docker 部署
 
 ```bash
-git clone https://github.com/luomuyu/blivepost.git
+git clone https://github.com/Luomuyu/blivepost.git
 cd blivepost
 docker compose up -d --build   # 构建并启动（非root运行，宿主机端口127.0.0.1:18080）
 ```
 
-> **正式镜像构建**应从 git 拉取干净代码后构建（如上）；`.dockerignore`
-> 仅为本地开发便利（隔离 `WheelTest/` 等本地产物），**不入库**——干净
-> git 工作树本身即最小构建上下文。国内网络直连 pypi.org 不可达时：
+> 国内网络直连 pypi.org 不可达时：
 > `docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
 
 ## 🚀 快速开始
@@ -171,8 +169,6 @@ from blivepost import CookiePool, PushService, WbiSigner, BindingStore
 from blivepost.database import DatabaseService, DatabaseManager
 ```
 
-> **v1.2.0 破坏性变更**：`LiveMonitor` 早期库API已移除（监控由 `MonitorManager` 子进程承担）。库级扩展推荐 `PushService`（推送链）与 `DatabaseService`（读写门面）两条路径，见下方"扩展开发"。
-
 ## 📁 项目结构
 
 ```
@@ -206,7 +202,6 @@ blivepost/
 │   └── vendor/              # blivedm下载与补丁
 ├── tests/                   # 单元测试（370+个）
 ├── pyproject.toml
-└── PROJECT.md               # 详细项目信息与审查记录
 ```
 
 ## 🏗️ 架构设计
@@ -250,13 +245,6 @@ QQBot:
 需要先在 [QQ开放平台](https://q.qq.com/) 创建机器人并将机器人加入目标群。
 群消息通过官方接口主动推送，受官方主动消息频控限制。
 
-> **重要——主动消息权限**：开播/下播/结算推送属于**主动消息**（非回复消息），
-> 是平台单独授权的能力：未放量机器人约**每群每月4条**，无权限或额度用尽时
-> 接口返回 `40034105 主动消息失败, 无权限`。这与群里的"消息接收"开关无关
-> （开关只控制机器人能否收到@消息）。需要推送请到QQ开放平台为机器人申请
-> **主动消息能力放量**；@机器人触发的指令回复属被动消息，不受影响。
-> 出现该错误时面板/日志会给出低频提示。
-
 ### 推送文案模板（可选）
 
 在配置文件中自定义各类推送文案，留空使用内置模板。占位符使用 `str.format` 语法：
@@ -289,7 +277,7 @@ Template:
 
 开播/下播推送始终开启（含封面富媒体），不设开关。注意`daily_report`会消耗主动消息配额（未放量约4条/月/群），按需开启。
 
-开播提醒**自动艾特全体**：每个群每个自然日仅1次 @全体成员 配额（平台硬性限制），当天首次开播提醒（房间开播推送或UP主动态开播提醒）自动嵌入 `<qqbot-at-everyone />` 艾特全体。艾特模式按群三选一（`/艾特全体`指令配置）：`每日`（默认，当日首次开播艾特）/`仅 房间号...`（指定房间的首次开播才艾特）/`关闭`。仅群主/管理员身份的机器人实际发送；发送失败自动去标签降级重发且**不消耗**当日配额（失败即退还）。配置跨进程重启保留（主库 `group_at_all` 表）。
+开播提醒**自动艾特全体**：每个群每个自然日仅1次 @全体成员 配额，当天首次开播提醒（房间开播推送或UP主动态开播提醒）自动嵌入 `<qqbot-at-everyone />` 艾特全体。艾特模式按群三选一（`/艾特全体`指令配置）：`每日`（默认，当日首次开播艾特）/`仅 房间号...`（指定房间的首次开播才艾特）/`关闭`。仅群主/管理员身份的机器人实际发送；发送失败自动去标签降级重发且**不消耗**当日配额（失败即退还）。配置跨进程重启保留（主库 `group_at_all` 表）。
 
 消息形态说明：下播消息不含直播地址行；开播消息在Markdown形态下仅保留「进入直播间」按钮作为跳转入口（按钮跳转 `https://live.bilibili.com/<房间号>`），富媒体与纯文本形态保留直播地址行。
 

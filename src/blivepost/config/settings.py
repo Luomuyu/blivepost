@@ -68,7 +68,7 @@ class MessageSettings:
     # Web后台管理员（config设置；口令非空才启用后台登录，登录后可管用户/推送开关/导出）
     web_admin_user: str = "admin"
     web_admin_password: str = ""
-    # 数据保留策略：0=永久保留不删除（设计决策，见PROJECT.md）；>0为保留天数（预留）
+    # 数据保留策略：0=永久保留不删除（设计决策）；>0为保留天数（预留）
     data_retention_days: int = 0
     db_size_warn_mb: int = 500
     ignore_cmds: List[str] = field(default_factory=list)

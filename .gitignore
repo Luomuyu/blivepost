@@ -43,3 +43,8 @@ ms-playwright/
 # .dockerignore 仅本地开发用（隔离WheelTest等本地产物），不入库——
 # 正式镜像构建从git拉取干净代码后构建，无需该文件
 .dockerignore
+
+# markdown仅保留用户可见两份入库，开发文档（PROJECT/REVIEW/HANDOVER/ROADMAP）本地留存
+*.md
+!README.md
+!THIRD_PARTY_NOTICES.md
