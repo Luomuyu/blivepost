@@ -1,7 +1,7 @@
 # BLivePost
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.2.0-orange.svg)](https://github.com/luomuyu/blivepost)
 
 B站直播监控与推送系统 - 一个功能完整、架构清晰的现代化Python应用
@@ -408,7 +408,15 @@ class MyPushService(PushService):
 
 ## 📄 许可证
 
-[MIT License](LICENSE)
+本项目基于 [GPL-3.0](LICENSE) 发布。
+
+
+### 第三方声明
+
+本项目运行时依赖并包含改编自第三方项目的代码（如 blivedm 的兼容与
+Monkey Patching 部分），各上游项目的版权与许可见
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 `licenses/` 目录；
+原项目代码仍受其原始许可约束。
 
 ## 🙏 致谢
 

@@ -1,4 +1,13 @@
 # -*- coding: utf-8 -*-
+# Portions of this file are adapted from blivedm:
+# https://github.com/xfgryujk/blivedm
+# Copyright (c) 2018 xfgryujk
+# Original license: MIT
+# See licenses/blivedm-MIT.txt
+#
+# Additional modifications and original code:
+# Copyright (c) 2026 Luomuyu
+# Licensed under GPL-3.0 (see LICENSE)
 """
 blivedm补丁 - 添加自定义消息处理
 """
