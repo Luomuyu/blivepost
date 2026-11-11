@@ -237,13 +237,14 @@ async def test_daily_history(tmp_path):
 
 async def test_daily_history_range(tmp_path):
     """自然日区间查询：含首尾、区间内无数据日补零"""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     settings = Settings()
     settings.database.sqlite_path = str(tmp_path / "t.db")
     db = DatabaseManager(settings.database)
     await db.initialize()
     svc = DatabaseService(db)
-    now = datetime.now()
+    from blivepost.utils.timeutil import now_local
+    now = now_local()  # 分桶按Setting.timezone，机器本地日键会错位
     await svc.save_danmaku(room_id=1, uid=1, uname="u", msg="today")
     rows = await svc.get_daily_history_range(now.date() - timedelta(days=2), now.date())
     assert len(rows) == 3

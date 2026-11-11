@@ -1,9 +1,16 @@
 # BLivePost 容器编排
-# 数据/日志/配置默认挂载在本文件同级目录（./data ./logs ./config.yaml）
+# 数据/日志/配置默认挂载在本文件同级目录（./data ./logs ./config）
+#
+# 空文件夹即可启动：首次运行entrypoint自动从镜像内置的config.example.yaml
+# 生成 ./config/config.yaml（配置经目录挂载——Docker对缺失目录的创建是
+# 正确行为；缺失【文件】的bind挂载会被Docker创建成同名目录，这是
+# "config.yaml变成文件夹"事故的根源，故不直接挂载配置文件）。
+# 编辑 ./config/config.yaml 后 docker compose restart 生效。
 services:
   blivepost:
+    # 预构建镜像（CI随版本标签发布，amd64/arm64）；本地开发：--build
+    image: ghcr.io/luomuyu/blivepost:latest
     build: .
-    image: luomuyu/blivepost:latest
     container_name: blivepost
     restart: unless-stopped
     # 优雅停止宽限期：覆盖qqbot发送队列30s排水等最坏清理时长，
@@ -14,20 +21,17 @@ services:
       # 宿主机端口可按需调整（默认18080避开常见8080占用，如traefik）
       - "127.0.0.1:18080:8080"
     volumes:
-      # 配置文件（必需）：修改后重启容器生效
-      - ./config.yaml:/app/config.yaml:ro
+      # 配置目录：内含config.yaml（首次启动自动生成）
+      - ./config:/app/hostcfg
       # 数据库与房间子库（含全部永久保留数据）
       - ./data:/app/data
       # 运行日志（含logs/botpy.log）
       - ./logs:/app/logs
       # 备份与导出产物（定时备份zip/CSV/JSON——不挂载会随容器重建丢失）
       - ./exports:/app/exports
-      # 注：容器以非特权用户appuser(UID 1000)运行——entrypoint启动时自动
-      # 修正data/logs/exports属主后降权（见Dockerfile），宿主机无需手工chown；
-      # 时区默认TZ=Asia/Shanghai，可在environment中覆盖
-    # 密钥类配置建议经环境变量注入（也可写入config.yaml）
-    # 容器内必须监听0.0.0.0端口映射才能转发；安全性由宿主机侧绑定地址控制
-    # 开放面板到局域网：把上方端口映射改为 "8080:8080"，并配置 web_token
+    # 注：容器以非特权用户appuser(UID 1000)运行——entrypoint启动时自动
+    # 修正各挂载目录属主后降权（见Dockerfile），宿主机无需手工chown；
+    # 时区默认TZ=Asia/Shanghai，可在environment中覆盖
     environment:
       BLIVEPOST_WEB_HOST: 0.0.0.0
       # BLIVEPOST_WEB_TOKEN: "your-token"

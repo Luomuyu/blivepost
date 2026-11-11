@@ -81,8 +81,9 @@ async def test_summary_range_empty(tmp_path):
     db = DatabaseManager(settings.database)
     await db.initialize()
     svc = DatabaseService(db)
-    from datetime import datetime, timedelta
-    end = datetime.now()
+    from datetime import timedelta
+    from blivepost.utils.timeutil import now_local
+    end = now_local()  # 与range_bounds_ms的Setting.timezone口径一致
     r = await svc.get_summary_range(1, end - timedelta(days=7), end)
     assert r["gift_gold"] == 0.0 and "~" in r["day"]
     await db.close()
@@ -202,8 +203,8 @@ async def test_export_command(tmp_path, monkeypatch):
     assert any("正在导出" in r for r in msg.replies)
     result = [r for r in msg.replies if "导出完成" in r]
     assert len(result) == 1 and "1条记录" in result[0]
-    from datetime import datetime
-    date_text = datetime.now().strftime("%Y%m%d")
+    from blivepost.utils.timeutil import now_local
+    date_text = now_local().strftime("%Y%m%d")
     path = tmp_path / "exports" / f"room_23058_{date_text}.csv"
     assert path.exists()
     content = path.read_text(encoding="utf-8-sig")

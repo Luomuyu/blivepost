@@ -2,7 +2,9 @@
 """推送开关、群权限、日期查询、每日结算测试"""
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from blivepost.utils.timeutil import now_local
 
 import pytest
 
@@ -230,7 +232,7 @@ async def test_group_permission_empty_allows_all(perm_env):
 async def test_income_with_date_param(perm_env):
     db, store = perm_env
     svc = DatabaseService(db)
-    yesterday = datetime.now() - timedelta(days=1)
+    yesterday = now_local() - timedelta(days=1)
     await svc.save_gift(room_id=23058, uid=1, uname="u", gift_id=1, gift_name="g",
                         num=10, price=100, coin_type="gold")
     ch = CommandHandler(store, FakeManager2(), db_service=svc)
@@ -239,7 +241,7 @@ async def test_income_with_date_param(perm_env):
     r = await ch.handle(FakeMsg("/收入 23058", "G"))
     assert "礼物：1.00元" in r
     # 昨天日期（无数据）
-    ymd = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
+    ymd = yesterday.strftime("%Y%m%d")
     r = await ch.handle(FakeMsg(f"/收入 23058 {ymd}", "G"))
     assert "礼物：0.00元（0次）" in r and yesterday.strftime("%Y-%m-%d") in r
     # 非法日期：正则整体不匹配，命令被忽略
@@ -275,7 +277,7 @@ async def test_daily_report_pushes_to_monitored_rooms(tmp_path):
     ps.binding_store = store
     job = DailyReportJob(store, ps, svc)
 
-    n = await job.check_once(day=datetime.now())  # 数据写的是今天
+    n = await job.check_once(day=now_local())  # 数据写的是今天
     assert n == 1
     assert len(bot.text) == 1
     assert "每日结算" in bot.text[0][0] and "直播间100" in bot.text[0][0]
@@ -291,7 +293,7 @@ async def test_daily_report_pushes_to_monitored_rooms(tmp_path):
     await store2.bind("G1", 100, 1)
     await store2.set_monitored("G1", 100, True)
     job2 = DailyReportJob(store2, ps, DatabaseService(db2))
-    n = await job2.check_once(day=datetime.now())
+    n = await job2.check_once(day=now_local())
     assert n == 0
     await db2.close()
     await db.close()

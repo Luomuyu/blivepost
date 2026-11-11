@@ -9,7 +9,7 @@ from blivepost.config.settings import Settings
 from blivepost.database import DatabaseManager, DatabaseService
 from blivepost.services.wordcloud import build_wordcloud
 from blivepost.services.webpanel import WebPanel, _parse_day
-from blivepost.utils.timeutil import dt_to_ms
+from blivepost.utils.timeutil import dt_to_ms, now_local
 
 
 # ==================== 分词统计 ====================
@@ -70,7 +70,7 @@ async def _seed(svc, room_id, msg, day: datetime):
 async def test_wordcloud_ranges(env):
     """按天/区间/月/年范围解析与统计口径"""
     svc, panel, _db = env
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = now_local().replace(hour=0, minute=0, second=0, microsecond=0)
     await _seed(svc, 100, "主播威武主播霸气", today)
     await _seed(svc, 100, "主播牛", today - timedelta(days=1))
     await _seed(svc, 100, "昨天内容", today - timedelta(days=1))
@@ -107,7 +107,7 @@ async def test_wordcloud_ranges(env):
 async def test_wordcloud_room_scope(env):
     """全部直播间 vs 单独直播间切换"""
     svc, panel, _db = env
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = now_local().replace(hour=0, minute=0, second=0, microsecond=0)
     await _seed(svc, 100, "甲房间专属词汇", today)
     await _seed(svc, 200, "乙房间独家暗号", today)
 

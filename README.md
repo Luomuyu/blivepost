@@ -50,15 +50,25 @@ pip install -e .
 **方式一：预构建镜像**（版本标签推送后由CI自动发布到GHCR，支持amd64/arm64）
 
 ```bash
-docker run -d --name blivepost   -p 127.0.0.1:18080:8080   -v ./config.yaml:/app/config.yaml:ro -v ./data:/app/data -v ./logs:/app/logs   ghcr.io/luomuyu/blivepost:latest
+mkdir blivepost && cd blivepost
+cat > docker-compose.yml <<'URL'   # 或从仓库复制
+# 仅需services段：见仓库docker-compose.yml
+URL
+# 更简单：docker run（config目录首次启动自动生成config.yaml）
+docker run -d --name blivepost   -p 127.0.0.1:18080:8080   -v ./config:/app/hostcfg -v ./data:/app/data -v ./logs:/app/logs -v ./exports:/app/exports   ghcr.io/luomuyu/blivepost:latest
 ```
+
+> 配置经**目录**挂载（`./config` → `/app/hostcfg`，entrypoint 复制进容器）：
+> Docker 对缺失文件的 bind 挂载会创建同名**目录**，直接挂载 config.yaml
+> 文件在空目录会得到一个文件夹而非文件。首次启动自动生成
+> `./config/config.yaml`，编辑后 `docker restart blivepost` 生效。
 
 **方式二：本地构建**
 
 ```bash
 git clone https://github.com/Luomuyu/blivepost.git
 cd blivepost
-docker compose up -d --build   # 构建并启动（非root运行，宿主机端口127.0.0.1:18080）
+docker compose up -d --build   # 构建并启动（宿主机端口127.0.0.1:18080）
 ```
 
 > 国内网络直连 pypi.org 不可达时：

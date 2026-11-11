@@ -50,11 +50,31 @@ RUN useradd --system --uid 1000 --create-home appuser \
 COPY <<'EOF' /app/docker-entrypoint.sh
 #!/bin/sh
 set -e
+# 配置装载：./config目录挂到/app/hostcfg（目录bind缺失时Docker正确创建
+# 目录；文件bind缺失时会错误创建同名目录——绝不直接bind挂载config.yaml
+# 文件）。首次启动自动从镜像内置example生成；宿主编辑config/config.yaml
+# 后docker compose restart生效
+CFG=/app/hostcfg/config.yaml
+if [ -d /app/hostcfg ] && [ ! -f "$CFG" ]; then
+    if [ -e "$CFG" ]; then
+        echo "ERROR: $CFG存在但不是文件，请检查挂载" >&2; exit 1
+    fi
+    cp /app/config.example.yaml "$CFG"
+    echo "已从config.example.yaml生成 $CFG，请编辑后重启容器"
+fi
+if [ -f "$CFG" ]; then
+    cp "$CFG" /app/config.yaml
+    chmod 644 /app/config.yaml
+fi
+if [ ! -f /app/config.yaml ]; then
+    echo "ERROR: 未找到配置文件。挂载./config目录到/app/hostcfg并放入config.yaml" >&2
+    exit 1
+fi
 if [ "$(id -u)" = "0" ]; then
     # 挂载目录属主修正（幂等；数据目录很大时可按需注释掉chown -R）。
     # 挂载后端不支持chown（CIFS/只读bind等）时仅告警——降权后若无法
     # 写入会与旧root容器遗留文件同样表现为启动PermissionError
-    chown -R appuser:appuser /app/data /app/logs /app/exports \
+    chown -R appuser:appuser /app/data /app/logs /app/exports /app/hostcfg \
         || echo "WARN: chown挂载目录失败，appuser可能无法写入data/logs"
     # 降权到appuser后执行（--init-groups重置补充组；--no-new-privs
     # 纵深防御禁止子进程经setuid等提权；HOME供chromium用）
