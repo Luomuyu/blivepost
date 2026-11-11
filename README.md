@@ -45,6 +45,19 @@ pip install -e .
 - PyYAML
 - redis (可选)
 
+### Docker 部署
+
+```bash
+git clone https://github.com/luomuyu/blivepost.git
+cd blivepost
+docker compose up -d --build   # 构建并启动（非root运行，宿主机端口127.0.0.1:18080）
+```
+
+> **正式镜像构建**应从 git 拉取干净代码后构建（如上）；`.dockerignore`
+> 仅为本地开发便利（隔离 `WheelTest/` 等本地产物），**不入库**——干净
+> git 工作树本身即最小构建上下文。国内网络直连 pypi.org 不可达时：
+> `docker compose build --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`
+
 ## 🚀 快速开始
 
 ### 1. 创建配置文件

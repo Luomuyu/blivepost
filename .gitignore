@@ -12,6 +12,7 @@ dist/
 .idea
 .vscode
 .DS_Store
+.dockerignore
 
 # 敏感与本地配置（含app_secret，严禁提交）
 .env
@@ -38,3 +39,7 @@ scripts/panel_ids*.json
 *.whl
 # playwright chromium内核（运行目录本地安装）
 ms-playwright/
+
+# .dockerignore 仅本地开发用（隔离WheelTest等本地产物），不入库——
+# 正式镜像构建从git拉取干净代码后构建，无需该文件
+.dockerignore

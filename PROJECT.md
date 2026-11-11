@@ -38,7 +38,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 
 - **CI**（.github/workflows/ci.yml）：lint（flake8）/ type-check（mypy非阻塞）/ test（pytest）
 - **Docker**（Dockerfile）：python:3.14-slim + chromium系统依赖；依赖层缓存优化；chromium烘焙至 `/app/ms-playwright`（容器内运行目录）；`/app/data`与`/app/logs`挂载点；`EXPOSE 8080`；配置经挂载`/app/config.yaml`提供
-- **chromium安装位置**：本地运行装到运行目录 `ms-playwright/`（`PLAYWRIGHT_BROWSERS_PATH`由bili_login模块设默认值，显式环境变量优先）；`.dockerignore`/`.gitignore`已排除该目录
+- **chromium安装位置**：本地运行装到运行目录 `ms-playwright/`（`PLAYWRIGHT_BROWSERS_PATH`由bili_login模块设默认值，显式环境变量优先）；`.gitignore`已排除该目录（`.dockerignore`仅本地开发用不入库，正式镜像构建从git拉取干净代码）
 - **.env与环境变量**（config/env.py）：`.env`文件 + `BLIVEPOST_`前缀环境变量覆盖（`_QQBOT_APP_ID/_APP_SECRET`、`_ADMIN_OPENIDS/_MAIN_OPENIDS`、`_SESSDATA`、`_WEB_TOKEN/_WEB_PORT`、`_DB_*`、`_REDIS_*`）
 - **wheel**：`blivepost-1.2.0-py3-none-any.whl`（含py.typed）
 - **官方API对齐**（QQ开放平台v2文档核对）：群/单聊消息（`msg_type` 0文本/2markdown/7富媒体，`msg_id`被动5分钟有效，`msg_seq`同ID下须递增）；富媒体分片上传（upload_prepare→PUT→part_finish）；指令面板`/v2/panels`系
