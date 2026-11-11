@@ -44,7 +44,7 @@ def live_enter_keyboard(room_id) -> dict:
     字段依据官方文档（v2_groups_group_openid_messages.post）：
       - render_data.style: 0=灰色线框 1=蓝色线框 3=白底红字 4=蓝底白字
       - 不设render_data.visited_label：平台无点击后自动恢复能力，设了会
-        停留在跳转文案不回弹（真机2026-11-10反馈移除）
+        停留在跳转文案不回弹
       - action.permission.type: 2=所有人
       - action.type: 0=跳转按钮（http或协议链接）
 
@@ -62,7 +62,7 @@ def live_enter_keyboard(room_id) -> dict:
                     "render_data": {
                         "label": "进入直播间",
                         # 不设visited_label：平台无"点击后自动恢复"能力，
-                        # 设了会停留在跳转文案不回弹（真机2026-11-10反馈）
+                        # 设了会停留在跳转文案不回弹
                         "style": 1,  # 1=蓝色线框
                     },
                     "action": {
@@ -378,7 +378,7 @@ class PushService:
 
         # 3) 官方bot主路径（QQBotClient无push_message/push_markdown）：push_media/push
         #    → bot层Markdown嵌图+按钮优先降级链——keyboard必须透传，否则
-        #    消息以Markdown发出但按钮不渲染（真机2026-11-10反馈实证）
+        #    消息以Markdown发出但按钮不渲染（实测）
         def _bot_kwargs(func) -> dict:
             kwargs: dict = {}
             if keyboard is not None and _supports_kwarg(func, "keyboard"):

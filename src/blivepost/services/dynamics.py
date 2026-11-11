@@ -196,7 +196,7 @@ def _extract_content(modules: dict) -> Tuple[str, str]:
 class _RemoteFetchProxy:
     """主进程全局单浏览器取数服务的子进程侧代理。
 
-    背景（2026-11-10真机实证）：feed接口对python requests（含curl-cffi模拟
+    背景：feed接口对python requests（含curl-cffi模拟
     TLS指纹）一律请求级风控412，仅真实浏览器导航正常——动态取数依赖无头
     浏览器。为控制内存（每实例~300MB），**全局仅主进程持有一个浏览器**
     （DynFetchService），不论订阅多少UP；本代理经本机HTTP调用该服务。
@@ -262,7 +262,7 @@ def _requests_fetch(up_uid: int, cookie_string: str = "", wbi=None) -> Optional[
 
     feed API在本链路只用于取"置顶+最新非置顶"的dynamic_id（内容经
     opus页渲染获取，见_DynamicPollSession与DynFetchService）。
-    风控自愈（2026-11-10真机实证）：带WBI签名的请求412（平台轮换mixin
+    风控自愈：带WBI签名的请求412（平台轮换mixin
     表致旧签名反被判风控）而无签名+完整cookie正常——签名失败回退无签名。
     """
     headers = dict(HEADERS)
@@ -305,8 +305,7 @@ def _to_int(value, default: int = 0) -> int:
 def _extract_candidate_id(data: dict) -> Optional[str]:
     """从feed响应提取候选动态ID（置顶与最新非置顶中更新者）。
 
-    feed API在本链路仅用于取ID（内容经opus页渲染获取，用户决策
-    2026-11-10）：
+    feed API在本链路仅用于取ID（内容经opus页渲染获取）。
     - items[0]带module_tag{text:"置顶"} → 存在置顶动态，其后第一个
       非置顶项即最新非置顶；
     - items[0]无module_tag → 无置顶，items[0]即最新非置顶；
@@ -348,7 +347,7 @@ def _parse_feed_data(data: dict, up_uid: int) -> Optional[List[dict]]:
             infos.append({
                 "dynamic_id": dynamic_id,
                 "author": (author.get("name") or ""),
-                # pub_ts接口侧可能为字符串（2026-11-10真机：fromtimestamp(str)
+                # pub_ts接口侧可能为字符串（fromtimestamp(str)
                 # 抛TypeError致推送全链失败），统一转int
                 "pub_ts": _to_int(author.get("pub_ts")),
                 "summary": summary,
@@ -512,7 +511,7 @@ class _DynamicPollSession:
     """
     单UP主轮询会话状态（动态子进程内使用）
 
-    - 候选检测（2026-11-10用户决策）：feed API只取"置顶+最新非置顶"中
+    - 候选检测：feed API只取"置顶+最新非置顶"中
       dynamic_id更大者为候选（不跳过置顶）；候选未见过即为新动态，
       内容经opus页渲染获取（prepare回调→DynFetchService），无回调时
       回退feed内该条目的摘要；
@@ -655,7 +654,7 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
     # WBI签名器在轮询循环内复用（小时级TTL惰性重建+失败重建），避免每轮nav取钥
     signer = _WbiSignerCache()
     # 全局单浏览器取数代理（主进程DynFetchService）：真实浏览器环境过
-    # 请求级风控——requests/curl-cffi一律412而浏览器导航正常（真机实证）
+    # 请求级风控——requests/curl-cffi一律412而浏览器导航正常（实测）
     fetch_proxy = _RemoteFetchProxy(fetch_port, fetch_token) if fetch_port else None
     up_live = False
     served_logged = False
@@ -663,7 +662,7 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
 
     logger.info(f"UP主 {up_uid} 动态轮询进程已启动 (pid={os.getpid()})")
     # 父进程存活自检：主进程被强杀（kill -9/taskkill）时stop_event不会置位，
-    # 子进程会泄漏续跑（2026-11-10真机累积11个泄漏进程）——每轮检查父进程
+    # 子进程会泄漏续跑——每轮检查父进程
     parent_proc = multiprocessing.parent_process()
     while not stop_event.is_set():
         if parent_proc is not None and not parent_proc.is_alive():
@@ -699,7 +698,7 @@ def _dynamic_process_main(up_uid: int, push_queue, stop_event,
             prepare=fetch_proxy.prepare if fetch_proxy is not None else None,
         )
         # 轮询间隔：正常60-90秒；连续失败≥3轮进入退避（5-10分钟）——
-        # 风控期高频重试只会延长封锁（2026-11-10真机教训），成功后恢复
+        # 风控期高频重试只会延长封锁（实测），成功后恢复
         if session.fail_streak >= 3:
             stop_event.wait(random.randint(BACKOFF_MIN, BACKOFF_MAX))
         else:

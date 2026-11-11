@@ -16,7 +16,7 @@ i:随机nonce})，signature=HMAC-SHA256(payload, 密钥)。会话不存内存/�
 如需重启保留登录态请配置web_token）。
 
 代价与限制（无状态会话固有）：
-- 单会话吊销为进程内存级（jti黑名单，v1.2.0起）：登出即吊销、防cookie
+- 单会话吊销为进程内存级（jti黑名单）：登出即吊销、防cookie
   残留重放；但进程重启后黑名单清空（被窃取的sid重启后恢复可用）；
 - 全量登出手段：修改web_token（或未配置token时重启进程）会使全部旧会话
   验签失败→全员回到游客——顺带成为"紧急全量登出"的后门开关。
@@ -186,7 +186,7 @@ class AuthMixin:
     def _web_token_ok(self, request) -> bool:
         """管理员快捷令牌校验（未配置token时不可用；常量时间比较防时序侧信道）
 
-        取值来源（v1.2.0审查收窄）：X-Web-Token头任意路径可用；URL查询串
+        取值来源：X-Web-Token头任意路径可用；URL查询串
         仅/login页接受——?token=会落入浏览器历史/代理日志/Referer，开放在
         全站等于把管理员凭证经URL传播。
         """
@@ -216,7 +216,7 @@ class AuthMixin:
     async def _auth_token_to_admin(self, request):
         """/login?token=管理员快捷令牌→创建管理员会话并重定向首页
 
-        仅/login路径生效（v1.2.0审查收窄：?token=经URL传播会落入浏览器
+        仅/login路径生效（?token=经URL传播会落入浏览器
         历史/代理日志/Referer；其余路径用X-Web-Token头）。无令牌返回None。
 
         防爆破：web_token兼作会话签名密钥派生源，猜中即管理员——令牌
@@ -360,7 +360,7 @@ class AuthMixin:
     async def _action_web_logout(self, request):
         """登出：吊销当前会话jti + 清除cookie回到游客
 
-        v1.2.0起支持单会话吊销（jti黑名单，进程生命周期内有效）；
+        支持单会话吊销（jti黑名单，进程生命周期内有效）；
         全量登出仍可通过改web_token实现。注：吊销列表在内存，
         进程重启后清空（被窃取的sid重启后恢复可用——需改token根治）。
         """

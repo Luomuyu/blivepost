@@ -1103,12 +1103,12 @@ class QQBotClient:
                         file_name: str = "dynamic.png") -> bool:
         """多群推送本地图片：Markdown(素材qqbot-media嵌图) > 富媒体(二进制直传) > 文本。
 
-        Markdown优先（用户决策2026-11-10）：本地图经素材管理三步上传获得
+        Markdown优先：本地图经素材管理三步上传获得
         qqbot-media://引用，以![动态](url)嵌入Markdown消息——图文一体、
         渲染最佳；Markdown失败降级群files二进制富媒体；再降纯文本。
         素材用后即删（上限100张，90天滑动过期不必留存）。
 
-        队列水位防护（v1.2.0审查修复）：_run闭包捕获最大~4MB截图bytes，
+        队列水位防护：_run闭包捕获最大~4MB截图bytes，
         队列满载200条最坏~800MB内存尖峰——水位超半数时新任务直接降级
         纯文本推送（丢图不丢消息），不再携带大图入队。
         """

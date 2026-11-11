@@ -263,7 +263,7 @@ async def _room_process_async(
         _wait_stop_event(stop_event), name=f"stop-{room_id}"
     )
     # 父进程存活自检：主进程被强杀时stop_event不会置位、子进程泄漏续跑
-    # （2026-11-10真机累积多个泄漏进程）——父进程消失则自行退出
+    # ——父进程消失则自行退出
     parent_task = asyncio.create_task(
         _parent_watch(), name=f"parent-watch-{room_id}"
     )

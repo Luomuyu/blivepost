@@ -2,7 +2,7 @@
 """
 数据库存储服务 - 统计汇总查询（StatsMixin）
 
-第十六批起时间列统一存储13位毫秒Unix时间戳：日期范围查询一律使用
+时间列统一存储13位毫秒Unix时间戳：日期范围查询一律使用
 day_bounds_ms/range_bounds_ms生成的 [start_ms, end_ms) 半开区间（消除
 23:59:59漏秒），按日/按小时分组在Python侧用day_key_ms/hour_key_ms完成
 （SQL侧strftime仅对SQLite的text时间有效且无时区概念，已全部移除）。

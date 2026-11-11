@@ -526,7 +526,7 @@ class CommandHandler:
             return "动态监控未启用，请联系机器人所有者在配置中开启（Setting.dynamic_monitor）"
 
         note = ""
-        # 房间号归一化：填了房间号时换算成主播UID（2026-11-10真机实测
+        # 房间号归一化：填了房间号时换算成主播UID（实测
         # 用户以房间号订阅，轮询的却是错误UID——feed查询空/风控）。
         # 碰撞守卫：输入恰好等于已有订阅UP的UID时不归一化（UID与房间号
         # 同数值时优先按UID意图处理，回显解析后UID可见可纠错）
@@ -545,7 +545,7 @@ class CommandHandler:
         is_new = await self.binding_store.bind_dynamic(group_openid, up_uid)
         name = self.binding_store.get_dynamic_up_name(up_uid)
         name_text = f"（{name}）" if name else ""
-        # 运行时开关门控（2026-11-10真机反馈）：config开关只决定指令可用性，
+        # 运行时开关门控：config开关只决定指令可用性，
         # 后台"推送设置-动态监控"关时不得启动轮询——否则面板显示"轮询中"
         # 与开关状态矛盾，且推送被静默丢弃
         if not await self._dyn_switch_on():

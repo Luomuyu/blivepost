@@ -2,7 +2,7 @@
 """
 动态取数服务（主进程全局单浏览器）
 
-背景（2026-11-10真机实证）：B站动态feed接口对python requests/curl-cffi一律
+背景：B站动态feed接口对python requests/curl-cffi一律
 请求级风控（412），仅真实浏览器环境正常——动态监控依赖无头Chromium取数。
 本服务在主进程内持有**全局唯一**浏览器实例（不论订阅多少UP），经本机
 HTTP端点向各UP轮询子进程提供取数能力：
@@ -37,7 +37,7 @@ _ALLOWED_PREFIX = "https://api.bilibili.com/x/polymer/web-dynamic/"
 class _BrowserHolder:
     """主进程内全局唯一无头浏览器（异步API；惰性启动，损坏自动重建）
 
-    双页分离（v1.2.0审查修复）：单页时代prepare（opus渲染+截图最长~75s）
+    双页分离：单页时代prepare（opus渲染+截图最长~75s）
     会把并发的/dyn-fetch（60-90s轮询取数）阻塞在同一把页面锁上，子进程
     40s超时后回退requests链→412→误退避误告警。现取数与渲染各用独立
     页面+独立锁（同一浏览器上下文，共享cookie），互不阻塞。
@@ -177,7 +177,7 @@ _MAX_DIRECT_BYTES = 4 * 1024 * 1024
 class DynFetchService:
     """动态取数HTTP服务（127.0.0.1随机端口+进程级token）
 
-    /dyn-prepare配图决策（2026-11-10用户决策）：PIL本地渲染卡片 →
+    /dyn-prepare配图决策）：PIL本地渲染卡片 →
     opus页.bili-opus-view截图 → 动态原图URL → 无图。本地图片以
     image_b64返回，经群files接口二进制直传投递（无需公网URL）。
     """
@@ -260,7 +260,7 @@ class DynFetchService:
         """PIL本地渲染自定义动态卡片（头像/作者/标题/正文）；无字体/PIL时None。
 
         布局严格按存在的分块排（标题为空不产生空行/空白间距——修复
-        2026-11-10反馈"标题为空时两行正文"）；头像圆形裁剪嵌入，拉取
+        标题为空时不产生空行/空白间距）；头像圆形裁剪嵌入，拉取
         失败静默跳过。
         """
         try:
@@ -369,7 +369,7 @@ class DynFetchService:
         """候选动态内容准备：opus渲染+配图决策（截图→卡片→原图→无图）。
 
         本地图片以image_b64返回——群files接口支持二进制直传（file_data），
-        无需公网URL托管。截图优先（保真美观，2026-11-10用户决策）；截图
+        无需公网URL托管。截图优先（保真美观）；截图
         失败/超_MAX_DIRECT_BYTES降级PIL卡片（含作者头像），再降原图URL。
         """
         if request.headers.get("X-Fetch-Token") != self._token:
@@ -388,7 +388,7 @@ class DynFetchService:
             # 防止渲染与截图之间页面被并发prepare导航走
             async with self._holder._plock:
                 content = await self._render_opus(dynamic_id) or {}
-                # ① opus页.bili-opus-view截图（保真美观，用户决策优先）
+                # ① opus页.bili-opus-view截图（保真美观）
                 shot = await self._screenshot_view()
             image_url = None
             image_b64 = None

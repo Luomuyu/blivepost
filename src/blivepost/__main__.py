@@ -282,7 +282,7 @@ async def main_async(
         await ensure_playwright_chromium()
 
         # 动态取数服务（全局单浏览器，主进程内127.0.0.1端点）：动态监控
-        # 启用时提供浏览器环境取数（B站feed对python请求一律风控412，真机实证）
+        # 启用时提供浏览器环境取数（B站feed对python请求一律风控412，实测）
         dyn_fetch_service = None
         if settings.message.dynamic_monitor:
             from .services.dyn_fetch import DynFetchService

@@ -425,7 +425,7 @@ class PushSwitchRecord(Base):
 class GroupAtAllRecord(Base):
     """群艾特全体配置与使用记录。
 
-    mode: at_all模式（第十三批用户决策）——
+    mode: at_all模式——
       daily=每日首次开播提醒艾特（默认）
       rooms=仅指定房间开播时艾特（room_ids列）
       off=本群关闭艾特全体

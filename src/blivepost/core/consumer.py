@@ -169,7 +169,7 @@ class PushQueueConsumer:
                 missing = [g for g in at_all_groups if g not in set(effective)]
                 if missing:
                     await self._refund_at_all(missing)
-            # 调度可观测：真机排障依赖（发送结果在bot层降级链日志）
+            # 调度可观测（发送结果在bot层降级链日志）
             n_groups = len(self.push_service.resolve_push_groups(item.get("room_id")))
             logger.info(f"开播推送已调度：房间{item.get('room_id')} → {n_groups}群"
                         f"（艾特全体{len(at_all_groups or [])}群）")
@@ -202,7 +202,7 @@ class PushQueueConsumer:
 
         elif kind == "dynamic":
             if not await self._switch_on("dynamic_monitor"):
-                # INFO级可见性：开关关闭期间新动态被丢弃应可追溯（真机反馈
+                # INFO级可见性：开关关闭期间新动态被丢弃应可追溯
                 # "未推送"曾因debug级日志无迹可寻）
                 logger.info("全局推送开关 dynamic_monitor 已关闭，丢弃动态推送"
                             f"（dynamic_id={item.get('dynamic_id')}）")
@@ -289,7 +289,7 @@ class PushQueueConsumer:
         author = item.get("author") or (
             self.binding_store.get_dynamic_up_name(up_uid)
             if self.binding_store else "") or f"UP主{up_uid}"
-        # pub_ts防御性float：接口/历史队列项可能为字符串（真机2026-11-10
+        # pub_ts防御性float：接口/历史队列项可能为字符串（
         # fromtimestamp(str)抛TypeError致动态推送失败）
         try:
             pub_ts = float(item.get("pub_ts") or 0)
@@ -320,7 +320,7 @@ class PushQueueConsumer:
         if bot is None:
             logger.warning("机器人未启动，动态推送失败")
             return
-        # 配图优先级（2026-11-10用户决策）：本地渲染图（b64，经群files
+        # 配图优先级）：本地渲染图（b64，经群files
         # 二进制直传投递）> 动态原图URL（平台转存）> 纯文本广播。
         # 注意：push_media_data/push_media/broadcast均为同步入口（内部
         # create_task），不可await
