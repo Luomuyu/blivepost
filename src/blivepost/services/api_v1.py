@@ -82,7 +82,11 @@ class ApiV1Mixin:
 
     def _api_rate_ok(self, request) -> bool:
         """简单IP限速：每_RATE_WINDOW秒_RATE_LIMIT次（含过期清扫）"""
-        ip = request.remote or "unknown"
+        ip = request.remote
+        if ip is None:
+            # remote为None仅见于非TCP来源（测试transport/管道）：无法归因，
+            # 不与"unknown"共享单桶（会把所有此类请求误并入一个60/min桶）
+            return True
         now = time.monotonic()
         rec = self._api_rate.get(ip)
         if rec is None or now - rec[0] > _RATE_WINDOW:

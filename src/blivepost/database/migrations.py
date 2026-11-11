@@ -107,12 +107,14 @@ async def run_migrations(engine: AsyncEngine) -> int:
         if (res.scalar() or 0):
             await conn.execute(text(
                 f"DELETE FROM {SCHEMA_VERSION_TABLE} WHERE version <> 1"))
-            logger.info("迁移: 已清退历史遗留版本号，版本表归一为v1")
+            # 正式发布前不向运维日志暴露"数据库被迁移/修改"——归一属内部
+            # 例行动作，降为debug（debug=Y时仍可查）
+            logger.debug("版本表归一为v1（清退历史遗留版本号）")
         res = await conn.execute(text(f"SELECT MAX(version) FROM {SCHEMA_VERSION_TABLE}"))
         if (res.scalar() or 0) < 1:
             await conn.execute(
                 text(f"INSERT INTO {SCHEMA_VERSION_TABLE} (version) VALUES (1)"))
-            logger.info("迁移: 版本表初始化v1")
+            logger.debug("版本表初始化v1")
 
         # 增量迁移：按版本号升序应用未记录的版本（当前注册表为空）
         res = await conn.execute(

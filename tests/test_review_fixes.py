@@ -327,3 +327,83 @@ def test_speakers_api_requires_login():
     panel._sess = {"user": "u"}
     resp = asyncio.run(panel._handle_api_v1_analytics(Req()))
     assert resp.status == 200  # 登录后放行
+
+
+# ---------- 第四轮：发布前清理（静默迁移/限速键/配额窗口） ----------
+
+async def test_migrations_silent_at_info(tmp_path, caplog):
+    """正式发布前：版本表归一/初始化不得出现在INFO日志（debug=Y可查）"""
+    import logging as _logging
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import text
+    from blivepost.database.migrations import run_migrations
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
+    try:
+        with caplog.at_level(_logging.INFO, logger="blivepost.migrations"):
+            await run_migrations(engine)
+            # 预置遗留行再跑一次触发归一路径
+            async with engine.begin() as conn:
+                await conn.execute(text(
+                    "INSERT INTO schema_version(version) VALUES (7)"))
+            await run_migrations(engine)
+    finally:
+        await engine.dispose()
+    assert not [r for r in caplog.records
+                if r.levelno >= _logging.INFO], \
+        [r.getMessage() for r in caplog.records if r.levelno >= _logging.INFO]
+
+
+def test_api_rate_none_remote_bypasses():
+    """remote为None（非TCP来源）不与"unknown"共享限速桶"""
+    from blivepost.services.api_v1 import ApiV1Mixin
+
+    class Panel(ApiV1Mixin):
+        def __init__(self):
+            self.message_settings = None
+            self._api_rate = {}
+
+    class Req:
+        remote = None
+
+    p = Panel()
+    assert p._api_rate_ok(Req()) is True
+    assert p._api_rate == {}  # 未计入任何共享桶
+
+
+async def test_at_all_acquisition_filters_receivable():
+    """配额判定与推送链同口径：未开启消息接收的群不占用艾特配额"""
+    from blivepost.core.consumer import PushQueueConsumer
+
+    class PS:
+        contact_store = None
+
+        def resolve_push_groups(self, room_id):
+            return ["G1", "G2"]
+
+        def push_live_start_from_parts(self, **kw):
+            return True
+
+    class CS:
+        @staticmethod
+        def filter_receivable_groups(groups):
+            return [g for g in groups if g != "G2"]  # G2未开接收
+
+    class DB:
+        def __init__(self):
+            self.acquired = None
+            self.refunded = []
+
+        async def acquire_at_all_groups(self, groups, room_id=0, mark=True):
+            self.acquired = list(groups)
+            return list(groups)
+
+        async def refund_group_at_all(self, g):
+            self.refunded.append(g)
+
+    ps = PS()
+    ps.contact_store = CS()
+    db = DB()
+    consumer = PushQueueConsumer(None, ps, db)
+    got = await consumer._acquire_at_all_groups(100)
+    assert got == ["G1"] and db.acquired == ["G1"]  # G2未进判定不占配额

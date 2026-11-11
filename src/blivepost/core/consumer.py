@@ -161,6 +161,14 @@ class PushQueueConsumer:
                 # 调度层失败（队列满/无绑定群等）：配额白扣，退还当日额度
                 # （发送层失败由bot层at_all_refund钩子退还）
                 await self._refund_at_all(at_all_groups)
+            elif ok and at_all_groups:
+                # 过滤窗口兜底：判定配额后推送链内还会按收群再过滤一次，
+                # 被滤掉的群没艾特到却已扣配额——重解析有效收群并对差集退款
+                effective = self._receivable(
+                    self.push_service.resolve_push_groups(item.get("room_id")) or [])
+                missing = [g for g in at_all_groups if g not in set(effective)]
+                if missing:
+                    await self._refund_at_all(missing)
             # 调度可观测：真机排障依赖（发送结果在bot层降级链日志）
             n_groups = len(self.push_service.resolve_push_groups(item.get("room_id")))
             logger.info(f"开播推送已调度：房间{item.get('room_id')} → {n_groups}群"
@@ -365,10 +373,15 @@ class PushQueueConsumer:
         logger.info(f"UP主 {up_uid} 开播提醒已调度推送到 {len(groups)} 个群")
 
     async def _acquire_at_all_groups(self, room_id) -> Optional[list]:
-        """房间开播提醒的艾特全体配额（解析推送目标群后判定；无DB/无群返回None）"""
+        """房间开播提醒的艾特全体配额（解析推送目标群后判定；无DB/无群返回None）
+
+        与推送链同口径：先过滤未开启消息接收的群——该类群不会被推送，
+        也不得占用艾特配额（否则推送链内再过滤时配额白扣）。
+        """
         if self.db_service is None or room_id is None:
             return None
-        groups = self.push_service.resolve_push_groups(room_id)
+        groups = self._receivable(
+            self.push_service.resolve_push_groups(room_id) or [])
         return await self._acquire_at_all_for_groups(groups, room_id=room_id)
 
     async def _refund_at_all(self, groups) -> None:
