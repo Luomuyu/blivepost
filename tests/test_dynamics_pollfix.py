@@ -764,7 +764,8 @@ async def test_dyn_fetch_service_auth_and_url_guard(monkeypatch):
     await client.start_server()
     try:
         # 无token → 401
-        r = await client.post("/dyn-fetch", json={"url": "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"})
+        r = await client.post("/dyn-fetch", json={
+            "url": "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"})
         assert r.status == 401
         # 非白名单URL → 403
         r = await client.post("/dyn-fetch", json={"url": "http://evil.com/x"},

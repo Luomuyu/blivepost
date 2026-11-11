@@ -186,8 +186,8 @@ class ApiV1Mixin:
             # 观众身份明细（uid/uname）超出聚合口径：需面板登录会话
             # （或X-Web-Token头），API token鉴权不覆盖私网模式的匿名LAN访问
             if self._session(request) is None and not self._web_token_ok(request):
-                return web.json_response({"error": "login required"},
-                                          status=401)
+                return web.json_response(
+                    {"error": "login required"}, status=401)
             data = await self.db_service.get_top_speakers(
                 room_id=room_id, days=7, limit=20)
         elif atype == "distribution":

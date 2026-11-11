@@ -666,8 +666,10 @@ async def test_screen_requires_login_and_renders(tmp_path):
                 "token_expires_in": 3600},
                 "me": {"id": "9", "username": "bot", "avatar": "", "share_url": ""},
                 "app_id": "100", "db_size_mb": 1.2,
-                "accounts": [], "rooms": [{"room_id": 100, "alive": True, "uid": 1,
-                "streamer": "s", "danmaku": 1, "gold": 0, "ship": 0, "sc": 0}],
+                "accounts": [],
+                "rooms": [{"room_id": 100, "alive": True, "uid": 1,
+                           "streamer": "s", "danmaku": 1, "gold": 0,
+                           "ship": 0, "sc": 0}],
                 "dynamics": [{"up_uid": 1, "name": "u", "alive": True, "groups": 1}],
                 "recent": []}
     panel = WebPanel(None, None, None, None, None, bot_client=None)

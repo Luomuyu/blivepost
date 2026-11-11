@@ -293,7 +293,9 @@ Setting: # 消息推送设置
   web_panel: "N" # Web状态面板 (游客只读/登录可操作, 默认仅本机访问)
   web_host: "127.0.0.1" # Web面板监听地址
   web_port: 8080 # Web面板端口
-  web_token: "" # Web面板管理员快捷令牌 (设置后 /login?token= 即管理员登录, 免输账号密码; API/动作可用X-Web-Token头; 亦作Web会话签名密钥来源, 配置后登录态跨进程重启保留, 修改即全量登出)
+  web_token: "" # Web面板管理员快捷令牌 (设置后 /login?token= 即管理员登录, 免输账号密码;
+                  # API/动作可用X-Web-Token头; 亦作Web会话签名密钥来源, 配置后登录态跨进程
+                  # 重启保留, 修改即全量登出)
   web_admin_user: "admin" # Web后台管理员账号 (管理员来自config不入库)
   web_admin_password: "" # Web后台管理员口令 (非空才启用登录与后台; 前台用户由后台添加)
   data_retention_days: 0 # 数据保留天数 (0=永久保留所有数据, 永不自动删除)

@@ -102,7 +102,9 @@ async def test_backup_job_creates_and_prunes(tmp_path, monkeypatch):
         # zip内容脱敏：cookie_account空
         with zipfile.ZipFile(backups[0]) as zf:
             member = [n for n in zf.namelist() if n.endswith("t.db")][0]
-            import sqlite3, tempfile, os
+            import os
+            import sqlite3
+            import tempfile
             fd, tmpdb = tempfile.mkstemp(suffix=".db")
             os.write(fd, zf.read(member))
             os.close(fd)

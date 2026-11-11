@@ -62,7 +62,8 @@ def _build_dynamic_url(up_uid: int, wbi=None) -> str:
     Returns:
         str: 完整URL
     """
-    params = f"host_mid={up_uid}&platform=web&features=itemOpusStyle,onlyfansVote,decorationCard,onlyfansAssetsV2,onlyfansQaCard"
+    params = (f"host_mid={up_uid}&platform=web&features=itemOpusStyle,"
+              f"onlyfansVote,decorationCard,onlyfansAssetsV2,onlyfansQaCard")
     try:
         if wbi is None:
             from .wbi import WbiSigner

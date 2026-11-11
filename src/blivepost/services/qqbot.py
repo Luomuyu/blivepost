@@ -1091,8 +1091,9 @@ class QQBotClient:
             return False
         try:
             await _compat_req(
-                self._client, Route("DELETE", "/v2/media-images/{image_id}/delete",
-                      image_id=image_id))
+                self._client, Route(
+                    "DELETE", "/v2/media-images/{image_id}/delete",
+                    image_id=image_id))
             return True
         except Exception as e:
             logger.debug(f"删除素材失败(不阻断推送): {e}")

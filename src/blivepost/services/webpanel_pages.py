@@ -194,8 +194,8 @@ class PagesMixin:
 
     # 运营情报页（群openid/绑定关系/账号池/观众身份明细）：整页要求登录，
     # 游客可见的仅聚合数据页（概览/记录/趋势/词云——AppID已另行隐藏）
-    LOGIN_GATED_PAGES = frozenset({"accounts", "groups", "live", "dynamics",
-                                    "analytics"})
+    LOGIN_GATED_PAGES = frozenset(
+        {"accounts", "groups", "live", "dynamics", "analytics"})
 
     def _make_page_handler(self, key: str):
         """生成页面GET处理器（HTMX请求返回内容片段，普通请求返回完整布局；游客可浏览聚合页）"""
@@ -253,14 +253,15 @@ class PagesMixin:
                               for g in push_groups]
                 live_rooms.append({
                     "room_id": rec.room_id,
-                    "streamer": await self.db_service.get_streamer_name(rec.uid)
-                                if rec.uid else "",
+                    "streamer": (await self.db_service.get_streamer_name(rec.uid)
+                                 if rec.uid else ""),
                     "push_groups": push_names,
                     # openid列表：行内群编辑器复选框回显勾选用（push_groups是名称仅展示）
                     "push_group_openids": list(push_groups),
                     "monitored": bool(push_groups),
-                    "alive": bool(push_groups) and self.monitor_manager is not None
-                             and self.monitor_manager.has(rec.room_id),
+                    "alive": (bool(push_groups)
+                              and self.monitor_manager is not None
+                              and self.monitor_manager.has(rec.room_id)),
                 })
             ctx["rooms"] = live_rooms
 

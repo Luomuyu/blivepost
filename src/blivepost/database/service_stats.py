@@ -39,6 +39,7 @@ def _tz_off_ms() -> int:
     off = _dt.now(get_default_timezone()).utcoffset()
     return int(off.total_seconds() * 1000) if off else 0
 
+
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
     from .manager import DatabaseManager

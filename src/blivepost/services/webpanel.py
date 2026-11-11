@@ -212,4 +212,3 @@ class WebPanel(AuthMixin, ActionsMixin, PagesMixin, AdminMixin, ScreenMixin,
             report = {"status": "unknown"}
         status_code = 200 if report.get("status") == "ok" else 503
         return web.json_response(report, status=status_code)
-

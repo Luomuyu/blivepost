@@ -208,7 +208,6 @@ async def test_group_info_refresher(tmp_path):
     await db.close()
 
 
-
 async def test_live_page_bindings_carry_group_details(tmp_path):
     """回归：直播页绑定状态携带群信息（此前误读GroupBindingRecord触发AttributeError）"""
     from blivepost.services.bindings import BindingStore

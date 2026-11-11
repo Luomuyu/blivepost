@@ -146,7 +146,9 @@ def _make_db_with_credentials(path):
 def _zip_member_db(buf: io.BytesIO, arcname: str) -> sqlite3.Connection:
     with zipfile.ZipFile(buf) as zf:
         data = zf.read(arcname)
-    import tempfile, os
+    import tempfile
+
+    import os
     fd, tmp = tempfile.mkstemp(suffix=".db")
     os.write(fd, data)
     os.close(fd)

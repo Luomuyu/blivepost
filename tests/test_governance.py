@@ -64,12 +64,12 @@ async def test_size_report_no_db_path(env):
     assert "不可用" in r
 
 
-
 class _TtyStringIO(io.StringIO):
     """isatty=True的内存stdin（_listen_terminal对非TTY直接跳过）"""
 
     def isatty(self):
         return True
+
 
 async def test_terminal_stop_command_checked():
     """_listen_terminal对stop/quit/exit置位事件（输入mock到线程）"""
