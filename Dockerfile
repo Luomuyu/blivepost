@@ -29,8 +29,12 @@ RUN pip install --no-cache-dir -e . \
     && playwright install chromium --only-shell
 
 # 项目文件（--chown写入时直接落目标属主：避免建层后再chown -R /app
-# 触发全量复制——旧写法曾让镜像多出1.75GB的chown层）
-COPY --chown=1000:1000 . .
+# 触发全量复制——旧写法曾让镜像多出1.75GB的chown层）。
+# 显式清单而非COPY . .：.dockerignore已不入库，干净git检出的.docker与
+# .git等目录会被整目录带入镜像（.git含完整历史）
+COPY --chown=1000:1000 scripts ./scripts
+COPY --chown=1000:1000 licenses ./licenses
+COPY --chown=1000:1000 LICENSE THIRD_PARTY_NOTICES.md config.example.yaml ./
 
 # 非特权运行（v1.2.0审查加固）：业务进程以appuser(UID 1000)运行。
 # 宿主机bind mount目录（./data ./logs）属主常为root（旧root容器产物/

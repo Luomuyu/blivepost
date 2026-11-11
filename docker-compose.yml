@@ -3,7 +3,7 @@
 services:
   blivepost:
     build: .
-    image: blivepost:latest
+    image: luomuyu/blivepost:latest
     container_name: blivepost
     restart: unless-stopped
     # 优雅停止宽限期：覆盖qqbot发送队列30s排水等最坏清理时长，

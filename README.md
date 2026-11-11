@@ -47,6 +47,14 @@ pip install -e .
 
 ### Docker 部署
 
+**方式一：预构建镜像**（版本标签推送后由CI自动发布到GHCR，支持amd64/arm64）
+
+```bash
+docker run -d --name blivepost   -p 127.0.0.1:18080:8080   -v ./config.yaml:/app/config.yaml:ro -v ./data:/app/data -v ./logs:/app/logs   ghcr.io/luomuyu/blivepost:latest
+```
+
+**方式二：本地构建**
+
 ```bash
 git clone https://github.com/Luomuyu/blivepost.git
 cd blivepost
