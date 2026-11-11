@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """动态订阅、汇总命令、周月结、/我 命令测试"""
 
-from datetime import datetime
 
 import pytest
 
@@ -224,8 +223,11 @@ async def test_check_periodic_weekly(tmp_path):
     ps = PushServiceStub()
     job = DailyReportJob(store, ps, svc, weekly=True, monthly=True)
     # 直接调用 _push_range 验证周结逻辑（end+1秒余量：窗口右端为半开区间
-    # ts<end，刚写入的礼物与本行now可能同毫秒桶而被排除——偶发竞态）
-    now = datetime.now()
+    # ts<end，刚写入的礼物与本行now可能同毫秒桶而被排除——偶发竞态；
+    # now取Setting.timezone口径——机器时区(如CI的UTC)与配置时区不同时，
+    # 机器本地now会被range_bounds_ms按配置时区重解释致区间错位）
+    from blivepost.utils.timeutil import now_local
+    now = now_local()
     n = await job._push_range("【每周结算】", now - timedelta(days=7),
                               now + timedelta(seconds=1))
     assert n == 1
@@ -288,8 +290,8 @@ async def test_export_json(tmp_path, monkeypatch):
     result = [r for r in msg.replies if "导出完成" in r]
     assert len(result) == 1 and ".json" in result[0]
     import json
-    from datetime import datetime
-    date_text = datetime.now().strftime("%Y%m%d")
+    from blivepost.utils.timeutil import now_local
+    date_text = now_local().strftime("%Y%m%d")
     path = tmp_path / "exports" / f"room_100_{date_text}.json"
     assert path.exists()
     data = json.loads(path.read_text(encoding="utf-8"))

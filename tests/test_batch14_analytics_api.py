@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """第十四批：观众分析 + REST API v1测试"""
 
-from datetime import datetime
 
 from blivepost.config.settings import Settings
 from blivepost.database.manager import DatabaseManager
@@ -18,8 +17,10 @@ async def test_activity_heatmap(tmp_path):
     await db.initialize()
     svc = DatabaseService(db)
     try:
-        # SQLite用localtime，直接用当前时间造数据
-        now = datetime.now()
+        # 造数据后按Setting.timezone分桶断言——now必须取同口径的本地时间
+        # （机器时区≠Setting.timezone时，机器本地now会落到别的日键/小时桶）
+        from blivepost.utils.timeutil import now_local
+        now = now_local()
         await svc.save_danmaku(room_id=23058, uid=1, uname="u",
                                msg="第一条")
         await svc.save_danmaku(room_id=23058, uid=2, uname="v",
