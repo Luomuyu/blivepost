@@ -17,6 +17,8 @@ import asyncio
 import logging
 import queue
 
+import pytest
+
 from blivepost.config.settings import Settings
 from blivepost.utils.logger import DailyRotatingFileHandler, Logger
 
@@ -1044,6 +1046,19 @@ async def test_dyn_prepare_image_priority(monkeypatch):
         await client.close()
 
 
+def _has_cjk_font() -> bool:
+    """渲染卡片所需的CJK字体是否存在（与_render_card的字体候选同源）"""
+    import os
+    for path in (r"C:\Windows\Fonts\msyh.ttc",
+                 "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                 "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                 "/System/Library/Fonts/PingFang.ttc"):
+        if os.path.exists(path):
+            return True
+    return False
+
+
+@pytest.mark.skipif(not _has_cjk_font(), reason="环境无CJK字体，卡片渲染不可测")
 def test_render_card_layout_no_empty_title_gap():
     """卡片排版：标题为空时不产生空行/多余间距（修复'两行正文'反馈）；
     卡片可渲染且为PNG字节"""

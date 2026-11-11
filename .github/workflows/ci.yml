@@ -48,10 +48,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install project with dev deps
         run: pip install -e ".[dev]"
-      - name: Install CJK font for card-render tests
-        # dyn_fetch._render_card的字体候选路径之一（wqy-microhei）；
-        # ubuntu runner无中文字体时卡片渲染返回None导致渲染测试失败
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-wqy-microhei
       - name: Pre-download vendored blivedm
         # 运行时下载逻辑在测试里为条件skip（_vendor不存在即跳过），
         # CI预下载使 vendor/patch.py 的350行补丁真正被测试执行
