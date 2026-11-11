@@ -6,6 +6,9 @@ services:
     image: blivepost:latest
     container_name: blivepost
     restart: unless-stopped
+    # 优雅停止宽限期：覆盖qqbot发送队列30s排水等最坏清理时长，
+    # 避免默认10s超时被SIGKILL脏关（exit 137）
+    stop_grace_period: 35s
     ports:
       # 面板端口默认仅映射到本机（web_token未配置时不建议暴露到局域网）
       # 宿主机端口可按需调整（默认18080避开常见8080占用，如traefik）

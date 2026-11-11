@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import threading
 import multiprocessing
+import signal
 import sys
 from pathlib import Path
 from typing import Optional
@@ -94,8 +95,13 @@ async def _listen_terminal(stop_event: asyncio.Event) -> None:
     监听终端输入：输入stop（或quit/exit）后置位停止事件，安全关闭程序
 
     读取在daemon线程中执行，进程退出不会被阻塞的stdin读取拖住。
+    非交互环境（Docker -d/后台/测试）直接返回：stdin无输入来源，启动
+    读取线程只会留下永远pending的任务（进程退出时报"Task was destroyed"）。
     """
     logger = get_logger("terminal")
+    if not sys.stdin.isatty():
+        logger.info("非交互环境（容器/后台），跳过终端命令监听")
+        return
     logger.info("终端命令监听已启动：输入 stop 安全关闭程序")
     queue: "asyncio.Queue" = asyncio.Queue()
     loop = asyncio.get_running_loop()
@@ -450,9 +456,22 @@ async def main_async(
             logger.info(f"启动配置房间 {settings.live.room_id} 的监控")
             await monitor_manager.ensure(int(settings.live.room_id))
 
-        # 常驻等待：终端输入stop或Ctrl+C安全关闭
+        # 常驻等待：终端输入stop/Ctrl+C/SIGTERM安全关闭
         stop_event = asyncio.Event()
         asyncio.create_task(_listen_terminal(stop_event), name="terminal-listener")
+        # SIGTERM优雅退出：容器PID1对未注册handler的信号走内核默认=忽略，
+        # docker stop只能等超时SIGKILL脏关（exit 137）——注册后转为安全关闭
+        loop = asyncio.get_running_loop()
+
+        def _request_stop() -> None:
+            logger.info("收到停止信号(SIGTERM)，正在安全关闭...")
+            stop_event.set()
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, _request_stop)
+            except (NotImplementedError, RuntimeError):
+                pass  # Windows事件循环不支持add_signal_handler（Ctrl+C仍走KeyboardInterrupt）
         await stop_event.wait()
 
     except FileNotFoundError as e:

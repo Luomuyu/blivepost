@@ -14,7 +14,7 @@ B站扫码登录与Cookie维护（基于Playwright无头浏览器）
 
 依赖（使用时才导入，缺失时给出明确提示）：
     pip install playwright qrcode[pil]
-    playwright install chromium
+    playwright install chromium --only-shell
 chromium内核默认安装到运行目录ms-playwright/（PLAYWRIGHT_BROWSERS_PATH）
 """
 
@@ -179,7 +179,7 @@ class BiliLoginService:
             return async_playwright
         except ImportError:
             raise RuntimeError(
-                "未安装playwright，请执行: pip install playwright && playwright install chromium"
+                "未安装playwright，请执行: pip install playwright && playwright install chromium --only-shell"
             )
 
     async def login(self) -> LoginResult:
@@ -356,12 +356,49 @@ async def _add_cookies_to_context(context, cookie_string: str) -> None:
     await context.add_cookies(cookies)
 
 
+def _headless_shell_ready() -> bool:
+    """注册表中是否已有可用chromium内核（免install探测）
+
+    兼容only-shell（headless_shell）与完整chromium（chrome）两种安装，
+    覆盖linux（chrome-linux/）与windows（chrome-win/）布局；注册表根
+    取PLAYWRIGHT_BROWSERS_PATH，未设置时探测playwright默认位置。
+    探测优于跑 `playwright install`：install即使已装也会向注册表根
+    写 __dirlock 等校验物——Docker等内核目录只读（root属主）的部署下
+    appuser会EACCES误报"安装失败"。
+    """
+    env_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+    if env_root:
+        bases = [Path(env_root)]
+    else:
+        bases = [Path.home() / ".cache" / "ms-playwright",
+                 Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright"]
+    # 布局随playwright版本演进：新版本headless shell为
+    # chrome-headless-shell-<plat>/chrome-headless-shell，旧版本为
+    # chrome-<plat>/headless_shell；完整chromium为chrome-<plat>/chrome
+    patterns = ("chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+                "chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe",
+                "chromium_headless_shell-*/chrome-linux/headless_shell",
+                "chromium_headless_shell-*/chrome-win/headless_shell.exe",
+                "chromium-*/chrome-linux/headless_shell",
+                "chromium-*/chrome-win/headless_shell.exe",
+                "chromium-*/chrome-linux/chrome",
+                "chromium-*/chrome-win/chrome.exe")
+    for base in bases:
+        if not base.is_dir():
+            continue
+        for pattern in patterns:
+            if any(p.is_file() for p in base.glob(pattern)):
+                return True
+    return False
+
+
 async def ensure_playwright_chromium() -> bool:
     """
     确保playwright chromium内核已安装（幂等，已安装时快速跳过）
 
-    程序启动时后台调用，安装wheel后无需手动执行
-    `playwright install chromium`。
+    已装时经文件探测直接判定就绪（不执行install——见_headless_shell_ready
+    的权限说明）；未装时后台安装 `playwright install chromium
+    --only-shell`（仅无头内核，本项目恒为无头模式）。
 
     Returns:
         bool: 内核是否可用
@@ -374,9 +411,15 @@ async def ensure_playwright_chromium() -> bool:
         logger.warning("未安装playwright，跳过浏览器内核检查（扫码登录不可用）")
         return False
 
+    if _headless_shell_ready():
+        logger.info(f"playwright chromium内核已就绪 "
+                    f"({os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '默认位置')})")
+        return True
+
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "playwright", "install", "chromium",
+            "--only-shell",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -386,7 +429,7 @@ async def ensure_playwright_chromium() -> bool:
                         f"({os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '默认位置')})")
             return True
         logger.error(f"playwright chromium安装失败 (exit={proc.returncode})，"
-                     f"请手动执行: playwright install chromium")
+                     f"请手动执行: playwright install chromium --only-shell")
         return False
     except Exception as e:
         logger.error(f"playwright chromium安装异常: {e}")

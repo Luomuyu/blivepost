@@ -20,3 +20,8 @@ PROJECT.md
 REVIEW.md
 .DS_Store
 ms-playwright
+WheelTest
+.mypy_cache
+*.png
+scripts/panel_ids*.json
+_*.py

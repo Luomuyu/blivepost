@@ -2,6 +2,7 @@
 """数据治理（/体积）与终端stop命令测试"""
 
 import asyncio
+import io
 
 import pytest
 
@@ -63,17 +64,22 @@ async def test_size_report_no_db_path(env):
     assert "不可用" in r
 
 
+
+class _TtyStringIO(io.StringIO):
+    """isatty=True的内存stdin（_listen_terminal对非TTY直接跳过）"""
+
+    def isatty(self):
+        return True
+
 async def test_terminal_stop_command_checked():
     """_listen_terminal对stop/quit/exit置位事件（输入mock到线程）"""
-    import io
+    import sys as _sys
     from blivepost.__main__ import _listen_terminal
 
     async def main():
         stop_event = asyncio.Event()
-        fake_stdin = io.StringIO("stop\n")
-        import sys as _sys
         real_stdin = _sys.stdin
-        _sys.stdin = fake_stdin
+        _sys.stdin = _TtyStringIO("stop\n")
         try:
             await asyncio.wait_for(_listen_terminal(stop_event), timeout=5)
         finally:
@@ -85,15 +91,13 @@ async def test_terminal_stop_command_checked():
 
 async def test_terminal_ignores_other_input():
     """非stop输入不触发停止"""
-    import io
     import sys as _sys
     from blivepost.__main__ import _listen_terminal
 
     async def main():
         stop_event = asyncio.Event()
-        fake_stdin = io.StringIO("hello\nstop\n")
         real_stdin = _sys.stdin
-        _sys.stdin = fake_stdin
+        _sys.stdin = _TtyStringIO("hello\nstop\n")
         try:
             await asyncio.wait_for(_listen_terminal(stop_event), timeout=5)
         finally:

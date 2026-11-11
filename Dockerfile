@@ -26,18 +26,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir -e . \
-    && playwright install chromium
+    && playwright install chromium --only-shell
 
-# 项目文件
-COPY . .
+# 项目文件（--chown写入时直接落目标属主：避免建层后再chown -R /app
+# 触发全量复制——旧写法曾让镜像多出1.75GB的chown层）
+COPY --chown=1000:1000 . .
 
 # 非特权运行（v1.2.0审查加固）：业务进程以appuser(UID 1000)运行。
 # 宿主机bind mount目录（./data ./logs）属主常为root（旧root容器产物/
 # Linux默认），appuser不可写——镜像默认root仅为启动时修正属主，
-# entrypoint在chown后经setpriv降权执行业务命令
+# entrypoint在chown后经setpriv降权执行业务命令。pip层文件保持root
+# 属主（appuser只读即可，不需chown整个/app）
 RUN useradd --system --uid 1000 --create-home appuser \
     && mkdir -p /app/data /app/logs /app/exports \
-    && chown -R appuser:appuser /app
+    && chown appuser:appuser /app/data /app/logs /app/exports
 
 # heredoc方式内联entrypoint（避免仓库中.sh文件受git换行符转换影响；
 # 需BuildKit/Dockerfile frontend≥1.4，Docker 23+默认启用）
