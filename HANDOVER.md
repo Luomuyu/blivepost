@@ -131,7 +131,7 @@ src/blivepost/
 ```bash
 # 开发（仓库根）
 pip install -e ".[dev]"        # 依赖含 jieba
-pytest tests/                  # 当前 381 个用例，全绿，无需联网
+pytest tests/                  # 当前 385 个用例，全绿，无需联网
 pyflakes src tests             # 零告警
 mypy src                       # 零错误
 blivepost -c config.yaml       # 运行；chromium 装运行目录 ms-playwright/

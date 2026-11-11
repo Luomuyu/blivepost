@@ -24,7 +24,7 @@
 |------|------|
 | pyflakes（src+scripts+tests） | 0告警 |
 | mypy | 0错误（59文件） |
-| pytest | **381用例全过**（约38秒，无网络依赖） |
+| pytest | **385用例全过**（约38秒，无网络依赖） |
 | wheel | `blivepost-1.2.0-py3-none-any.whl`，含py.typed |
 
 ### 功能链路核对（9条，第六轮全量复检）

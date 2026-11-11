@@ -26,7 +26,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
   ├─ utils/net.py           TCP端口预检（Redis快速跳过）
   ├─ config/env.py          .env加载 + 环境变量覆盖（密钥类配置）
   ├─ core/manager.py        MonitorManager + PushQueueConsumer + CookieMaintainer
-  ├─ database/              SQLAlchemy异步引擎 + 14张表 + 聚合查询 + 明细导出 + Schema迁移器
+  ├─ database/              SQLAlchemy异步引擎 + 23张表 + 聚合查询 + 明细导出 + Schema迁移器
   └─ vendor/                blivedm运行时下载（四级回退链）
 
 子进程
@@ -218,7 +218,7 @@ B站直播监控与推送系统：连接B站直播间弹幕服务器（blivedm�
 ```bash
 pip install -e .           # 安装（自动安装全部依赖，含PyPI的qq-botpy-v2）
 pip install -e ".[dev]"    # 开发环境
-pytest tests/              # 单元测试（381个，无需联网）
+pytest tests/              # 单元测试（385个，无需联网）
 flake8 src/ tests/         # lint（零告警）
 blivepost -c config.yaml   # 运行；chromium装到运行目录ms-playwright/（已装秒级跳过）
 
